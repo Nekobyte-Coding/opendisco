@@ -3841,7 +3841,7 @@ def web_url(d: Device, fallback: bool = False) -> str:
         if ports:
             default = 443 if kind == "https" else 80
             return f"{kind}://{d.ip}/" if ports[0] == default else f"{kind}://{d.ip}:{ports[0]}/"
-    if said and (d.ports is None or said in d.services):
+    if said and (fallback or d.ports is None):  # nothing answered a deep check: still its best guess
         return f"https://{d.ip}/" if said == 443 else f"https://{d.ip}:{said}/"
     return f"https://{d.ip}/" if fallback else ""
 

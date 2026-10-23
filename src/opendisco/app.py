@@ -75,6 +75,7 @@ class OpenDiscoApp(toga.App):
         self.holding = False
         self.cancel_password = None
         self.cancel_ssh_login = None
+        self._move_old_data()
         self.networks_path = self._networks_file()
         self.settings_path = Path(self.paths.data) / "settings.json"
         self.known_hosts = Path(self.paths.data) / "known_hosts"  # SSH host keys, filed by MAC
@@ -186,6 +187,17 @@ class OpenDiscoApp(toga.App):
         except OSError:
             pass
 
+    def _move_old_data(self):
+        """Until 1.3.1 the app was "OpenDisco", and Windows names the app's data folder after
+        it: bring the networks file, hidden devices and SSH keys over once."""
+        new = Path(self.paths.data)
+        old = Path(*(part.replace(self.formal_name, "OpenDisco") for part in new.parts))
+        try:
+            if old != new and old.is_dir() and not (new.is_dir() and any(new.iterdir())):
+                shutil.copytree(old, new, dirs_exist_ok=True)
+        except OSError:
+            pass
+
     def _networks_file(self) -> Path:
         """The editable networks file lives in the app's data folder (the bundle is read-only)."""
         path = Path(self.paths.data) / "networks.txt"
@@ -270,6 +282,21 @@ class OpenDiscoApp(toga.App):
         except Exception:
             return None
 
+    def _over_main(self, size):
+        """Where a window of this size sits centred over the main window, on whatever screen
+        that's on (a new window otherwise opens on the primary screen)."""
+        try:
+            (x, y), (width, height) = self.main_window.position, self.main_window.size
+        except Exception:
+            return None
+        return int(x + (width - size[0]) / 2), int(y + max(40, (height - size[1]) / 3))
+
+    def _show_over_main(self, window):
+        window.show()
+        position = self._over_main(tuple(window.size))  # its real size, now its content is laid out
+        if position:
+            window.position = position
+
     # -- talking to the worker thread ------------------------------------------
     def _from_worker(self, fn, *args):
         self.loop.call_soon_threadsafe(fn, *args)
@@ -296,7 +323,8 @@ class OpenDiscoApp(toga.App):
                 done.set()
 
             box.on_confirm = lambda widget: finish(box.value)
-            window = toga.Window(title="Administrator password", size=(460, 170), resizable=False, closable=False)
+            window = toga.Window(title="Administrator password", size=(460, 170), resizable=False, closable=False,
+                                 position=self._over_main((460, 170)))
             window.content = toga.Box(style=Pack(direction=COLUMN, margin=14, gap=10), children=[
                 toga.Label(reason),
                 toga.Label("It's passed straight to sudo and not stored."),
@@ -305,7 +333,7 @@ class OpenDiscoApp(toga.App):
                     toga.Box(style=Pack(flex=1)),
                     toga.Button("Cancel", on_press=lambda w: finish(None)),
                     toga.Button("OK", on_press=lambda w: finish(box.value))])])
-            window.show()
+            self._show_over_main(window)
             box.focus()
             self.cancel_password = lambda: finish(None)  # quitting must not leave the scan waiting
 
@@ -676,7 +704,8 @@ class OpenDiscoApp(toga.App):
         password.on_confirm = lambda widget: finish(True)
         user.on_confirm = lambda widget: password.focus()
         label = Pack(width=80)
-        window = toga.Window(title=f"SSH to {d.ip}", size=(520, 250), resizable=False, on_close=closing)
+        window = toga.Window(title=f"SSH to {d.ip}", size=(520, 250), resizable=False, on_close=closing,
+                             position=self._over_main((520, 250)))
         window.content = toga.Box(style=Pack(direction=COLUMN, margin=14, gap=8), children=[
             toga.Label(f"{d.ip}  {d.name or d.model or d.mac or ''}".strip()),
             toga.Label(where),
@@ -692,7 +721,7 @@ class OpenDiscoApp(toga.App):
                 toga.Box(style=Pack(flex=1)),
                 toga.Button("Cancel", on_press=lambda w: finish(False)),
                 toga.Button("Connect", on_press=lambda w: finish(True))])])
-        window.show()
+        self._show_over_main(window)
         (password if user.value else user).focus()
         self.cancel_ssh_login = lambda: finish(False)
         try:
@@ -786,7 +815,7 @@ class OpenDiscoApp(toga.App):
             self._show_devices(self._all_devices())
             table.data = rows()
 
-        window = toga.Window(title="Hidden devices", size=(700, 380))
+        window = toga.Window(title="Hidden devices", size=(700, 380), position=self._over_main((700, 380)))
         window.content = toga.Box(style=Pack(direction=COLUMN, margin=12, gap=8), children=[
             toga.Label("These are left out of the table, by MAC address, in every scan until you unhide them. "
                        "Exports still include them."),
@@ -796,7 +825,7 @@ class OpenDiscoApp(toga.App):
                 toga.Button("Unhide selected", on_press=lambda w: unhide([r.key for r in table.selection])),
                 toga.Button("Unhide all", on_press=lambda w: unhide(list(self.hidden))),
                 toga.Button("Close", on_press=lambda w: window.close())])])
-        window.show()
+        self._show_over_main(window)
 
     # -- exports and holding addresses ---------------------------------------------
     async def on_export(self, widget, **kwargs):

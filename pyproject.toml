@@ -1,0 +1,146 @@
+# Briefcase packaging for OpenDisco: a native app for macOS, Windows, Linux, iOS and Android.
+#   briefcase dev                      run the GUI from source
+#   .venv/bin/python packaging/macos/build_dmg.py        build the .dmg (on a Mac; builds outside iCloud)
+#   .venv/bin/python packaging/windows/build_installer.py build the Windows setup.exe (on a Mac or PC)
+#   briefcase build android            build an APK (on a Mac, Windows or Linux PC)
+#   briefcase build iOS                needs a Mac with Xcode
+# See README.md ("The app") for details.
+
+[tool.briefcase]
+project_name = "opendisco"
+bundle = "com.michaelfroehlke"
+version = "1.3.1"
+license = "Apache-2.0"
+license-files = ["LICENSE"]
+author = "Michael Froehlke"
+author_email = "347150498+Nekobyte-Coding@users.noreply.github.com"
+
+[tool.briefcase.app.opendisco]
+formal_name = "OpenDisco"
+description = "Find and diagnose Ubiquiti and other WISP gear"
+long_description = """Finds Ubiquiti gear with the discovery methods of Ubiquiti's old Java tool, WiFiman
+and the UniFi app, and identifies Cisco, Meraki, Mimosa, Siklu, Ceragon, IgniteNet, Baicells
+and Tarana gear. On a Mac or Linux PC it can also listen on the wire, probe other subnets
+through temporary addresses, tag VLANs on a trunk, and read a radio on a direct cable.
+"""
+icon = "src/opendisco/resources/icon"
+sources = ["src/opendisco"]
+requires = []
+
+[tool.briefcase.app.opendisco.macOS]
+universal_build = true
+requires = [
+    "toga-cocoa~=0.5.0",
+    "std-nslog~=2.0.0",
+]
+# Shown when macOS asks to let the app reach devices on the local network.
+info."NSLocalNetworkUsageDescription" = "OpenDisco finds and probes network devices on your local network."
+
+[tool.briefcase.app.opendisco.linux]
+requires = [
+    "toga-gtk~=0.5.0",
+]
+
+[tool.briefcase.app.opendisco.linux.system.debian]
+system_requires = [
+    "libcairo2-dev",
+    "libgirepository-2.0-dev",
+]
+system_runtime_requires = [
+    "gir1.2-gtk-3.0",
+    "libgirepository-2.0-0",
+    "libcanberra-gtk3-module",
+    "tcpdump",
+    "gir1.2-webkit2-4.1",  # the Terminal tab's web view
+    "openssh-client",
+]
+
+[tool.briefcase.app.opendisco.linux.system.rhel]
+system_requires = [
+    "cairo-gobject-devel",
+    "gobject-introspection-devel",
+]
+system_runtime_requires = [
+    "gobject-introspection",
+    "gtk3",
+    "libcanberra-gtk3",
+    "tcpdump",
+    "webkit2gtk4.1",
+    "openssh-clients",
+]
+
+[tool.briefcase.app.opendisco.linux.system.suse]
+system_requires = [
+    "cairo-devel",
+    "gobject-introspection-devel",
+]
+system_runtime_requires = [
+    "gtk3",
+    "gobject-introspection", "typelib(Gtk) = 3.0",
+    "libcanberra-gtk3-module",
+    "tcpdump",
+    "typelib(WebKit2) = 4.1",
+    "openssh-clients",
+]
+
+[tool.briefcase.app.opendisco.linux.system.arch]
+system_requires = [
+    "cairo",
+    "gobject-introspection",
+    "gtk3",
+    "libcanberra",
+]
+system_runtime_requires = [
+    "gtk3",
+    "gobject-introspection-runtime",
+    "libcanberra",
+    "tcpdump",
+    "webkit2gtk-4.1",
+    "openssh",
+]
+
+[tool.briefcase.app.opendisco.linux.appimage]
+manylinux = "manylinux_2_28"
+system_requires = [
+    "cairo-gobject-devel",
+    "gobject-introspection-devel",
+    "gtk3-devel",
+    "libcanberra-gtk3",
+    "PackageKit-gtk3-module",
+    "gvfs-client",
+]
+linuxdeploy_plugins = [
+    "DEPLOY_GTK_VERSION=3 gtk",
+]
+
+[tool.briefcase.app.opendisco.linux.flatpak]
+flatpak_runtime = "org.gnome.Platform"
+flatpak_runtime_version = "48"
+flatpak_sdk = "org.gnome.Sdk"
+
+[tool.briefcase.app.opendisco.windows]
+requires = [
+    "toga-winforms~=0.5.0",
+    "pywinpty~=2.0",  # a real console for each Terminal-tab session
+]
+
+[tool.briefcase.app.opendisco.iOS]
+requires = [
+    "toga-iOS~=0.5.0",
+]
+# iOS asks before an app may talk to the local network. Broadcast discovery also needs the
+# com.apple.developer.networking.multicast entitlement, which Apple grants on request; without
+# it the app still finds gear by sweeping the phone's Wi-Fi subnet.
+info."NSLocalNetworkUsageDescription" = "OpenDisco finds network devices on your Wi-Fi network."
+
+[tool.briefcase.app.opendisco.android]
+requires = [
+    "toga-android~=0.5.0",
+]
+base_theme = "Theme.MaterialComponents.Light.DarkActionBar"
+build_gradle_dependencies = [
+    "com.google.android.material:material:1.13.0",
+]
+# Wi-Fi drops broadcasts in power save unless the app holds a multicast lock.
+permission."android.permission.CHANGE_WIFI_MULTICAST_STATE" = {}
+permission."android.permission.ACCESS_WIFI_STATE" = {}

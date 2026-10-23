@@ -1,0 +1,8 @@
+.venv/
+build/
+dist/
+logs/
+__pycache__/
+*.pcap
+.briefcase/
+.DS_Store
