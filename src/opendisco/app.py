@@ -10,6 +10,7 @@ import shutil
 import threading
 import time
 import traceback
+import webbrowser
 from pathlib import Path
 
 import toga
@@ -32,6 +33,34 @@ MODES = [
 COLUMNS = list(core.EXPORT_COLUMNS)
 ACCESSORS = [c.lower() for c in COLUMNS]
 ANY_PORT = "Any port"
+# What a device's right-click menu (and the Device menu) offers; None separates groups.
+DEVICE_ACTIONS = [("web", "Open Web UI"), ("ssh", "Open SSH…"), ("ping", "Ping"), ("rescan", "Rescan device"), None,
+                  ("copy_ip", "Copy IP address"), ("copy_mac", "Copy MAC address"), None,
+                  ("forget", "Forget SSH key"), ("hide", "Hide device")]
+NO_SESSION = "Right-click a device to get started: Open SSH or Ping."
+
+_MENU_TARGET = None
+
+
+def _menu_target_class():
+    """The Objective-C object a device's right-click menu reports to (macOS)."""
+    global _MENU_TARGET
+    if _MENU_TARGET is None:
+        from rubicon.objc import NSObject, objc_method, objc_property
+
+        class OpenDiscoDeviceMenuTarget(NSObject):
+            app = objc_property(object, weak=True)
+
+            @objc_method
+            def menuNeedsUpdate_(self, menu) -> None:
+                self.app._context_menu_opening()
+
+            @objc_method
+            def pick_(self, sender) -> None:
+                self.app._device_action(DEVICE_ACTIONS[int(sender.tag)][0])
+
+        _MENU_TARGET = OpenDiscoDeviceMenuTarget
+    return _MENU_TARGET
 
 
 class OpenDiscoApp(toga.App):
@@ -42,12 +71,15 @@ class OpenDiscoApp(toga.App):
         self.result = None  # the last finished scan
         self.live_inv = None  # the inventory of the scan that's running
         self.running = False
+        self.rescanning = False
         self.holding = False
-        self.shown_rows = None
         self.cancel_password = None
+        self.cancel_ssh_login = None
         self.networks_path = self._networks_file()
         self.settings_path = Path(self.paths.data) / "settings.json"
-        settings = self._load_settings()
+        self.known_hosts = Path(self.paths.data) / "known_hosts"  # SSH host keys, filed by MAC
+        self.settings = self._load_settings()
+        self.hidden = self.settings.setdefault("hidden", {})  # device key (its MAC) -> what it was
         if not self.caps["mobile"]:
             core.SUDO_ASKPASS = self._ask_password  # no terminal here, so the GUI asks
         self.multicast_lock = self._android_multicast_lock()
@@ -62,11 +94,8 @@ class OpenDiscoApp(toga.App):
         self.deep = toga.Switch("Deep checks (ports, console API)")
         self.listen = toga.NumberInput(min=5, max=300, step=5, value=20, style=Pack(width=70))
         self.mode_help = toga.Label("", style=Pack(flex=1, margin_left=8))
-        # Your standard ports: gear reporting another gets flagged, and deep checks verify them.
-        self.https_ports = toga.TextInput(value=settings.get("https_ports", ""), placeholder="e.g. 443",
-                                          on_change=self._save_settings, style=Pack(width=110))
-        self.ssh_ports = toga.TextInput(value=settings.get("ssh_ports", ""), placeholder="e.g. 22",
-                                        on_change=self._save_settings, style=Pack(width=110))
+        self.hidden_button = toga.Button("", on_press=self.on_hidden)
+        self._update_hidden_button()
 
         self.table = toga.Table(columns=COLUMNS, on_select=self.on_select, style=Pack(flex=1))
         mono = Pack(flex=1, font_family="monospace", font_size=11)
@@ -79,8 +108,13 @@ class OpenDiscoApp(toga.App):
         self.shown_packets = None  # (device, packets received) the Packets tab shows
         self.notes = toga.MultilineTextInput(readonly=True, style=mono)
         self.log = toga.MultilineTextInput(readonly=True, style=mono)
-        tabs = [("Details", self.details), ("Packets", self.packets), ("On the wire", self.wire),
-                ("Notes", self.notes), ("Log", self.log)]
+        tabs = [("Details", self.details), ("Packets", self.packets)]
+        self.term = None
+        if not mobile:  # SSH and ping sessions to devices
+            from opendisco import terminal
+            self.term = terminal.TerminalPane(toga, Pack)
+            tabs.append(("Terminal", self.term.box))
+        tabs += [("On the wire", self.wire), ("Notes", self.notes), ("Log", self.log)]
         if self.caps["aliases"]:
             self.networks = toga.MultilineTextInput(value=self.networks_path.read_text(), style=mono)
             networks_box = toga.Box(style=Pack(direction=COLUMN, flex=1, gap=6), children=[
@@ -104,7 +138,8 @@ class OpenDiscoApp(toga.App):
         options = [self.aliases, self.deep] if not mobile else [self.deep]
         if self.caps["listen"]:
             options += [toga.Label("Listen (s)"), self.listen]
-        options += [toga.Label("Your HTTPS port"), self.https_ports, toga.Label("SSH port"), self.ssh_ports]
+        if not mobile:
+            options += [toga.Box(style=Pack(flex=1)), self.hidden_button]
         footer = [self.spinner, self.status, self.export_button]
         if self.caps["aliases"]:
             footer.append(self.hold_button)
@@ -124,7 +159,11 @@ class OpenDiscoApp(toga.App):
         ])
         self.on_exit = self.handle_exit
         self.on_mode(self.mode)
+        if not mobile:
+            self._add_device_menu()
         self.main_window.show()
+        if not mobile:
+            self._install_context_menu()
         # macOS re-centres the tab labels whenever it re-tiles the tab view (window resizes,
         # dragging the divider, tab changes, moving to another display), so snap a moment later.
         self.main_window.on_resize = lambda *args, **kwargs: self.loop.call_later(0.05, self._align_tab_labels)
@@ -139,10 +178,11 @@ class OpenDiscoApp(toga.App):
         except (OSError, ValueError):
             return {}
 
-    def _save_settings(self, widget=None, **kwargs):
+    def _save_settings(self):
         try:
-            self.settings_path.write_text(json.dumps({"https_ports": self.https_ports.value.strip(),
-                                                      "ssh_ports": self.ssh_ports.value.strip()}))
+            self.settings_path.parent.mkdir(parents=True, exist_ok=True)
+            self.settings_path.write_text(json.dumps({k: v for k, v in self.settings.items()
+                                                      if k in ("hidden", "ssh_user")}, indent=1))
         except OSError:
             pass
 
@@ -292,10 +332,6 @@ class OpenDiscoApp(toga.App):
         args = list(flags) + ["--networks", str(self.networks_path), "--no-color"]
         if self.aliases.value and self.caps["aliases"] and name != "Quick" and needs != "vlans":
             args.append("-a")
-        if self.https_ports.value.strip():
-            args += ["--https-port", self.https_ports.value.replace(" ", "")]
-        if self.ssh_ports.value.strip():
-            args += ["--ssh-port", self.ssh_ports.value.replace(" ", "")]
         if self.deep.value:
             args.append("--deep")
         if needs in ("listen", "vlans"):
@@ -316,7 +352,7 @@ class OpenDiscoApp(toga.App):
             await self.main_window.dialog(toga.ErrorDialog("Can't start", str(e.code)))
             return
         await self._release_hold()
-        self.running, self.result, self.live_inv, self.shown_rows = True, None, None, None
+        self.running, self.result, self.live_inv = True, None, None
         self.shown_packets = None
         self.table.data = []
         self.details.value = self.packets.value = self.wire.value = self.notes.value = ""
@@ -367,11 +403,22 @@ class OpenDiscoApp(toga.App):
                                                      res.counters if res else None)
 
     def _show_devices(self, devices):
-        rows = [dict(zip(ACCESSORS, core.device_row(d)), key=d.key) for d in devices]
-        signature = [tuple(r.values()) for r in rows]
-        if signature != self.shown_rows:  # don't reset the selection for nothing
-            self.shown_rows = signature
-            self.table.data = rows
+        """Fill the table, minus hidden devices. Rows change in place when the same devices are
+        listed, so the selection stays put while a scan or a rescan updates them."""
+        rows = [(d.key, dict(zip(ACCESSORS, core.device_row(d)))) for d in devices if d.key not in self.hidden]
+        data = self.table.data
+        if [key for key, _ in rows] == [getattr(row, "key", None) for row in data]:
+            for row, (_, values) in zip(data, rows):
+                for attr, value in values.items():
+                    if getattr(row, attr) != value:
+                        setattr(row, attr, value)
+        else:
+            self.table.data = [dict(values, key=key) for key, values in rows]
+
+    def _all_devices(self) -> list:
+        if self.result:
+            return self.result.devices
+        return core.sorted_devices(self.live_inv) if self.live_inv else []
 
     def _finished(self, result, error):
         self.running = False
@@ -389,8 +436,10 @@ class OpenDiscoApp(toga.App):
         self.wire.value = result.wire_text(verbose=True)
         self.notes.value = "\n\n".join(f"[{level}] {msg}" for level, msg in result.notes)
         heard = sum(1 for d in result.devices if d.ubnt_packets)
-        self.status.text = (f"{len(result.devices)} device(s), {heard} answered UBNT discovery, "
-                            f"{result.elapsed:.0f}s" + (" (stopped early)" if result.interrupted else ""))
+        hidden = sum(1 for d in result.devices if d.key in self.hidden)
+        self.status.text = (f"{len(result.devices) - hidden} device(s), {heard} answered UBNT discovery, "
+                            f"{result.elapsed:.0f}s" + (f", {hidden} hidden" if hidden else "")
+                            + (" (stopped early)" if result.interrupted else ""))
         self.export_button.enabled = bool(result.devices or result.trunks)
         self.hold_button.enabled = bool(result.mgr) and any(d.alias for d in result.devices)
         if self.shown_packets:  # now with the interface counters and the final checks
@@ -400,17 +449,354 @@ class OpenDiscoApp(toga.App):
             self.tabs.current_tab = "On the wire"
 
     def _device(self, key):
-        devices = self.result.devices if self.result else list((self.live_inv or core.Inventory()).devices.values())
-        return next((d for d in devices if d.key == key), None)
+        return next((d for d in self._all_devices() if d.key == key), None)
+
+    def _selected_device(self):
+        row = self.table.selection
+        return self._device(getattr(row, "key", None)) if row is not None else None
 
     def on_select(self, widget, **kwargs):
-        row = self.table.selection
-        d = self._device(getattr(row, "key", None)) if row is not None else None
+        d = self._selected_device()
         if d is not None:
             self.details.value = core.render_details(d)
             self._show_packets(d, force=True)
-            if self.tabs.current_tab.text not in ("Details", "Packets"):
+            if self.term:  # its session, if it has one; the others keep running
+                self.term.show_device(d.key, d.ip or d.mac or "this device")
+            if self.tabs.current_tab.text not in ("Details", "Packets", "Terminal"):
                 self.tabs.current_tab = "Details"
+
+    # -- device actions: right-click menu and the Device menu --------------------
+    def _add_device_menu(self):
+        group = toga.Group("Device", order=50)
+        section = 0
+        for order, entry in enumerate(DEVICE_ACTIONS):
+            if entry is None:
+                section += 1
+                continue
+            name, title = entry
+            self.commands.add(toga.Command(lambda command, name=name, **kwargs: self._device_action(name),
+                                           text=title, group=group, section=section, order=order))
+
+    def _install_context_menu(self):
+        try:
+            if self.caps["platform"] == "macos":
+                self._context_menu_macos()
+            elif self.caps["platform"] == "windows":
+                self._context_menu_windows()
+        except Exception:  # the Device menu still offers everything
+            self._append_log("Couldn't add the right-click menu:\n" + traceback.format_exc())
+
+    def _context_menu_macos(self):
+        from rubicon.objc import SEL, ObjCClass
+        NSMenu, NSMenuItem = ObjCClass("NSMenu"), ObjCClass("NSMenuItem")
+        self._menu_target = _menu_target_class().alloc().init()  # the menu holds it weakly
+        self._menu_target.app = self
+        menu = NSMenu.alloc().initWithTitle("Device")
+        menu.autoenablesItems = False
+        menu.delegate = self._menu_target
+        self._menu_items = {}
+        for tag, entry in enumerate(DEVICE_ACTIONS):
+            if entry is None:
+                menu.addItem(NSMenuItem.separatorItem())
+                continue
+            item = NSMenuItem.alloc().initWithTitle(entry[1], action=SEL("pick:"), keyEquivalent="")
+            item.target, item.tag = self._menu_target, tag
+            menu.addItem(item)
+            self._menu_items[entry[0]] = item
+        self.table._impl.native_table.menu = menu
+
+    def _context_menu_windows(self):
+        import System.Windows.Forms as WinForms
+        view = self.table._impl.native
+        strip = WinForms.ContextMenuStrip()
+        self._menu_items = {}
+        for entry in DEVICE_ACTIONS:
+            if entry is None:
+                strip.Items.Add(WinForms.ToolStripSeparator())
+                continue
+            item = WinForms.ToolStripMenuItem(entry[1])
+            item.Click += lambda sender, event, name=entry[0]: self._device_action(name)
+            strip.Items.Add(item)
+            self._menu_items[entry[0]] = item
+
+        def opening(sender, event):
+            hit = view.HitTest(view.PointToClient(WinForms.Cursor.Position)).Item
+            if hit is None:
+                event.Cancel = True
+                return
+            view.SelectedIndices.Clear()
+            view.SelectedIndices.Add(hit.Index)
+            self._update_menu_items(self._device(getattr(self.table.data[hit.Index], "key", None)))
+
+        strip.Opening += opening
+        view.ContextMenuStrip = strip
+        self._menu_strip = strip
+
+    def _context_menu_opening(self):
+        """macOS, just before the menu shows: select the row that was right-clicked."""
+        from rubicon.objc import ObjCClass
+        view = self.table._impl.native_table
+        row = int(view.clickedRow)
+        if 0 <= row != int(view.selectedRow):
+            view.selectRowIndexes(ObjCClass("NSIndexSet").indexSetWithIndex(row), byExtendingSelection=False)
+        d = self._device(getattr(self.table.data[row], "key", None)) if row >= 0 else None
+        self._update_menu_items(d)
+
+    def _update_menu_items(self, d):
+        """Name each item for this device (the URL, the SSH port) and grey out what it can't do."""
+        for name, (title, enabled) in self._menu_state(d).items():
+            item = self._menu_items.get(name)
+            if item is None:
+                continue
+            if self.caps["platform"] == "windows":
+                item.Text, item.Enabled = title, enabled
+            else:
+                item.title, item.enabled = title, enabled
+
+    def _menu_state(self, d) -> dict:
+        titles = dict(entry for entry in DEVICE_ACTIONS if entry)
+        if d is None:
+            return {name: (title, False) for name, title in titles.items()}
+        ip = bool(d.ip)
+        ssh = self.term.find(d.key, "ssh") if self.term else None
+        ping = self.term.find(d.key, "ping") if self.term else None
+        return {
+            "web": (f"Open Web UI  ({core.web_url(d, fallback=True)})" if ip else titles["web"], ip),
+            "ssh": ("Show SSH session" if ssh else f"Open SSH…  (port {d.port('ssh')})", ip),
+            "ping": ("Show ping" if ping and ping.alive else titles["ping"], ip),
+            "rescan": (titles["rescan"], ip and bool(self.result) and not self.running and not self.rescanning),
+            "copy_ip": (f"Copy IP address  ({d.ip})" if ip else titles["copy_ip"], ip),
+            "copy_mac": (f"Copy MAC address  ({d.mac})" if d.mac else titles["copy_mac"], bool(d.mac)),
+            "forget": (titles["forget"], ip),
+            "hide": (titles["hide"], True),
+        }
+
+    def _device_action(self, name):
+        d = self._selected_device()
+        if d is None:
+            self.status.text = "Select a device first."
+            return
+        title, enabled = self._menu_state(d)[name]
+        if not enabled:
+            self.status.text = ("Rescan works once a scan has finished." if name == "rescan"
+                                else f"{title}: not available for this device.")
+            return
+        if name == "web":
+            url = core.web_url(d, fallback=True)
+            webbrowser.open(url)
+            self.status.text = f"Opened {url}"
+        elif name == "ssh":
+            asyncio.create_task(self._open_ssh(d))
+        elif name == "ping":
+            self._open_ping(d)
+        elif name == "rescan":
+            self._rescan(d)
+        elif name == "copy_ip":
+            self._copy(d.ip, "IP address")
+        elif name == "copy_mac":
+            self._copy(d.mac, "MAC address")
+        elif name == "forget":
+            from opendisco import terminal
+            alias = terminal.host_key_alias(d.mac, d.ip)
+            gone = terminal.forget_host_key(alias, self.known_hosts)
+            self.status.text = (f"Forgot the saved SSH key for {d.ip}: the next connection trusts its new one."
+                                if gone else f"No SSH key saved for {d.ip}.")
+        elif name == "hide":
+            self.hidden[d.key] = {"mac": d.mac or "", "ip": d.ip, "vendor": d.vendor, "model": d.model,
+                                  "name": d.name}
+            self._save_settings()
+            self._update_hidden_button()
+            self._show_devices(self._all_devices())
+            self.status.text = f"Hid {d.ip or d.mac}. Hidden devices… brings it back."
+
+    # -- SSH and ping ----------------------------------------------------------------
+    def _show_terminal(self, session):
+        self.tabs.current_tab = "Terminal"
+        self.term.show(session)
+
+    async def _open_ssh(self, d):
+        from opendisco import terminal
+        session = self.term.find(d.key, "ssh")
+        if session:  # already logged in: just show it
+            self._show_terminal(session)
+            return
+        login = await self._ssh_login(d)
+        if not login:
+            return
+        user, password, port = login
+        self.settings["ssh_user"] = user
+        self._save_settings()
+        argv = terminal.ssh_argv(d.ip, port, user, terminal.host_key_alias(d.mac, d.ip), self.known_hosts)
+        if not terminal.in_app_terminals():
+            terminal.open_console_window(argv)
+            self.status.text = f"SSH to {d.ip} opened in its own window."
+            return
+        who = f"{user}@" if user else ""
+        title = f"{d.ip}  SSH {who}port {port}" + (f"  {d.name or d.model}" if d.name or d.model else "")
+        self._show_terminal(self.term.open(d.key, "ssh", title, argv, password))
+
+    async def _ssh_login(self, d):
+        """Ask for the username and password (and confirm the port); None when cancelled."""
+        answer = self.loop.create_future()
+        said = d.said_ports("ssh")
+        found = sorted(p for p, k in d.services.items() if k == "ssh")
+        where = ("It says SSH is on " + ", ".join(f"{p} ({core.PORT_SOURCES[s]})" for s, p in said.items())
+                 if said else "It doesn't say which port SSH is on")
+        if found:
+            where += f"; SSH answers on {', '.join(map(str, found))}."
+        elif d.ports is not None:
+            where += "; a deep check found no SSH answering."
+        else:
+            where += "."
+        user = toga.TextInput(value=self.settings.get("ssh_user", ""), placeholder="e.g. ubnt or admin",
+                              style=Pack(flex=1))
+        password = toga.PasswordInput(placeholder="empty: type it in the terminal, or use your SSH key",
+                                      style=Pack(flex=1))
+        port = toga.TextInput(value=str(d.port("ssh")), style=Pack(width=80))
+        problem = toga.Label("", style=Pack(flex=1))
+
+        def finish(ok):
+            if answer.done():
+                return
+            if ok:
+                text = port.value.strip()
+                if not text.isdigit() or not 0 < int(text) < 65536:
+                    problem.text = "The port is a number from 1 to 65535."
+                    return
+                answer.set_result((user.value.strip(), password.value, int(text)))
+            else:
+                answer.set_result(None)
+            window.close()
+
+        def closing(widget, **kwargs):
+            if not answer.done():
+                answer.set_result(None)
+            return True
+
+        password.on_confirm = lambda widget: finish(True)
+        user.on_confirm = lambda widget: password.focus()
+        label = Pack(width=80)
+        window = toga.Window(title=f"SSH to {d.ip}", size=(520, 250), resizable=False, on_close=closing)
+        window.content = toga.Box(style=Pack(direction=COLUMN, margin=14, gap=8), children=[
+            toga.Label(f"{d.ip}  {d.name or d.model or d.mac or ''}".strip()),
+            toga.Label(where),
+            toga.Box(style=Pack(direction=ROW, align_items="center", gap=8),
+                     children=[toga.Label("Username", style=label), user]),
+            toga.Box(style=Pack(direction=ROW, align_items="center", gap=8),
+                     children=[toga.Label("Password", style=label), password]),
+            toga.Box(style=Pack(direction=ROW, align_items="center", gap=8),
+                     children=[toga.Label("Port", style=label), port, problem]),
+            toga.Label("The password goes only to ssh, and is kept in memory to log in again if the "
+                       "connection drops. It isn't stored."),
+            toga.Box(style=Pack(direction=ROW, gap=8), children=[
+                toga.Box(style=Pack(flex=1)),
+                toga.Button("Cancel", on_press=lambda w: finish(False)),
+                toga.Button("Connect", on_press=lambda w: finish(True))])])
+        window.show()
+        (password if user.value else user).focus()
+        self.cancel_ssh_login = lambda: finish(False)
+        try:
+            return await answer
+        finally:
+            self.cancel_ssh_login = None
+
+    def _open_ping(self, d):
+        from opendisco import terminal
+        session = self.term.find(d.key, "ping")
+        if session:
+            if not session.alive:
+                session.type(b"\r")  # start it again
+            self._show_terminal(session)
+            return
+        argv = terminal.ping_argv(d.ip)
+        if not terminal.in_app_terminals():
+            terminal.open_console_window(argv)
+            self.status.text = f"Pinging {d.ip} in its own window."
+            return
+        title = f"{d.ip}  ping" + (f"  {d.name or d.model}" if d.name or d.model else "")
+        self._show_terminal(self.term.open(d.key, "ping", title, argv))
+
+    # -- rescanning one device -------------------------------------------------------
+    def _rescan(self, d):
+        self.rescanning = True
+        self.spinner.start()
+        self.status.text = f"Rescanning {d.ip}…"
+        result = self.result
+
+        def work():
+            error = None
+            try:
+                dev, answered = core.rescan_device(result, d, lambda m: self._from_worker(self._append_log, m))
+            except Exception as e:
+                dev, answered, error = d, False, f"{type(e).__name__}: {e}"
+            self._from_worker(self._rescanned, result, dev, answered, error)
+
+        threading.Thread(target=work, daemon=True).start()
+
+    def _rescanned(self, result, d, answered, error):
+        self.rescanning = False
+        self.spinner.stop()
+        if result is not self.result:  # a new scan started meanwhile
+            return
+        self._show_devices(result.devices)
+        if self._selected_device() is d:
+            self.details.value = core.render_details(d)
+            self._show_packets(d, force=True)
+        if error:
+            self.status.text = f"Rescan of {d.ip} failed: {error}"
+            return
+        ports = ", ".join(f"{p} {k}" for p, k in sorted(d.services.items())) or "no management ports open"
+        self.status.text = (f"Rescanned {d.ip}: " + ("answered discovery" if answered else "no discovery reply")
+                            + f"; {ports}.")
+
+    # -- clipboard and hidden devices -----------------------------------------------
+    def _copy(self, text, what):
+        try:
+            if self.caps["platform"] == "macos":
+                from rubicon.objc import ObjCClass
+                board = ObjCClass("NSPasteboard").generalPasteboard
+                board.clearContents()
+                board.setString(text, forType="public.utf8-plain-text")
+            elif self.caps["platform"] == "windows":
+                import System.Windows.Forms as WinForms
+                WinForms.Clipboard.SetText(text)
+            else:
+                raise NotImplementedError
+            self.status.text = f"Copied {what} {text}"
+        except Exception:
+            self.status.text = f"{what}: {text} (copying isn't supported here)"
+
+    def _update_hidden_button(self):
+        self.hidden_button.text = f"Hidden devices ({len(self.hidden)})…"
+
+    def on_hidden(self, widget, **kwargs):
+        def rows():
+            return [{"mac": info.get("mac") or "(no MAC)", "ip": info.get("ip", ""), "vendor": info.get("vendor", ""),
+                     "model": info.get("model", ""), "name": info.get("name", ""), "key": key}
+                    for key, info in sorted(self.hidden.items(), key=lambda kv: kv[1].get("ip", ""))]
+
+        table = toga.Table(columns=["MAC", "IP", "Vendor", "Model", "Name"], data=rows(), multiple_select=True,
+                           style=Pack(flex=1))
+
+        def unhide(keys):
+            for key in keys:
+                self.hidden.pop(key, None)
+            self._save_settings()
+            self._update_hidden_button()
+            self._show_devices(self._all_devices())
+            table.data = rows()
+
+        window = toga.Window(title="Hidden devices", size=(700, 380))
+        window.content = toga.Box(style=Pack(direction=COLUMN, margin=12, gap=8), children=[
+            toga.Label("These are left out of the table, by MAC address, in every scan until you unhide them. "
+                       "Exports still include them."),
+            table,
+            toga.Box(style=Pack(direction=ROW, gap=8), children=[
+                toga.Box(style=Pack(flex=1)),
+                toga.Button("Unhide selected", on_press=lambda w: unhide([r.key for r in table.selection])),
+                toga.Button("Unhide all", on_press=lambda w: unhide(list(self.hidden))),
+                toga.Button("Close", on_press=lambda w: window.close())])])
+        window.show()
 
     # -- exports and holding addresses ---------------------------------------------
     async def on_export(self, widget, **kwargs):
@@ -491,6 +877,10 @@ class OpenDiscoApp(toga.App):
         core.STOP.set()
         if self.cancel_password:
             self.cancel_password()
+        if self.cancel_ssh_login:
+            self.cancel_ssh_login()
+        if self.term:
+            self.term.close_all()  # ends ssh and ping
         if self.result and self.result.mgr:
             self.result.mgr.remove_all()  # never leave a temporary address behind
         if self.multicast_lock is not None:
