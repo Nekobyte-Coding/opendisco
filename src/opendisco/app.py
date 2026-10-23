@@ -74,9 +74,13 @@ class OpenDiscoApp(toga.App):
                                                "it reported and what to check.", style=mono)
         self.wire = toga.MultilineTextInput(readonly=True, placeholder="Sniff, Trunk VLANs and Direct show what "
                                             "they heard on the wire here.", style=mono)
+        self.packets = toga.MultilineTextInput(readonly=True, placeholder="Select a device to see the packets it "
+                                               "sent, decoded and checked for damage.", style=mono)
+        self.shown_packets = None  # (device, packets received) the Packets tab shows
         self.notes = toga.MultilineTextInput(readonly=True, style=mono)
         self.log = toga.MultilineTextInput(readonly=True, style=mono)
-        tabs = [("Details", self.details), ("On the wire", self.wire), ("Notes", self.notes), ("Log", self.log)]
+        tabs = [("Details", self.details), ("Packets", self.packets), ("On the wire", self.wire),
+                ("Notes", self.notes), ("Log", self.log)]
         if self.caps["aliases"]:
             self.networks = toga.MultilineTextInput(value=self.networks_path.read_text(), style=mono)
             networks_box = toga.Box(style=Pack(direction=COLUMN, flex=1, gap=6), children=[
@@ -121,9 +125,11 @@ class OpenDiscoApp(toga.App):
         self.on_exit = self.handle_exit
         self.on_mode(self.mode)
         self.main_window.show()
-        # macOS re-centres the tab labels after resize and tab-change events, so snap a moment later.
+        # macOS re-centres the tab labels whenever it re-tiles the tab view (window resizes,
+        # dragging the divider, tab changes, moving to another display), so snap a moment later.
         self.main_window.on_resize = lambda *args, **kwargs: self.loop.call_later(0.05, self._align_tab_labels)
         self.tabs.on_select = lambda *args, **kwargs: self.loop.call_later(0.05, self._align_tab_labels)
+        self._watch_tab_labels()
         self.loop.call_later(0.3, self._align_tab_labels)
 
     # -- set-up helpers -----------------------------------------------------
@@ -176,6 +182,38 @@ class OpenDiscoApp(toga.App):
                     sub.setFrameOrigin(NSPoint(sub.frame.origin.x + dx, sub.frame.origin.y + dy))
         except Exception:
             pass  # purely cosmetic
+
+    def _watch_tab_labels(self):
+        """Snap the tab labels after every frame change of the tab view or its label strip, and
+        after the window moves to a display with another scale, whatever caused it."""
+        if self.caps["platform"] != "macos":
+            return
+        try:
+            from rubicon.objc import Block, ObjCClass, ObjCInstance
+            center = ObjCClass("NSNotificationCenter").defaultCenter
+            view = self.tabs._impl.native
+            pending = []
+
+            def changed(note: ObjCInstance) -> None:
+                if not pending:  # one snap per burst of layout changes
+                    pending.append(self.loop.call_soon(snapped))
+
+            def snapped():
+                pending.clear()
+                self._align_tab_labels()
+
+            self._tab_label_block = Block(changed)  # keep the block and the observers alive
+            strips = [sub for sub in view.subviews if "Segmented" in str(sub.className)]
+            watched = [("NSViewFrameDidChangeNotification", v) for v in [view, *strips]]
+            watched.append(("NSWindowDidChangeBackingPropertiesNotification", view.window))
+            self._tab_label_observers = []
+            for name, obj in watched:
+                if name == "NSViewFrameDidChangeNotification":
+                    obj.postsFrameChangedNotifications = True
+                self._tab_label_observers.append(
+                    center.addObserverForName(name, object=obj, queue=None, usingBlock=self._tab_label_block))
+        except Exception:
+            pass  # purely cosmetic; the resize and tab-change hooks still snap
 
     def _android_multicast_lock(self):
         """Android drops broadcasts and multicast in Wi-Fi power save unless an app holds this."""
@@ -279,8 +317,9 @@ class OpenDiscoApp(toga.App):
             return
         await self._release_hold()
         self.running, self.result, self.live_inv, self.shown_rows = True, None, None, None
+        self.shown_packets = None
         self.table.data = []
-        self.details.value = self.wire.value = self.notes.value = ""
+        self.details.value = self.packets.value = self.wire.value = self.notes.value = ""
         self.log.value = f"{time.strftime('%H:%M:%S')}  {self.mode.value}: {' '.join(self._args())}\n"
         self.start_button.enabled, self.stop_button.enabled = False, True
         self.export_button.enabled = self.hold_button.enabled = False
@@ -315,7 +354,17 @@ class OpenDiscoApp(toga.App):
         while self.running:
             if self.live_inv is not None:
                 self._show_devices(core.sorted_devices(self.live_inv))
+                if self.shown_packets:
+                    self._show_packets(self.shown_packets[0])
             await asyncio.sleep(1.0)
+
+    def _show_packets(self, d, force=False):
+        """Fill the Packets tab for a device; while scanning, only when it has sent more."""
+        if force or self.shown_packets != (d, d.ubnt_packets):
+            self.shown_packets = (d, d.ubnt_packets)
+            res = self.result
+            self.packets.value = core.render_packets(d, res.inv if res else self.live_inv,
+                                                     res.counters if res else None)
 
     def _show_devices(self, devices):
         rows = [dict(zip(ACCESSORS, core.device_row(d)), key=d.key) for d in devices]
@@ -344,6 +393,9 @@ class OpenDiscoApp(toga.App):
                             f"{result.elapsed:.0f}s" + (" (stopped early)" if result.interrupted else ""))
         self.export_button.enabled = bool(result.devices or result.trunks)
         self.hold_button.enabled = bool(result.mgr) and any(d.alias for d in result.devices)
+        if self.shown_packets:  # now with the interface counters and the final checks
+            self.details.value = core.render_details(self.shown_packets[0])
+            self._show_packets(self.shown_packets[0], force=True)
         if result.trunks:
             self.tabs.current_tab = "On the wire"
 
@@ -356,7 +408,9 @@ class OpenDiscoApp(toga.App):
         d = self._device(getattr(row, "key", None)) if row is not None else None
         if d is not None:
             self.details.value = core.render_details(d)
-            self.tabs.current_tab = "Details"
+            self._show_packets(d, force=True)
+            if self.tabs.current_tab.text not in ("Details", "Packets"):
+                self.tabs.current_tab = "Details"
 
     # -- exports and holding addresses ---------------------------------------------
     async def on_export(self, widget, **kwargs):

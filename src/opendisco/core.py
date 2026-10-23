@@ -20,6 +20,7 @@ from __future__ import annotations
 
 import argparse
 import atexit
+import bisect
 import ipaddress
 import json
 import os
@@ -44,7 +45,7 @@ from collections import Counter
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
 
-__version__ = "1.1.0"
+from opendisco import __version__  # one version for the app, the CLI and the installers
 
 UBNT_PORT = 10001
 UBNT_MCAST = "233.89.188.1"
@@ -414,6 +415,139 @@ def decode_fields(pkt: Packet):
 
 
 # ---------------------------------------------------------------------------
+# Packet checks
+# ---------------------------------------------------------------------------
+# Ethernet's CRC catches most damage before the OS sees a frame, and the OS drops IP and UDP
+# packets with bad checksums (the interface and protocol error counters count both). What
+# gets through can still be cut short or garbled, so each discovery packet is checked against
+# the protocol's own structure. Damage that comes and goes points at the path; the same
+# oddity in every packet of a kind is just how that firmware writes it.
+
+TLV_SIZES = {0x01: 6, 0x02: 10, 0x04: 4, 0x05: 6, 0x0A: 4, 0x0E: 1, 0x10: 2, 0x12: 4, 0x13: 6, 0x2F: 10}
+TEXT_TLVS = (0x03, 0x06, 0x0B, 0x0C, 0x0D, 0x14, 0x15, 0x16, 0x30)
+PACKETS_KEPT = 60  # per device; damaged ones are kept in preference to sound ones
+FRAMING = {"short", "version", "cut-short", "overrun"}  # where its fields start and end is lost
+SOUND_ENOUGH = {"trailing", "stray", "fragment"}  # extra bytes, or not checkable: the fields still read right
+UNTRUSTED = FRAMING | {"ip-short", "udp-short", "udp-length", "udp-checksum",  # known damaged, or whose is unclear
+                       "size-01", "size-02", "size-05", "size-13", "size-2f"}
+SNAPLEN = 1600  # tcpdump's capture length (TCPDUMP_ARGS): longer frames arrive cut
+
+
+@dataclass
+class PacketRecord:
+    """One packet a device sent, kept so it can be inspected."""
+    at: float  # time.time() when it arrived
+    proto: str  # "UBNT", "mDNS", "SSDP", or what a captured frame carried (LLDP, CDP, ARP, DHCP...)
+    src: str  # "ip:port", or the source MAC of a frame without IP
+    via: str
+    iface: str = ""  # the interface it came in on, when known
+    vlan: int | None = None  # 0 = untagged, None = unknown
+    data: bytes = b""  # the UDP payload; for a captured frame of another kind, the whole frame
+    frame: bytes = b""  # the whole Ethernet frame, when it was captured off the wire
+    problems: list = field(default_factory=list)  # (code, message)
+    n: int = 0  # its number among the device's UBNT packets
+
+    @property
+    def kind(self) -> str:
+        if self.proto != "UBNT" or len(self.data) < 4:
+            return self.proto
+        return f"v{self.data[0]} cmd {self.data[1]}"
+
+
+def _tlv_walk(data: bytes):
+    """A UBNT packet's fields as [(offset, type, value)], plus what's wrong with its framing.
+    Offsets count from the start of the packet, as in the hex dump."""
+    if len(data) < 4:
+        return [], [("short", f"only {len(data)} bytes: too short for a UBNT header")]
+    version, _command, length = struct.unpack_from(">BBH", data)
+    if version > 2:
+        return [], [("version", f"the version byte is {version}: not a UBNT discovery packet, or its "
+                                "header is damaged")]
+    fields, problems = [], []
+    if 4 + length > len(data):
+        problems.append(("cut-short", f"the header says {length} bytes of fields follow, but only "
+                                      f"{len(data) - 4} arrived: cut short"))
+    elif 4 + length < len(data):
+        problems.append(("trailing", f"{len(data) - 4 - length} byte(s) after the {length} the header declares"))
+    end, p = min(len(data), 4 + length), 4
+    while p + 3 <= end:
+        ftype, flen = struct.unpack_from(">BH", data, p)
+        if p + 3 + flen > end:
+            problems.append(("overrun", f"field 0x{ftype:02x} at byte 0x{p:04x} says it's {flen} bytes, "
+                                        f"but only {end - p - 3} are left"))
+            return fields, problems
+        fields.append((p, ftype, data[p + 3:p + 3 + flen]))
+        p += 3 + flen
+    if p < end and 4 + length <= len(data):  # (when it was cut short, that's the next field's start)
+        problems.append(("stray", f"{end - p} stray byte(s) after the last field"))
+    return fields, problems
+
+
+def check_packet(data: bytes) -> list:
+    """What's wrong with a UBNT discovery packet, as [(code, message)]; [] when it's sound."""
+    fields, problems = _tlv_walk(data)
+    seen = Counter()
+    for off, ftype, value in fields:
+        seen[ftype] += 1
+        name = TLV[ftype][1] if ftype in TLV else f"field 0x{ftype:02x}"
+        want = TLV_SIZES.get(ftype)
+        if want and len(value) != want:
+            problems.append((f"size-{ftype:02x}", f"{name} at byte 0x{off:04x} is {len(value)} bytes, not {want}"))
+        elif ftype in TEXT_TLVS:
+            try:
+                bad = any(ord(c) < 32 or ord(c) == 127 for c in value.rstrip(b"\x00").decode("utf-8"))
+            except UnicodeDecodeError:
+                bad = True
+            if bad:
+                problems.append((f"text-{ftype:02x}", f"{name} at byte 0x{off:04x} has unreadable characters"))
+        elif ftype == 0x32 and len(value) > 10:
+            try:
+                json.loads(value[10:].decode("utf-8"))
+            except ValueError:
+                problems.append(("json-32", f"{name} at byte 0x{off:04x} carries broken JSON"))
+    problems += [(f"twice-{t:02x}", f"{TLV[t][1]} appears {n} times") for t, n in seen.items()
+                 if n > 1 and t in TLV and not TLV[t][3]]
+    return problems
+
+
+def _ones_sum(data: bytes) -> int:
+    if len(data) % 2:
+        data += b"\x00"
+    total = sum(struct.unpack(f">{len(data) // 2}H", data))
+    while total >> 16:
+        total = (total & 0xFFFF) + (total >> 16)
+    return total
+
+
+def check_ip_udp(ip: bytes, cut: bool = False):
+    """Check a captured IPv4/UDP packet's lengths and checksums (the OS drops packets that
+    fail these before any program sees them, so only a capture shows them). Returns
+    (problems, UDP payload); the payload is None when it can't be trusted to be whole.
+    cut: the capture kept only the start of the frame."""
+    ihl = (ip[0] & 0x0F) * 4
+    total, frag = struct.unpack_from(">H", ip, 2)[0], struct.unpack_from(">H", ip, 6)[0]
+    problems = []
+    if ihl < 20 or _ones_sum(ip[:ihl]) != 0xFFFF:
+        problems.append(("ip-checksum", "bad IPv4 header checksum"))
+    if frag & 0x3FFF:
+        return problems + [("fragment", "arrived in IP fragments, so only the first could be checked")], None
+    if total > len(ip):
+        if not cut:
+            problems.append(("ip-short", f"the IPv4 header says {total} bytes, but only {len(ip)} arrived"))
+        return problems, None
+    udp = ip[ihl:total]
+    if len(udp) < 8:
+        return problems + [("udp-short", "too short for a UDP header")], None
+    ulen, csum = struct.unpack_from(">HH", udp, 4)
+    if ulen != len(udp):
+        problems.append(("udp-length", f"the UDP header says {ulen} bytes, the IPv4 packet carries {len(udp)}"))
+        return problems, None
+    if csum and _ones_sum(ip[12:20] + struct.pack(">BBH", 0, 17, ulen) + udp) != 0xFFFF:
+        problems.append(("udp-checksum", "bad UDP checksum: the payload was damaged on the way"))
+    return problems, udp[8:]
+
+
+# ---------------------------------------------------------------------------
 # Devices
 # ---------------------------------------------------------------------------
 
@@ -483,6 +617,12 @@ class Device:
     wifi: dict = field(default_factory=dict)  # set when it's the access point a Wi-Fi port is joined to
     ubnt_packets: int = 0
     last_packet: bytes = b""
+    packets: list = field(default_factory=list)  # its latest UBNT packets (PacketRecord)
+    samples: list = field(default_factory=list)  # the first packet of each other kind it was found from
+    reply_times: list = field(default_factory=list)  # when each answer to our probes arrived
+    kind_counts: Counter = field(default_factory=Counter)  # packet kind -> UBNT packets received
+    problem_counts: Counter = field(default_factory=Counter)  # (kind, problem code) -> packets with it
+    sound_kinds: set = field(default_factory=set)  # kinds it has sent at least one sound packet of
     first_seen: float = field(default_factory=time.time)
     last_seen: float = field(default_factory=time.time)
     issues: list = field(default_factory=list)  # (level, tag, message)
@@ -490,6 +630,10 @@ class Device:
     def add_ip(self, ip: str | None) -> None:
         if ip and ip != "0.0.0.0" and ip not in self.ips:
             self.ips.append(ip)
+
+    def add_sample(self, rec: "PacketRecord") -> None:
+        if len(self.samples) < 8 and all(s.proto != rec.proto for s in self.samples):
+            self.samples.append(rec)
 
     @property
     def ip(self) -> str:
@@ -574,6 +718,13 @@ class Device:
             self.vlan, self.vlan_parent = other.vlan, other.vlan_parent
         self.ubnt_packets += other.ubnt_packets
         self.last_packet = self.last_packet or other.last_packet
+        self.packets = sorted(self.packets + other.packets, key=lambda r: r.at)[-PACKETS_KEPT:]
+        for rec in other.samples:
+            self.add_sample(rec)
+        self.reply_times = sorted(self.reply_times + other.reply_times)
+        self.kind_counts += other.kind_counts
+        self.problem_counts += other.problem_counts
+        self.sound_kinds |= other.sound_kinds
         self.first_seen = min(self.first_seen, other.first_seen)
         self.last_seen = max(self.last_seen, other.last_seen)
 
@@ -587,6 +738,30 @@ class Inventory:
     def __init__(self):
         self.devices: dict[str, Device] = {}
         self.requesters: dict[str, set] = {}  # ip -> source ports of bare discovery probes
+        self.garbled: dict[str, list] = {}  # ip -> packets on UDP 10001 too damaged to tell whose
+        self.rounds: list = []  # (time, [(network, interface)]) of each round of probes sent
+
+    def keep_packet(self, dev: Device | None, rec: PacketRecord) -> None:
+        """Keep a UBNT packet to inspect later: with its device, or by sender when it was too
+        damaged to tell whose it is."""
+        if dev is None:
+            kept = self.garbled.setdefault(rec.src.rsplit(":", 1)[0], [])
+            kept.append(rec)
+            del kept[:-20]
+            return
+        rec.n = dev.ubnt_packets
+        dev.kind_counts[rec.kind] += 1
+        codes = {code for code, _ in rec.problems}
+        for code in codes:
+            dev.problem_counts[(rec.kind, code)] += 1
+        if not codes - SOUND_ENOUGH:
+            dev.sound_kinds.add(rec.kind)
+        if rec.via in ("ubnt", "mcast"):  # answers to our probes, for counting missed rounds
+            dev.reply_times.append(rec.at)
+            del dev.reply_times[:-20000]
+        dev.packets.append(rec)
+        if len(dev.packets) > PACKETS_KEPT:  # drop the oldest sound one, so damaged ones stay to be seen
+            del dev.packets[next((i for i, r in enumerate(dev.packets) if not r.problems), 0)]
 
     def find(self, mac: str | None = None, ip: str | None = None) -> Device | None:
         if mac:
@@ -635,6 +810,28 @@ class Inventory:
         dev.add_ip(ip)
         dev.via.add(via)
         return dev
+
+    def ingest_checked(self, pkt: Packet, rec: PacketRecord, addr, via: str):
+        """ingest_ubnt for a checked packet, which is then kept with its device. A damaged
+        packet's fields are only taken while they're all there is: not when they can't be
+        trusted (a broken MAC would show up as a phantom device), and not once the device has
+        sent a sound packet of that kind (then the damage happened on the way, rather than
+        being how its firmware writes them). One with a bad IP header is kept by sender."""
+        damage = {code for code, _ in rec.problems} - SOUND_ENOUGH
+        if "ip-checksum" in damage:  # even the sender's address may be wrong
+            self.keep_packet(None, rec)
+            return None, []
+        known = self.find(ip=addr[0])
+        if damage and (damage & UNTRUSTED or (known is not None and rec.kind in known.sound_kinds)):
+            dev, changes = self.lookup(ip=addr[0]), []
+            dev.via.add(via)
+            dev.protocols.add(f"v{pkt.version}")
+            dev.ubnt_packets += 1
+            dev.last_seen = time.time()
+        else:
+            dev, changes = self.ingest_ubnt(pkt, addr, via)
+        self.keep_packet(dev, rec)
+        return dev, changes
 
     def ingest_ubnt(self, pkt: Packet, addr, via: str):
         info, unknown = decode_fields(pkt)
@@ -1023,6 +1220,118 @@ _IP_RE = re.compile(r"(?<![\d.])(\d{1,3}(?:\.\d{1,3}){3})(?![\d.])")
 ARP_SUDO: list = []  # ["sudo", "-n"] once this run holds sudo: macOS may filter the ARP table for Python
 
 
+COUNTER_LABELS = {
+    "in_errors": "input errors (damaged frames: bad CRC, runts)",
+    "out_errors": "output errors",
+    "collisions": "collisions",
+    "drops": "dropped packets",
+    "crc_errors": "CRC errors",
+    "frame_errors": "framing errors",
+    "length_errors": "length errors",
+    "overruns": "overruns",
+    "ip_checksum": "IP packets with a bad header checksum",
+    "ip_header": "IP packets with a bad header",
+    "ip_short": "IP packets shorter than their header says",
+    "udp_checksum": "UDP datagrams with a bad checksum",
+    "udp_length": "UDP datagrams with a bad length",
+}
+
+
+def interface_counters(names) -> dict:
+    """This computer's error counters: {"interfaces": {name: {counter: n}}, "system": {counter: n}}.
+    Damaged frames never reach a program, so these are the only place they show up. Windows
+    only gives totals for all adapters together."""
+    names, plat = set(names), platform_name()
+    out = {"interfaces": {}, "system": {}}
+    try:
+        if plat == "macos":
+            for line in _run(["netstat", "-i", "-d", "-n"]).splitlines():
+                cols = line.split()  # Name Mtu Network [Address] Ipkts Ierrs Opkts Oerrs Coll Drop
+                name = cols[0].rstrip("*") if cols else ""
+                if name in names and len(cols) >= 9 and cols[2].startswith("<Link#") and all(
+                        c.isdigit() for c in cols[-6:]):
+                    _ipkts, ierrs, _opkts, oerrs, coll, drop = map(int, cols[-6:])
+                    out["interfaces"][name] = {"in_errors": ierrs, "out_errors": oerrs, "collisions": coll,
+                                               "drops": drop}
+            stats = _run(["netstat", "-s", "-p", "ip"]) + _run(["netstat", "-s", "-p", "udp"])
+            for key, pattern in (("ip_checksum", r"(\d+) bad header checksum"),
+                                 ("ip_short", r"(\d+) with data size < data length"),
+                                 ("udp_checksum", r"(\d+) with bad checksum"),
+                                 ("udp_length", r"(\d+) with bad data length field")):
+                m = re.search(pattern, stats)
+                if m:
+                    out["system"][key] = int(m.group(1))
+        elif plat == "linux":
+            for name in names:
+                values = {}
+                for key, stat in (("in_errors", "rx_errors"), ("out_errors", "tx_errors"),
+                                  ("collisions", "collisions"), ("drops", "rx_dropped"),
+                                  ("crc_errors", "rx_crc_errors"), ("frame_errors", "rx_frame_errors"),
+                                  ("length_errors", "rx_length_errors"), ("overruns", "rx_over_errors")):
+                    try:
+                        with open(f"/sys/class/net/{name}/statistics/{stat}") as f:
+                            values[key] = int(f.read())
+                    except (OSError, ValueError):
+                        pass
+                if values:
+                    out["interfaces"][name] = values
+            with open("/proc/net/snmp") as f:
+                lines = f.read().splitlines()
+            table = {}
+            for head, nums in zip(lines[::2], lines[1::2]):
+                proto, keys = head.split(":", 1)
+                table[proto] = dict(zip(keys.split(), nums.split(":", 1)[1].split()))
+            for key, proto, stat in (("ip_header", "Ip", "InHdrErrors"), ("udp_checksum", "Udp", "InCsumErrors")):
+                if stat in table.get(proto, {}):
+                    out["system"][key] = int(table[proto][stat])
+        elif plat == "windows":  # "Errors <received> <sent>" and "Discards ..." for all adapters
+            text = _run(["netstat", "-e"])
+            errors = re.search(r"^Errors\s+(\d+)\s+(\d+)", text, re.M)
+            discards = re.search(r"^Discards\s+(\d+)", text, re.M)
+            if errors:
+                out["interfaces"]["all adapters"] = {"in_errors": int(errors.group(1)),
+                                                     "out_errors": int(errors.group(2))}
+                if discards:
+                    out["interfaces"]["all adapters"]["drops"] = int(discards.group(1))
+    except (OSError, ValueError, IndexError):
+        pass
+    return out
+
+
+def counter_changes(before: dict, after: dict) -> dict:
+    """The counters that went up between two interface_counters() snapshots. Every interface
+    read both times gets an entry (empty when nothing went up)."""
+    def up(was: dict, now: dict) -> dict:
+        return {k: n - was[k] for k, n in now.items() if k in was and n > was[k]}
+
+    return {"interfaces": {name: up(before["interfaces"][name], now) for name, now in after["interfaces"].items()
+                           if name in before["interfaces"]},
+            "system": up(before["system"], after["system"]),
+            "system_read": bool(before["system"] and after["system"])}
+
+
+def counter_text(up: dict) -> str:
+    return ", ".join(f"{n} {COUNTER_LABELS.get(k, k)}" for k, n in up.items())
+
+
+def counter_notes(changes: dict) -> list:
+    notes = []
+    for name, up in changes.get("interfaces", {}).items():
+        errors = {k: n for k, n in up.items() if k != "drops"}
+        if errors:
+            hint = ("collisions on a full-duplex link mean the two ends disagree on duplex: set both to auto"
+                    if "collisions" in errors else
+                    "damaged frames point to the cable or a connector, the switch port, or a speed/duplex mismatch")
+            notes.append(("warn", f"{name} counted {counter_text(errors)} during this scan: {hint}."))
+        elif up.get("drops"):
+            notes.append(("note", f"{name} dropped {up['drops']} packet(s) during this scan."))
+    if changes.get("system"):
+        notes.append(("warn", f"This computer counted {counter_text(changes['system'])} during this scan (all "
+                              "interfaces and programs): packets are arriving damaged. The interface counts "
+                              "above show which port, if they went up too."))
+    return notes
+
+
 def _parse_arp(text: str) -> dict:
     table = {}
     for line in text.splitlines():
@@ -1147,6 +1456,7 @@ class MdnsBrowser:
         self.qid = random.randint(1, 0xFFFF)
         self.types: set = set()
         self.hosts: dict = {}
+        self.raw: dict = {}  # ip -> (time, "ip:port", its first answer)
 
     def _host(self, ip: str) -> dict:
         return self.hosts.setdefault(ip, {"hostnames": set(), "services": set(), "instances": set(),
@@ -1172,6 +1482,7 @@ class MdnsBrowser:
         msg = parse_dns(data)
         if not msg or not msg[0] & 0x8000:
             return
+        self.raw.setdefault(addr[0], (time.time(), f"{addr[0]}:{addr[1]}", data))
         host, new_types = self._host(addr[0]), []
         for name, rtype, value in msg[1]:
             if value is None:
@@ -1245,6 +1556,7 @@ class SsdpBrowser:
         except OSError:
             pass
         self.responders: dict = {}
+        self.raw: dict = {}  # ip -> (time, "ip:port", its first answer)
 
     def start(self) -> None:
         for st in ("ssdp:all", "upnp:rootdevice"):
@@ -1263,6 +1575,7 @@ class SsdpBrowser:
         lines = data.decode("latin-1", "replace").split("\r\n")
         if not lines or not lines[0].upper().startswith("HTTP/"):
             return
+        self.raw.setdefault(addr[0], (time.time(), f"{addr[0]}:{addr[1]}", data))
         hdr = {}
         for line in lines[1:]:
             if ":" in line:
@@ -1439,21 +1752,30 @@ def hexdump(data: bytes, indent: str = "    ") -> str:
     return "\n".join(lines)
 
 
-def describe_packet(data: bytes, pkt: Packet | None, addr, via: str) -> str:
-    head = f"<- {addr[0]}:{addr[1]} [{via}] {len(data)} bytes"
-    if pkt is None:
-        return f"{head}  (not a UBNT packet)\n{hexdump(data)}"
-    kind = "discovery request" if pkt.is_request else "reply"
-    lines = [f"{head}  UBNT v{pkt.version} cmd={pkt.command} len={pkt.length} {kind}"]
-    for ftype, raw in pkt.fields:
+def packet_lines(data: bytes, problems=None) -> list:
+    """A UBNT packet field by field, each with its offset (@) to find it in the hex dump, then
+    what's wrong with it and the hex dump."""
+    fields, _ = _tlv_walk(data)
+    lines = []
+    for off, ftype, raw in fields:
         spec = TLV.get(ftype)
         try:
             value = _fmt_value(spec[0], spec[2](raw)) if spec else raw.hex()
         except Exception:
             value = raw.hex()
-        lines.append(f"   0x{ftype:02x} {spec[1] if spec else 'unknown':<22} {len(raw):>4}  {value}")
+        lines.append(f"   @{off:04x} 0x{ftype:02x} {spec[1] if spec else 'unknown':<22} {len(raw):>4}  {value}")
+    lines += [f"   !! {msg}" for _, msg in (check_packet(data) if problems is None else problems)]
     lines.append(hexdump(data))
-    return "\n".join(lines)
+    return lines
+
+
+def describe_packet(data: bytes, pkt: Packet | None, addr, via: str, problems=None) -> str:
+    head = f"<- {addr[0]}:{addr[1]} [{via}] {len(data)} bytes"
+    if pkt is None:
+        return f"{head}  (not a UBNT packet)\n" + "\n".join(packet_lines(data, problems))
+    kind = "discovery request" if pkt.is_request else "reply"
+    return "\n".join([f"{head}  UBNT v{pkt.version} cmd={pkt.command} len={pkt.length} {kind}"]
+                     + packet_lines(data, problems))
 
 
 class Scanner:
@@ -1467,7 +1789,7 @@ class Scanner:
         self.replied: set = set()
         self.bcast_ok = 0
         self.bcast_errors: dict = {}
-        self.main = self.mcast = None
+        self.main = self.mcast = self.uni = None
         self.mdns = self.ssdp = None
         self.bound_discovery_port = False
         self.browsers_started = False
@@ -1517,7 +1839,11 @@ class Scanner:
             except OSError:
                 pass
         self.handlers[self.mcast] = lambda d, a: self._on_ubnt(d, a, "mcast")
-        for s in (self.main, self.mcast):
+        # UniFi OS gear ignores unicast probes from port 10001 (it answers ones from any other
+        # port), while some legacy gear answers only those, so the sweep sends from both.
+        self.uni = udp_socket(0)
+        self.handlers[self.uni] = lambda d, a: self._on_ubnt(d, a, "ubnt")
+        for s in (self.main, self.mcast, self.uni):
             if _enable_pktinfo(s):
                 self.pktinfo_socks.add(s)
         if o.mdns:
@@ -1562,6 +1888,7 @@ class Scanner:
                 self.bcast_errors[e.errno] = e.strerror or str(e)
 
     def send_ubnt_probes(self) -> None:
+        self.inv.rounds.append((time.time(), [(i.network, i.name) for i in self.ifaces if i.prefix < 32]))
         for payload in (UBNT_V1_PROBE, UBNT_V2_PROBE):
             for s in self.scoped.values():  # 255.255.255.255 out of every interface, for old gear
                 self._send(s, payload, ("255.255.255.255", self.port), bcast=True)
@@ -1611,7 +1938,8 @@ class Scanner:
             if self.sweep_pass == 2 and ip in self.replied:
                 continue
             for payload in ((UBNT_V1_PROBE,) if self.sweep_pass == 1 else (UBNT_V2_PROBE, UBNT_V1_PROBE)):
-                self._send(self.main, payload, (ip, self.port))
+                for sock in (self.main, self.uni):
+                    self._send(sock, payload, (ip, self.port))
             budget -= 1
         if self.sweep_i >= len(self.sweep_hosts):
             self.sweep_pass += 1
@@ -1625,16 +1953,24 @@ class Scanner:
     # -- receiving ---------------------------------------------------------
     def _on_ubnt(self, data: bytes, addr, via: str) -> None:
         pkt = parse_packet(data)
-        own_probe = pkt is not None and pkt.is_request and addr[0] in self.local_ips
-        if self.opts.raw and not own_probe:
-            self.log(describe_packet(data, pkt, addr, via))
-        if pkt is None or own_probe:
+        if addr[0] in self.local_ips and (pkt is None or pkt.is_request):
+            return  # our own probes, looped back
+        iface = self.last_ingress or ""
+        rec = PacketRecord(time.time(), "UBNT", f"{addr[0]}:{addr[1]}", via, iface,
+                           self.vlan_map.get(iface, (0, ""))[0] if iface else None, data,
+                           problems=check_packet(data))
+        if self.opts.raw:
+            self.log(describe_packet(data, pkt, addr, via, rec.problems))
+        if pkt is None:
+            self.inv.keep_packet(None, rec)
             return
         if pkt.is_request:
             self.inv.requesters.setdefault(addr[0], set()).add(addr[1])
             return
         self.replied.add(addr[0])
-        dev, changes = self.inv.ingest_ubnt(pkt, addr, via)
+        dev, changes = self.inv.ingest_checked(pkt, rec, addr, via)
+        if dev is None:
+            return
         if not self.alias_routes:
             dev.direct = True
         if not dev.alias:
@@ -1737,6 +2073,7 @@ class Neighbor:
     lldp: dict = field(default_factory=dict)
     first_ip_at: float = 0.0  # when it first used an IPv4 address (for --direct's early stop)
     own: bool = False  # it's this computer (sent from one of our addresses)
+    samples: dict = field(default_factory=dict)  # kind -> the first frame of that kind (PacketRecord)
 
     def vlan(self, vid: int) -> dict:
         return self.vlans.setdefault(vid, {"ips": set(), "wants": set(), "kinds": set(), "dhcp": {}, "frames": 0})
@@ -1813,7 +2150,7 @@ class Trunk:
         try:
             if etype == 0x0806 and len(payload) >= 28:  # ARP "who has <target>, tell <sender>"
                 sender, target = socket.inet_ntoa(payload[14:18]), socket.inet_ntoa(payload[24:28])
-                seen["kinds"].add("ARP")
+                kind = "ARP"
                 if _usable_ip(target) and target != sender:
                     seen["wants"].add(target)
                     if _usable_ip(sender):
@@ -1829,24 +2166,25 @@ class Trunk:
                         seen["dhcp"].update(parse_dhcp(data))
                     elif UBNT_PORT in (sport, dport) and sender not in local_ips:
                         kind = "UBNT"
-                        pkt = parse_packet(data)
-                        if pkt and not pkt.is_request:
-                            _tag_vlan(inv.ingest_ubnt(pkt, (sender, sport), "sniff")[0], vid, self.link.name)
-                seen["kinds"].add(kind)
+                        self._ubnt(frame, payload, sender, sport, vid, inv)
             elif etype == 0x86DD:
-                seen["kinds"].add("IPv6")
+                kind = "IPv6"
             elif etype in (0x88CC, ETH_CDP):  # LLDP / CDP: the switch on a trunk, the device on a direct wire
                 info = parse_lldp(payload) if etype == 0x88CC else parse_cdp(payload)
                 names = {**self.lldp.get("vlan_names", {}), **info.pop("vlan_names", {})}
                 self.lldp.update(info, vlan_names=names)
                 nb.lldp.update(info)
-                seen["kinds"].add("LLDP" if etype == 0x88CC else "CDP")
+                kind = "LLDP" if etype == 0x88CC else "CDP"
             elif etype == 0:
-                seen["kinds"].add("STP/LLC")
+                kind = "STP/LLC"
             else:
-                seen["kinds"].add(f"0x{etype:04x}")
+                kind = f"0x{etype:04x}"
         except (struct.error, ValueError, OSError):
             return
+        seen["kinds"].add(kind)
+        if kind not in nb.samples and kind != "UBNT" and len(nb.samples) < 6:  # what it was found from
+            nb.samples[kind] = PacketRecord(time.time(), kind, sender or src, "sniff", self.link.name, vid,
+                                            frame, frame)
         if sender in local_ips:
             nb.own = True
         if sender and _usable_ip(sender) and sender not in local_ips:
@@ -1855,6 +2193,26 @@ class Trunk:
             nb.first_ip_at = nb.first_ip_at or time.monotonic()
             if sniff_all or nb.vendor:
                 _tag_vlan(inv.attach(sender, src, "sniff"), vid, self.link.name)
+
+    def _ubnt(self, frame: bytes, ip: bytes, sender: str, sport: int, vid: int, inv: Inventory) -> None:
+        """A discovery packet heard on the wire (an announcement, or another tool's probe):
+        a capture sees it before the OS checks it, so its IP and UDP checksums are checked too."""
+        problems, data = check_ip_udp(ip, cut=len(frame) >= SNAPLEN)
+        if data is None:  # its length can't be trusted: decode what's there, but don't judge it
+            data = ip[(ip[0] & 0x0F) * 4 + 8:]
+        else:
+            problems += check_packet(data)
+        pkt = parse_packet(data)
+        if pkt is not None and pkt.is_request:
+            return
+        rec = PacketRecord(time.time(), "UBNT", f"{sender}:{sport}", "sniff", self.link.name, vid, data, frame,
+                           problems)
+        if pkt is None:
+            inv.keep_packet(None, rec)
+            return
+        dev = inv.ingest_checked(pkt, rec, (sender, sport), "sniff")[0]
+        if dev is not None:
+            _tag_vlan(dev, vid, self.link.name)
 
     def finish(self, inv: Inventory, sniff_all: bool = False) -> None:
         """Give devices their LLDP/CDP identity, and list recognised gear even when it never
@@ -1877,6 +2235,8 @@ class Trunk:
             if dev is None:
                 continue
             dev.via.add("sniff")
+            for rec in nb.samples.values():
+                dev.add_sample(rec)
             if dev.mac and nb.mac != dev.mac:
                 dev.other_macs.add(nb.mac)
             if nb.lldp and not dev.lldp:
@@ -2931,6 +3291,9 @@ def enrich(inv: Inventory, sc: Scanner, opts, log, alias_result=None) -> None:
             if inv.find(ip=ip) or is_ubnt_mac(arp.get(ip)) or UBNT_HINT.search(text):
                 d = inv.attach(ip, arp.get(ip), "mdns")
                 d.mdns = {k: (sorted(v) if isinstance(v, set) else v) for k, v in h.items() if v}
+                if ip in sc.mdns.raw:
+                    at, src, data = sc.mdns.raw[ip]
+                    d.add_sample(PacketRecord(at, "mDNS", src, "mdns", data=data))
 
     if sc.ssdp and sc.ssdp.responders:
         ips = list(sc.ssdp.responders)
@@ -2939,7 +3302,11 @@ def enrich(inv: Inventory, sc: Scanner, opts, log, alias_result=None) -> None:
         for ip, desc in descs.items():
             text = " ".join(str(v) for v in desc.values())
             if inv.find(ip=ip) or is_ubnt_mac(arp.get(ip)) or UBNT_HINT.search(text):
-                inv.attach(ip, arp.get(ip), "ssdp").ssdp = desc
+                d = inv.attach(ip, arp.get(ip), "ssdp")
+                d.ssdp = desc
+                if ip in sc.ssdp.raw:
+                    at, src, data = sc.ssdp.raw[ip]
+                    d.add_sample(PacketRecord(at, "SSDP", src, "ssdp", data=data))
 
     for ip, mac in arp.items():
         if vendor_of(mac) or (inv.find(ip=ip) and inv.find(ip=ip).via & {"ubnt", "mcast", "announce"}):
@@ -3006,6 +3373,107 @@ def _in_any(ip: str, nets) -> bool:
     except ValueError:
         return False
     return any(addr in n for n in nets)
+
+
+PROBLEM_NAMES = {
+    "short": "too short", "version": "garbled header", "cut-short": "cut short",
+    "trailing": "extra bytes at the end", "overrun": "a field running past the end", "stray": "stray bytes",
+    "json-32": "broken port JSON", "ip-checksum": "bad IP checksum", "ip-short": "IP packet cut short",
+    "udp-short": "UDP header cut short", "udp-length": "wrong UDP length", "udp-checksum": "bad UDP checksum",
+    "fragment": "fragmented",
+}
+VOLATILE_KEYS = {"uptime", "seq", "salt", "rnd_challenge", "challenge"}  # change on every reply
+
+
+def problem_name(code: str) -> str:
+    prefix, _, tlv = code.partition("-")
+    if prefix in ("size", "text", "twice") and len(tlv) == 2:
+        label = TLV.get(int(tlv, 16), ("", f"field 0x{tlv}"))[1]
+        return {"size": f"wrong-size {label}", "text": f"unreadable {label}", "twice": f"{label} twice"}[prefix]
+    return PROBLEM_NAMES.get(code, code)
+
+
+def reply_rounds(d: Device, rounds) -> tuple:
+    """(answered, sent): our rounds of probes that reached the device, from the first it
+    answered to the last, and how many of those it answered. (0, 0) when that can't be told."""
+    times = sorted(d.reply_times)
+    if not times or not rounds:
+        return 0, 0
+    sources = {r.src.rsplit(":", 1)[0] for r in list(d.packets) if r.via in ("ubnt", "mcast")}
+    answered = []
+    for i, (start, nets) in enumerate(rounds):
+        if not any(_in_any(ip, [net]) and (not d.seen_on or name in d.seen_on) for net, name in nets for ip in sources):
+            continue
+        end = rounds[i + 1][0] if i + 1 < len(rounds) else start + 2.0
+        j = bisect.bisect_left(times, start)
+        answered.append(j < len(times) and times[j] < end)
+    if True not in answered:
+        return 0, 0
+    first, last = answered.index(True), len(answered) - answered[::-1].index(True)
+    return sum(answered[first:last]), last - first
+
+
+def packet_findings(d: Device) -> dict:
+    """What a device's packets say about the path to it.
+    damaged: {(kind, code): packets}, damage that comes and goes (or too few packets to tell);
+    quirks: {(kind, code): packets}, the same oddity in every packet of a kind: how its firmware
+        writes them, not damage;
+    changes: [(n, kind, field, old, new, one_off)], fields that changed between replies of the
+        same shape; one_off when the next reply changed it back, which damage does and real
+        changes don't;
+    uptime: [(n, message)], uptime that didn't keep time with the clock."""
+    kinds = dict(d.kind_counts)
+    damaged, quirks = {}, {}
+    for (kind, code), n in list(d.problem_counts.items()):
+        if code == "fragment":
+            continue
+        (quirks if n == kinds.get(kind) and n >= 3 else damaged)[(kind, code)] = n
+    groups = {}  # replies of one shape: (kind, field types) -> [(record, decoded fields)]
+    for rec in list(d.packets):
+        if any(code in FRAMING for code, _ in rec.problems):
+            continue
+        fields, _ = _tlv_walk(rec.data)
+        pkt = parse_packet(rec.data)
+        if pkt:
+            groups.setdefault((rec.kind, tuple(sorted({t for _, t, _ in fields}))), []).append(
+                (rec, decode_fields(pkt)[0]))
+    changes, uptime = [], []
+    for (kind, _), recs in groups.items():
+        back = set()  # (index, key) of a change that undid a one-off
+        for i in range(1, len(recs)):
+            (r0, prev), (r1, cur) = recs[i - 1], recs[i]
+            for key in sorted((set(prev) | set(cur)) - VOLATILE_KEYS):
+                if prev.get(key) != cur.get(key) and (i, key) not in back:
+                    one_off = i + 1 < len(recs) and recs[i + 1][1].get(key) == prev.get(key)
+                    if one_off:
+                        back.add((i + 1, key))
+                    changes.append((r1.n, kind, TLV_LABELS.get(key, key), prev.get(key), cur.get(key), one_off))
+        ref, odd = None, False  # the last uptime that kept time; whether the one before was off
+        for rec, cur in recs:
+            nu = cur.get("uptime")
+            if not isinstance(nu, int):
+                continue
+            if ref is not None:
+                (r0, ou), dt = ref, rec.at - ref[0].at
+                if nu < ou and nu <= dt + 60:
+                    uptime.append((rec.n, f"{kind}: rebooted (uptime {fmt_uptime(ou)} -> {fmt_uptime(nu)})"))
+                elif abs((nu - ou) - dt) > 5 + dt * 0.02:
+                    if not odd:  # the next one is compared with the last good one, so a one-off shows once
+                        uptime.append((rec.n, f"{kind}: uptime moved {nu - ou:+d}s in {dt:.1f}s "
+                                              f"({fmt_uptime(ou)} -> {fmt_uptime(nu)})"))
+                        odd = True
+                        continue
+            ref, odd = (rec, nu), False
+    return {"damaged": damaged, "quirks": quirks, "changes": changes, "uptime": uptime}
+
+
+def damage_summary(d: Device, found: dict) -> list:
+    """packet_findings() as short phrases: damage, one-off changes, and uptime that jumped."""
+    bad = [f"{problem_name(code)} in {n} of {d.kind_counts[kind]} {kind}"
+           for (kind, code), n in sorted(found["damaged"].items())]
+    bad += [f"{field} changed for one packet and back (#{n})"
+            for n, _, field, _, _, one_off in found["changes"] if one_off]
+    return bad + [f"#{n} {msg.split(': ', 1)[1]}" for n, msg in found["uptime"] if "rebooted" not in msg]
 
 
 def diagnose(inv: Inventory, all_ifaces, scan_nets, opts, alias_used=(), skipped=(), probed_links=()) -> None:
@@ -3129,6 +3597,21 @@ def diagnose(inv: Inventory, all_ifaces, scan_nets, opts, alias_used=(), skipped
             issues.append(("warn", "NO-PORTS",
                            f"No management ports open ({', '.join(map(str, CHECK_PORTS))}): firewalled, "
                            "still booting, or not reachable at layer 3."))
+        if d.packets:
+            bad = damage_summary(d, packet_findings(d))
+            if bad:
+                issues.append(("warn", "DAMAGED",
+                               f"Discovery packets arrived damaged: {'; '.join(bad[:4])}"
+                               + (f" and {len(bad) - 4} more" if len(bad) > 4 else "")
+                               + ". On your own subnet, damage that comes and goes points to a cable or "
+                                 "connector, a failing port, or a speed/duplex mismatch. See its packets "
+                                 "(Packets tab, or -v --raw)."))
+        answered, sent = reply_rounds(d, inv.rounds)
+        if sent >= 5 and sent - answered >= 2 and (sent - answered) / sent >= 0.1:
+            issues.append(("warn", "LOSS",
+                           f"Answered {answered} of {sent} rounds of discovery probes while in view: "
+                           f"{sent - answered} went unanswered. On your own subnet that's packet loss: "
+                           "Wi-Fi interference, a bad cable or port, a busy link, or a busy device."))
         d.issues = issues
 
 
@@ -3228,7 +3711,7 @@ def web_url(d: Device) -> str:
     return ""
 
 
-def render_details(d: Device, raw: bool = False) -> str:
+def render_details(d: Device) -> str:
     title = "  ".join(x for x in (d.ip, d.mac or "", d.model) if x)
     out = [Style.bold(f"== {title} " + "=" * max(4, 74 - len(title)))]
 
@@ -3303,9 +3786,103 @@ def render_details(d: Device, raw: bool = False) -> str:
         out.append("  Diagnostics:")
         for level, tag, msg in d.issues:
             out.append(f"    {Style.level(f'[{tag}]', level)} {msg}")
-    if raw and d.last_packet:
-        out.append("  Last UBNT packet:")
-        out.append(hexdump(d.last_packet, "    "))
+    return "\n".join(out)
+
+
+def _clock(at: float) -> str:
+    return time.strftime("%H:%M:%S", time.localtime(at)) + f".{int(at % 1 * 1000):03d}"
+
+
+def _vlan_cell(vlan) -> str:
+    return "?" if vlan is None else "untagged" if vlan == 0 else str(vlan)
+
+
+def _short(value, width: int = 48) -> str:
+    return _trunc("(missing)" if value is None else repr(value) if isinstance(value, str) else str(value), width)
+
+
+def render_packets(d: Device, inv: Inventory | None = None, counters: dict | None = None) -> str:
+    """Every packet kept for a device and what the checks found, then the latest reply of
+    each kind and every damaged one, field by field with its hex dump."""
+    title = "  ".join(x for x in (d.ip, d.mac or "", d.model) if x)
+    out = [Style.bold(f"== Packets from {title} " + "=" * max(4, 62 - len(title)))]
+
+    def row(label, value):
+        out.append(f"  {label:<16} {value}")
+
+    packets = list(d.packets)
+    garbled = [r for ip in d.ips for r in (inv.garbled.get(ip, []) if inv else [])]
+    found = packet_findings(d)
+    if d.ubnt_packets:
+        kinds = ", ".join(f"{n} {k}" for k, n in sorted(dict(d.kind_counts).items()))
+        row("Received", f"{d.ubnt_packets} UBNT discovery packet(s): {kinds}"
+                        + (f"; the last {len(packets)} are listed" if len(packets) < d.ubnt_packets else ""))
+        row("Damage", "; ".join(damage_summary(d, found)) or "none found")
+        if found["quirks"]:
+            row("Every time", "; ".join(f"{problem_name(c)} ({k})" for k, c in sorted(found["quirks"]))
+                + ": how its firmware writes them, not damage")
+        answered, sent = reply_rounds(d, inv.rounds) if inv else (0, 0)
+        if sent:
+            row("Answered", f"{answered} of {sent} rounds of our probes while in view"
+                            + (f" ({sent - answered} unanswered)" if answered < sent else ""))
+    if garbled:
+        row("Unreadable", f"{len(garbled)} packet(s) on UDP {UBNT_PORT} from its address, too damaged to read")
+    if counters:
+        names = sorted({r.iface for r in packets + d.samples + garbled if r.iface} | d.seen_on
+                       | ({"all adapters"} & set(counters.get("interfaces", {}))))
+        for name in names:
+            if name in counters.get("interfaces", {}):
+                up = counters["interfaces"][name]
+                row(name, f"during the scan: {counter_text(up)}" if up else "no errors or drops during the scan")
+        if counters.get("system_read"):
+            row("This computer", f"during the scan: {counter_text(counters['system'])}" if counters["system"]
+                else "no IP or UDP errors during the scan")
+    if d.ubnt_packets:
+        out.append("  Checked: lengths, field sizes, text, repeated fields, changes between replies"
+                   + ("; IP/UDP checksums of packets captured off the wire" if any(r.frame for r in packets) else ""))
+
+    if packets:
+        out.append("")
+        out.append(f"  {'#':>5}  {'time':<12}  {'from':<21} {'via':<8} {'in on':<9} {'VLAN':<8}  {'kind':<9} "
+                   f"{'bytes':>5}  check")
+        for r in packets:
+            check = "; ".join(problem_name(c) for c, _ in r.problems) or "ok"
+            out.append(f"  {r.n:>5}  {_clock(r.at)}  {r.src:<21} {r.via:<8} {r.iface or '?':<9} "
+                       f"{_vlan_cell(r.vlan):<8}  {r.kind:<9} {len(r.data):>5}  {check}")
+    if found["changes"] or found["uptime"]:
+        out.append("\n  Between replies of the same kind:")
+        for n, kind, label, old, new, one_off in found["changes"]:
+            out.append(f"    #{n} {kind}: {label} {_short(old)} -> {_short(new)}"
+                       + ("  (for this packet only: damaged on the way?)" if one_off else ""))
+        out += [f"    #{n} {msg}" for n, msg in found["uptime"]]
+
+    def where(r):
+        return f"{_clock(r.at)} from {r.src}" + (f" on {r.iface}" if r.iface else "") + (
+            f", VLAN {_vlan_cell(r.vlan)}" if r.vlan is not None else "")
+
+    shown = set()
+    for r in [r for r in packets if any(c != "fragment" for c, _ in r.problems)][:6]:
+        out.append(f"\n  Damaged packet #{r.n}, {r.kind}, {len(r.data)} bytes, {where(r)}  (@ = offset in the hex dump)")
+        out += packet_lines(r.data, r.problems)
+        if r.frame and any(c.startswith(("ip-", "udp-")) for c, _ in r.problems):
+            out += ["   The whole frame as captured:", hexdump(r.frame)]
+        shown.add(id(r))
+    latest = {r.kind: r for r in packets}
+    for kind, r in sorted(latest.items()):
+        if id(r) not in shown:
+            out.append(f"\n  Latest {kind} reply, #{r.n}, {len(r.data)} bytes, {where(r)}  (@ = offset in the hex dump)")
+            out += packet_lines(r.data, r.problems)
+    for r in garbled[-5:]:
+        out.append(f"\n  Unreadable packet, {len(r.data)} bytes, {where(r)}")
+        out += packet_lines(r.data, r.problems)
+    for r in d.samples:
+        what = "the whole Ethernet frame" if r.frame else f"{r.proto} payload"
+        out.append(f"\n  {r.proto} packet it was found from, {where(r)}: {len(r.data)} bytes ({what})")
+        out.append(hexdump(r.data))
+    if not d.ubnt_packets and not d.samples and not garbled:
+        how = "/".join(v for v in VIA_ORDER if v in d.via) or "nothing"
+        out.append(f"  No packets to show: it was found through {how}"
+                   + (", and the ARP table keeps no packets" if d.via <= {"arp", "wifi"} else "") + ".")
     return "\n".join(out)
 
 
@@ -3332,7 +3909,19 @@ def device_to_dict(d: Device) -> dict:
         "vlan_tagged": bool(d.vlan), "vlan_parent": d.vlan_parent or None, "answered_on": sorted(d.seen_on), "lldp": d.lldp or None, "wifi_ap": d.wifi or None,
         "issues": [{"level": lv, "tag": t, "message": m} for lv, t, m in d.issues],
         "last_packet_hex": d.last_packet.hex() if d.last_packet else None,
+        "packets_received": d.ubnt_packets,
+        "packets": [packet_to_dict(r) for r in list(d.packets)[-10:]],
+        "found_from": [packet_to_dict(r) for r in d.samples],
     }
+
+
+def packet_to_dict(r: PacketRecord) -> dict:
+    out = {"time": time.strftime("%Y-%m-%dT%H:%M:%S", time.localtime(r.at)) + f".{int(r.at % 1 * 1000):03d}",
+           "protocol": r.proto, "kind": r.kind, "from": r.src, "via": r.via, "interface": r.iface or None,
+           "vlan": r.vlan, "bytes": len(r.data), "problems": [msg for _, msg in r.problems], "hex": r.data.hex()}
+    if r.frame and r.frame != r.data:
+        out["frame_hex"] = r.frame.hex()
+    return out
 
 
 def render_notes(inv: Inventory, sc: Scanner, opts) -> list:
@@ -3367,7 +3956,8 @@ examples:
   %(prog)s --deep              add TCP port checks and the UniFi OS console API
   %(prog)s --listen -t 60      send nothing; hear adoption announcements and other controllers
   %(prog)s --watch             live monitor: new devices, reboots, IP/state changes
-  %(prog)s --raw               decode and hex-dump every UBNT packet
+  %(prog)s --raw               decode and hex-dump every UBNT packet as it arrives
+  %(prog)s -v --raw            ... and each device's packets, checked for damage, at the end
   %(prog)s --json > scan.json  machine-readable output
   %(prog)s --interfaces        show the active interfaces it will use
   %(prog)s -a                  also probe the networks in networks.txt through temporary
@@ -3427,7 +4017,8 @@ def parse_args(argv=None):
     o.add_argument("--json", action="store_true", help="JSON output")
     o.add_argument("--export", action="append", default=[], metavar="FILE",
                    help="also save a report: .html (opens on any phone), .csv or .json (repeatable)")
-    o.add_argument("--raw", action="store_true", help="decode and hex-dump UBNT packets as they arrive")
+    o.add_argument("--raw", action="store_true", help="decode and hex-dump UBNT packets as they arrive; with -v, each device's packets "
+                        "checked for damage")
     o.add_argument("-w", "--watch", action="store_true", help="keep running and report changes")
     o.add_argument("--interval", type=float, default=5.0, metavar="SEC",
                    help="probe interval in --watch mode (default 5)")
@@ -3612,6 +4203,7 @@ class ScanResult:
     mgr: "AliasManager | None"
     elapsed: float
     interrupted: bool = False
+    counters: dict = field(default_factory=dict)  # error counters that went up during the scan
 
     def wire_title(self) -> str:
         if self.opts.direct:
@@ -3636,6 +4228,8 @@ def result_to_dict(res: ScanResult) -> dict:
         "direct": [direct_to_dict(tr, res.inv) for tr in res.trunks] if res.opts.direct else [],
         "devices": [device_to_dict(d) for d in res.devices],
         "discovery_requesters": {ip: sorted(p) for ip, p in res.inv.requesters.items()},
+        "unreadable_packets": {ip: [packet_to_dict(r) for r in recs] for ip, recs in res.inv.garbled.items()},
+        "error_counters": res.counters or None,
         "notes": [{"level": lv, "message": m} for lv, m in res.notes],
     }
 
@@ -3857,6 +4451,8 @@ def run_scan(opts, log, progress=None, on_inventory=None):
         if progress:
             progress(None, None)
 
+    watched = sorted({l.name for l in links} | {l.name for l in ports} | {i.name for i in ifaces})
+    counters_before = interface_counters(watched)
     t0 = time.monotonic()
     alias_result, trunks, interrupted = None, [], False
     try:
@@ -3963,6 +4559,7 @@ def run_scan(opts, log, progress=None, on_inventory=None):
     sc.finish_notes()
     sc.close()
     enrich(inv, sc, opts, log, alias_result)
+    counters = counter_changes(counters_before, interface_counters(watched))
     natives = {tr.link.name: tr.native() for tr in trunks if tr.native()}
     assign_vlans(inv, all_ifaces, sc.vlan_map, natives)
     place_wifi_ap(inv, trunks)
@@ -3970,7 +4567,11 @@ def run_scan(opts, log, progress=None, on_inventory=None):
     diagnose(inv, all_ifaces, scan_nets, opts, mgr.used if mgr else (), skipped, {i.name for i in ifaces})
     elapsed = time.monotonic() - t0
     devs = sorted_devices(inv)
-    notes = render_notes(inv, sc, opts) + extra_notes
+    notes = render_notes(inv, sc, opts) + extra_notes + counter_notes(counters)
+    unread = {ip: recs for ip, recs in inv.garbled.items() if not inv.find(ip=ip)}
+    if unread:
+        notes.append(("warn", f"Unreadable packets arrived on UDP {opts.port} from {', '.join(sorted(unread))}: "
+                              "damaged, or something other than discovery uses the port. -v --raw shows them."))
     if macs_hidden():
         if ARP_SUDO and _parse_arp(_run(ARP_SUDO + ["arp", "-an"])):
             notes.append(("note", "macOS hides MAC addresses and the ARP table from Python; this run read the "
@@ -3985,7 +4586,8 @@ def run_scan(opts, log, progress=None, on_inventory=None):
                        "asking for), so it wasn't probed. If that device's uplink is down, nobody is using "
                        "the address it asks for: you can take it yourself to reach it.") for net in skipped]
 
-    return ScanResult(opts, devs, notes, trunks, ifaces, links, base_targets, inv, mgr, elapsed, interrupted)
+    return ScanResult(opts, devs, notes, trunks, ifaces, links, base_targets, inv, mgr, elapsed, interrupted,
+                      counters)
 
 
 def main(argv=None) -> int:
@@ -4029,7 +4631,9 @@ def main(argv=None) -> int:
     print(f"\n{len(devs)} device(s), {heard} heard via UBNT discovery, {res.elapsed:.1f}s")
     if opts.verbose:
         for d in devs:
-            print("\n" + render_details(d, opts.raw))
+            print("\n" + render_details(d))
+            if opts.raw:
+                print("\n" + render_packets(d, inv, res.counters))
     elif any(d.issues for d in devs):
         print("\n" + Style.bold("Diagnostics") + "\n" + render_issues(devs))
     if trunks:
