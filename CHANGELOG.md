@@ -1,5 +1,20 @@
 # Changelog
 
+## 1.4.0
+
+- The full name is now Open Discovery Tool for Ubiquiti Devices, OpenDisco for short. It's an
+  independent project, not affiliated with Ubiquiti. Your networks file, hidden devices and SSH
+  keys come along from the earlier version, and the Windows installer replaces the earlier
+  install.
+- Windows does what the Mac and Linux versions do: Sniff the wire, Trunk VLANs and Direct
+  capture through Npcap (the installer offers to download it from npcap.com), Probe my
+  networks through temporary addresses (as administrator), and discovery broadcasts out of
+  every adapter. Windows can't tag VLANs itself, so it finds them by listening and probes
+  untagged only.
+- Fixed: the Windows app didn't open in 1.3.0 to 1.3.2.
+- Android: the mode description has its own line, so the top row fits a phone.
+- Linux: the Listen box's − and + buttons fit inside it.
+
 ## 1.3.2
 
 - Fixed: a UCG Fiber (and any gear that does the same) showed port 7080 in the HTTPS column

@@ -1,4 +1,4 @@
-# Briefcase packaging for OpenDisco: a native app for macOS, Windows, Linux, iOS and Android.
+# Briefcase packaging for OpenDisco (Open Discovery Tool for Ubiquiti Devices): a native app for macOS, Windows, Linux, iOS and Android.
 #   briefcase dev                      run the GUI from source
 #   .venv/bin/python packaging/macos/build_dmg.py        build the .dmg (on a Mac; builds outside iCloud)
 #   .venv/bin/python packaging/windows/build_installer.py build the Windows setup.exe (on a Mac or PC)
@@ -9,7 +9,7 @@
 [tool.briefcase]
 project_name = "opendisco"
 bundle = "com.michaelfroehlke"
-version = "1.3.2"
+version = "1.4.0"
 license = "Apache-2.0"
 license-files = ["LICENSE"]
 author = "Michael Froehlke"
@@ -17,11 +17,12 @@ author_email = "347150498+Nekobyte-Coding@users.noreply.github.com"
 
 [tool.briefcase.app.opendisco]
 formal_name = "OpenDisco"
-description = "Find and diagnose Ubiquiti and other WISP gear"
+description = "Open Discovery Tool for Ubiquiti Devices: find and diagnose Ubiquiti and other WISP gear"
 long_description = """Finds Ubiquiti gear with the discovery methods of Ubiquiti's old Java tool, WiFiman
 and the UniFi app, and identifies Cisco, Meraki, Mimosa, Siklu, Ceragon, IgniteNet, Baicells
-and Tarana gear. On a Mac or Linux PC it can also listen on the wire, probe other subnets
-through temporary addresses, tag VLANs on a trunk, and read a radio on a direct cable.
+and Tarana gear. On a Mac, Windows or Linux PC it can also listen on the wire, probe other
+subnets through temporary addresses, find the VLANs on a trunk, and read a radio on a direct
+cable. An independent project, not affiliated with Ubiquiti Inc.
 """
 icon = "src/opendisco/resources/icon"
 sources = ["src/opendisco"]

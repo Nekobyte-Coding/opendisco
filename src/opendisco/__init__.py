@@ -1,2 +1,4 @@
-"""OpenDisco: find and diagnose Ubiquiti (and other WISP) gear. See README.md."""
-__version__ = "1.3.2"
+"""OpenDisco, the Open Discovery Tool for Ubiquiti Devices: find and diagnose Ubiquiti (and other
+WISP) gear. An independent project, not affiliated with Ubiquiti Inc. See README.md."""
+__version__ = "1.4.0"
+FULL_NAME = "Open Discovery Tool for Ubiquiti Devices"

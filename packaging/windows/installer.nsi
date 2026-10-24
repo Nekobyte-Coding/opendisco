@@ -1,11 +1,12 @@
-; OpenDisco installer for Windows. Built by build_installer.py, which passes
-; VERSION, VERSION_NUMERIC, STAGE (the files to install), OUTFILE and ICON.
+; OpenDisco (Open Discovery Tool for Ubiquiti Devices) installer for Windows. Built by
+; build_installer.py, which passes VERSION, VERSION_NUMERIC, STAGE (the files to install), OUTFILE
+; and ICON.
 ;
 ; Installs per user into %LOCALAPPDATA%\Programs, so it needs no administrator rights.
 
 Unicode true
 !define APPNAME "OpenDisco"
-!define OLDNAME "OpenDisco"  ; its name until 1.3.1
+!define FULLNAME "Open Discovery Tool for Ubiquiti Devices"
 !define PUBLISHER "Michael Froehlke"
 !define UNINSTKEY "Software\Microsoft\Windows\CurrentVersion\Uninstall\${APPNAME}"
 !define LAUNCHER "$INSTDIR\python\pythonw.exe"
@@ -33,7 +34,7 @@ VIAddVersionKey "LegalCopyright" "Copyright (c) 2026 ${PUBLISHER}"
 !include "Sections.nsh"
 !define MUI_ICON "${ICON}"
 !define MUI_UNICON "${ICON}"
-!define MUI_WELCOMEPAGE_TEXT "This installs ${APPNAME} ${VERSION}, which finds and diagnoses Ubiquiti and other WISP gear on your network.$\r$\n$\r$\nNo administrator rights are needed. The first time it scans, Windows Firewall may ask about Python: allow it on private networks so devices' replies get through."
+!define MUI_WELCOMEPAGE_TEXT "This installs ${APPNAME} ${VERSION}, the ${FULLNAME}, which finds and diagnoses Ubiquiti and other WISP gear on your network.$\r$\n$\r$\nNo administrator rights are needed. The first time it scans, Windows Firewall may ask about Python: allow it on private networks so devices' replies get through."
 !define MUI_FINISHPAGE_RUN "${LAUNCHER}"
 !define MUI_FINISHPAGE_RUN_PARAMETERS "${LAUNCHARGS}"
 !define MUI_FINISHPAGE_RUN_TEXT "Open ${APPNAME}"
@@ -47,18 +48,23 @@ VIAddVersionKey "LegalCopyright" "Copyright (c) 2026 ${PUBLISHER}"
 !insertmacro MUI_UNPAGE_INSTFILES
 !insertmacro MUI_LANGUAGE "English"
 
-Section "${APPNAME}" SecApp
-  SectionIn RO
-  ; Until 1.3.1 the app was called OpenDisco: remove that install so there's only one. Its
-  ; uninstaller leaves your data, which the app copies to its new folder the first time it runs.
-  ReadRegStr $0 HKCU "Software\Microsoft\Windows\CurrentVersion\Uninstall\${OLDNAME}" "UninstallString"
-  ReadRegStr $1 HKCU "Software\${OLDNAME}" "InstallDir"
+; Versions before 1.4.0 installed under the app's earlier names: remove such an install so there's
+; only one. Its uninstaller leaves your data, which the app copies over the first time it runs.
+!macro RemoveEarlierInstall NAME
+  ReadRegStr $0 HKCU "Software\Microsoft\Windows\CurrentVersion\Uninstall\${NAME}" "UninstallString"
+  ReadRegStr $1 HKCU "Software\${NAME}" "InstallDir"
   ${If} $0 != ""
   ${AndIf} $1 != ""
     ExecWait '$0 /S _?=$1'
     Delete "$1\Uninstall.exe"
     RMDir "$1"
   ${EndIf}
+!macroend
+
+Section "${APPNAME}" SecApp
+  SectionIn RO
+  !insertmacro RemoveEarlierInstall "UBNT Discovery Reloaded"
+  !insertmacro RemoveEarlierInstall "UBNT Discover"
   ; An upgrade replaces the bundled Python and app, so no stale files are left behind.
   RMDir /r "$INSTDIR\python"
   RMDir /r "$INSTDIR\app"
@@ -72,7 +78,7 @@ Section "${APPNAME}" SecApp
   CreateShortcut "$DESKTOP\${APPNAME}.lnk" "${LAUNCHER}" "${LAUNCHARGS}" "${APPICON}" 0
 
   WriteRegStr HKCU "Software\${APPNAME}" "InstallDir" "$INSTDIR"
-  WriteRegStr HKCU "${UNINSTKEY}" "DisplayName" "${APPNAME}"
+  WriteRegStr HKCU "${UNINSTKEY}" "DisplayName" "${APPNAME} (${FULLNAME})"
   WriteRegStr HKCU "${UNINSTKEY}" "DisplayVersion" "${VERSION}"
   WriteRegStr HKCU "${UNINSTKEY}" "Publisher" "${PUBLISHER}"
   WriteRegStr HKCU "${UNINSTKEY}" "DisplayIcon" "${APPICON}"

@@ -1,8 +1,13 @@
-# OpenDisco
+# OpenDisco: Open Discovery Tool for Ubiquiti Devices
 
 One tool for finding and diagnosing Ubiquiti devices (UniFi, airMAX, EdgeMAX, UISP, AmpliFi).
 It combines the discovery methods of three Ubiquiti tools, merges what they find by MAC
 address, and checks each device for common problems.
+
+OpenDisco is an independent project. It isn't made, endorsed or supported by Ubiquiti Inc.
+Ubiquiti, UniFi, airMAX, EdgeMAX, UISP, AmpliFi and WiFiman are trademarks of Ubiquiti Inc.,
+and other product names belong to their owners; they're used here only to say what the tool
+works with.
 
 | Borrowed from | Method | What it finds |
 |---|---|---|
@@ -17,8 +22,8 @@ It comes two ways:
 
 ## The app
 
-- **Mac:** open `dist/OpenDisco-1.3.2.dmg` and drag the app to Applications.
-- **Windows:** run `dist/OpenDisco-1.3.2-setup.exe`. It installs for the current user
+- **Mac:** open `dist/OpenDisco-1.4.0.dmg` and drag the app to Applications.
+- **Windows:** run `dist/OpenDisco-1.4.0-setup.exe`. It installs for the current user
   (no admin rights), with Start menu and desktop shortcuts and an uninstaller in Apps.
   - **SmartScreen:** the installer isn't code-signed, so the first time Windows shows
     "Windows protected your PC": click **More info**, then **Run anyway**.
@@ -38,6 +43,11 @@ It comes two ways:
   The `.deb` and `.rpm` install the app's own copy of Toga and PyGObject, built for that
   release, and pull in GTK, WebKitGTK, tcpdump and the ssh client. Run it from your app menu,
   or `opendisco` in a terminal (with options, that's the command-line tool).
+
+**Upgrading from a version before 1.4.0,** which had another name: your networks file, hidden
+devices and SSH keys come along the first time 1.4.0 opens. The Windows installer removes the
+earlier install itself. On a Mac, delete the earlier app from Applications; on Linux, remove
+its package; on Android, 1.4.0 installs as a new app next to it, so uninstall the old one.
 
 **The window:**
 - Pick a mode and a port, then press Start.
@@ -189,10 +199,11 @@ python3 -m venv .venv && .venv/bin/pip install briefcase toga
   run emulated and Rosetta crashes Ubuntu's Python. Emulated compilers occasionally crash: if
   a build fails with "internal compiler error", run it again. The portable `.tar.gz` needs no
   Docker (`--only tar.gz`).
-- **Android (.apk):** `.venv/bin/briefcase build android` (works on a Mac). The first run
-  downloads Java and Google's Android SDK and asks you to accept Google's SDK license. The
-  APK lands in `build/` and can be sideloaded; `briefcase package android` makes a Play
-  Store bundle.
+- **Android (.apk):** `.venv/bin/python packaging/android/build_apk.py` (works on a Mac). The
+  first run downloads Java and Google's Android SDK and asks you to accept Google's SDK
+  license. It puts `dist/OpenDisco-<version>-android.apk` there, signed with Android's debug
+  key: fine to sideload (allow "Install unknown apps"), not for the Play Store
+  (`briefcase package android` makes a Play Store bundle).
 - **iPhone:** needs a Mac with Xcode installed. Run `.venv/bin/briefcase run iOS` for the
   simulator, or `briefcase open iOS` to sign and install it on a phone from Xcode. A free
   Apple ID can sideload to your own phone for 7 days at a time. For broadcast discovery,
@@ -313,7 +324,8 @@ Or give networks on the command line: `--alias 10.0.0.0/24` (repeatable).
 - `--hold` re-adds only the aliases that reached gear, choosing a different address if a
   device turned out to use the original. It removes them when you press Ctrl+C.
 
-macOS and Linux only. Windows won't add a second address to a DHCP interface.
+On Windows this needs administrator rights and Windows 10 2004 or later (see
+[What each platform can do](#the-app)).
 
 ## Trunk ports and VLANs (`--vlans`, `--vlan`)
 

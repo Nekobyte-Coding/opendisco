@@ -18,7 +18,7 @@ import toga
 from toga.style import Pack
 from toga.style.pack import COLUMN, ROW
 
-from opendisco import __version__, core
+from opendisco import FULL_NAME, __version__, core
 
 # (name, description, command-line flags, needs) where needs is a capability from core.capabilities()
 MODES = [
@@ -39,6 +39,10 @@ DEVICE_ACTIONS = [("web", "Open Web UI"), ("ssh", "Open SSH…"), ("ping", "Ping
                   ("copy_ip", "Copy IP address"), ("copy_mac", "Copy MAC address"), None,
                   ("forget", "Forget SSH key"), ("hide", "Hide device")]
 NO_SESSION = "Right-click a device to get started: Open SSH or Ping."
+# The data folder's name before 1.4.0, which renamed the app: folder name now -> earlier names.
+LEGACY_FOLDERS = {"com.michaelfroehlke.opendisco": ("com.michaelfroehlke.ubnt-discover",),
+                  "OpenDisco": ("UBNT Discovery Reloaded", "UBNT Discover"),
+                  "opendisco": ("ubnt-discover", "ubnt_discover")}
 
 _MENU_TARGET = None
 
@@ -163,7 +167,9 @@ class OpenDiscoApp(toga.App):
         else:
             body = toga.SplitContainer(content=[self.table, self.tabs], direction=toga.SplitContainer.HORIZONTAL,
                                        style=Pack(flex=1))
-        self.main_window = toga.MainWindow(title=f"{self.formal_name} {__version__}", size=(1250, 780))
+        # Phones' title bars have room for the short name only.
+        title = f"{self.formal_name if mobile else FULL_NAME} {__version__}"
+        self.main_window = toga.MainWindow(title=title, size=(1250, 780))
         self.main_window.content = toga.Box(style=Pack(direction=COLUMN, margin=10, gap=8), children=[
             toga.Box(style=row, children=controls),
             *([self.mode_help] if mobile else []),
@@ -203,13 +209,19 @@ class OpenDiscoApp(toga.App):
             pass
 
     def _move_old_data(self):
-        """Until 1.3.1 the app was "OpenDisco", and Windows names the app's data folder after
-        it: bring the networks file, hidden devices and SSH keys over once."""
+        """Versions before 1.4.0 kept the networks file, hidden devices and SSH keys in a folder
+        named after the app's earlier names (the app ID on macOS, its name on Windows and Linux):
+        bring them over once."""
         new = Path(self.paths.data)
-        old = Path(*(part.replace(self.formal_name, "OpenDisco") for part in new.parts))
         try:
-            if old != new and old.is_dir() and not (new.is_dir() and any(new.iterdir())):
-                shutil.copytree(old, new, dirs_exist_ok=True)
+            if new.is_dir() and any(new.iterdir()):
+                return
+            for n, part in enumerate(new.parts):
+                for old_part in LEGACY_FOLDERS.get(part, ()):
+                    old = Path(*new.parts[:n], old_part, *new.parts[n + 1:])
+                    if old.is_dir():
+                        shutil.copytree(old, new, dirs_exist_ok=True)
+                        return
         except OSError:
             pass
 
