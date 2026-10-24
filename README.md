@@ -4,9 +4,9 @@ One tool for finding and diagnosing Ubiquiti devices (UniFi, airMAX, EdgeMAX, UI
 and identifying other WISP gear. It combines the discovery methods of three Ubiquiti tools,
 merges what they find by MAC address, and checks each device for common problems.
 
-![OpenDisco 1.4.0 on Windows 11, listing eight sample radios](docs/images/windows-main.png)
+![OpenDisco 1.4.1 on Windows 11, listing eight sample radios](docs/images/windows-main.png)
 
-*OpenDisco 1.4.0 on Windows 11. The eight radios are sample data with made-up names and
+*OpenDisco 1.4.1 on Windows 11. The eight radios are sample data with made-up names and
 addresses.*
 
 OpenDisco is an independent project. It isn't made, endorsed or supported by Ubiquiti Inc.
@@ -32,7 +32,8 @@ Installers are on the [Releases](https://github.com/Nekobyte-Coding/opendisco/re
 
 | Version | Released for | Builds added later | Known issues (fixed in) |
 |---|---|---|---|
-| 1.4.0 | macOS, Windows, Linux, Android | | |
+| 1.4.1 | macOS, Windows, Linux, Android | | |
+| 1.4.0 | macOS, Windows, Linux, Android | | Windows: Keep addresses fails, and a Port whose adapter name has a space (Ethernet 2) isn't the one scanned. Android: Export does nothing (1.4.1) |
 | 1.3.2 | macOS, Windows, Linux | | Windows: the app doesn't open (1.4.0) |
 | 1.3.1 | macOS, Windows | Linux, without the right-click menu | Windows: the app doesn't open (1.4.0). A UCG Fiber's port 7080 is shown as its HTTPS port (1.3.2) |
 | 1.3.0 | macOS, Windows | Linux, without the right-click menu | Same as 1.3.1 |
@@ -56,9 +57,9 @@ Installers are on the [Releases](https://github.com/Nekobyte-Coding/opendisco/re
 
 ## The app
 
-- **Mac:** open `OpenDisco-1.4.0-macos-universal.dmg` (Apple silicon and Intel Macs) and drag
+- **Mac:** open `OpenDisco-1.4.1-macos-universal.dmg` (Apple silicon and Intel Macs) and drag
   the app to Applications.
-- **Windows:** run `OpenDisco-1.4.0-windows-x64-setup.exe` (64-bit; Windows on ARM runs it
+- **Windows:** run `OpenDisco-1.4.1-windows-x64-setup.exe` (64-bit; Windows on ARM runs it
   too). It installs for the current user without administrator rights, with Start menu and
   desktop shortcuts and an uninstaller in Apps.
   - **SmartScreen:** the installer isn't code-signed, so the first time Windows shows
@@ -70,24 +71,30 @@ Installers are on the [Releases](https://github.com/Nekobyte-Coding/opendisco/re
     (`%LOCALAPPDATA%\Programs\OpenDisco`), for example `opendisco.cmd --quick`.
 - **Linux:**
   - **Ubuntu 24.04 LTS, Linux Mint 22, Pop!_OS 24.04:**
-    `sudo apt install ./OpenDisco-1.4.0-ubuntu-24.04-amd64.deb`
-  - **Fedora 44:** `sudo dnf install ./OpenDisco-1.4.0-fedora-44-x86_64.rpm`
+    `sudo apt install ./OpenDisco-1.4.1-ubuntu-24.04-amd64.deb`
+  - **Fedora 44:** `sudo dnf install ./OpenDisco-1.4.1-fedora-44-x86_64.rpm`
   - **Any other distribution** (Debian 13, Arch, newer Ubuntu or Fedora...): the portable
-    `OpenDisco-1.4.0-linux.tar.gz`. Extract it and run `./opendisco`; its `README-LINUX.md`
+    `OpenDisco-1.4.1-linux.tar.gz`. Extract it and run `./opendisco`; its `README-LINUX.md`
     lists the packages to install first.
 
   The `.deb` and `.rpm` install the app's own copy of Toga and PyGObject, built for that
-  release, and pull in GTK, WebKitGTK, tcpdump and the ssh client. The app is in the
+  release, and pull in GTK, WebKitGTK, tcpdump, ip, iw and the ssh client. The app is in the
   desktop's app menu, and `opendisco` in a terminal runs it (with options, it's the
   command-line tool).
-- **Android:** `OpenDisco-1.4.0-android.apk`, signed with Android's debug key: sideload it
-  with "Install unknown apps" allowed. Phones can run Quick and Full scans only.
+- **Android:** `OpenDisco-1.4.1-android.apk`: sideload it with "Install unknown apps"
+  allowed. Phones can run Quick and Full scans only. The list shows each device's IP,
+  model and name; tapping one shows the rest in Details. From 1.4.1 the app
+  is signed with OpenDisco's own release key, so later versions install over it. 1.4.0 was
+  signed with Android's debug key, which Android won't replace: uninstall 1.4.0 first (its
+  hidden devices go with it).
 
-**Upgrading from a version before 1.4.0:** saved data (the networks file, hidden devices and
-SSH host keys) is retained with the new install and picked up the first time 1.4.0 opens.
-The Windows installer removes the earlier install. Earlier versions used a different app ID,
-so on a Mac the earlier app stays in Applications until deleted, on Linux the earlier
-package stays until removed, and on Android 1.4.0 installs as a separate app.
+**Upgrading:** saved data (the networks file, hidden devices and SSH host keys) is retained
+with the new install and picked up the first time the new version opens. The Windows
+installer removes the earlier install; from 1.4.1 the Windows app keeps its data in
+`%LOCALAPPDATA%\Michael Froehlke\OpenDisco` (earlier, `%LOCALAPPDATA%\Unknown\OpenDisco`).
+Versions before 1.4.0 used a different app ID, so on a Mac such an app stays in
+Applications until deleted, on Linux its package stays until removed, and on Android the
+new version installs as a separate app.
 
 **The window:**
 - Pick a mode and a port, then press Start.
@@ -102,7 +109,8 @@ package stays until removed, and on Android 1.4.0 installs as a separate app.
 - The other tabs show what was heard on the wire, notes, the log, and the networks file,
   which can be edited in the app.
 - **Hidden devices…** lists hidden devices and brings them back.
-- **Export…** saves an HTML report (opens on any phone), CSV or JSON.
+- **Export…** saves an HTML report (opens on any phone), CSV or JSON. On Android it saves
+  the HTML report to the Downloads folder.
 - **Keep addresses** holds the temporary addresses that reached gear until they're released,
   so the gear's web UI can be opened.
 
@@ -160,7 +168,7 @@ tag VLANs, so the app only offers the modes the platform supports:
   free license covers 5 computers (virtual machines count); more need Npcap OEM from the Nmap
   Project. Leaving "Restrict Npcap driver's access to Administrators only" unticked lets
   sniffing work without administrator rights.
-- **Temporary addresses** ("Probe my networks", Keep addresses, Trunk VLANs, Direct) change the
+- **Temporary addresses** ("Probe listed networks", Keep addresses, Trunk VLANs, Direct) change the
   network adapter's settings, which Windows only lets administrators do. The app offers to
   restart as administrator (one UAC prompt, which Windows Hello can approve). On the command
   line, use an Administrator terminal. Addresses are added with `netsh`, alongside DHCP's
@@ -702,9 +710,13 @@ python3 -m venv .venv && .venv/bin/pip install briefcase toga
   again). The portable `.tar.gz` needs no Docker (`--only tar.gz`).
 - **Android (.apk):** `.venv/bin/python packaging/android/build_apk.py` (works on a Mac). The
   first run downloads Java and Google's Android SDK and asks for Google's SDK license to be
-  accepted. It puts `dist/OpenDisco-<version>-android.apk` there, signed with Android's debug
-  key: fine to sideload, not for the Play Store (`briefcase package android` makes a Play
-  Store bundle).
+  accepted. It puts `dist/OpenDisco-<version>-android.apk` there, signed with the release
+  key (`zipalign` and `apksigner` from that SDK). The key and its password are kept outside
+  the project, at `~/Library/Application Support/OpenDisco Signing/opendisco-release.jks`
+  and in the login keychain as "OpenDisco Android signing" (or `$OPENDISCO_KEYSTORE` and
+  `$OPENDISCO_KEYSTORE_PASSWORD`). Android only installs an update signed with the same
+  key, so both need a backup. `--create-key` made the key, once. `briefcase package
+  android` makes a Play Store bundle.
 - **iPhone:** needs a Mac with Xcode installed. `.venv/bin/briefcase run iOS` runs it in the
   simulator, and `briefcase open iOS` opens the project in Xcode to sign and install it on a
   phone. A free Apple ID can sideload to a personal phone for 7 days at a time. Broadcast

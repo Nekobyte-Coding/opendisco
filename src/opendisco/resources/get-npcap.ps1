@@ -1,7 +1,7 @@
 # Install Npcap, the packet-capture driver OpenDisco's Sniff, Trunk VLANs and Direct
 # modes need on Windows. Npcap's license doesn't allow bundling it, so this downloads the current
-# official installer from npcap.com, checks that it's signed by the Nmap Project, and starts it:
-# you click through it (and Windows asks for permission). Npcap's free license covers 5 computers.
+# official installer from npcap.com, checks that it's signed by the Nmap Project, and starts it
+# (Windows asks for permission first). Npcap's free license covers 5 computers.
 $ErrorActionPreference = 'Stop'
 [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
 $page = Invoke-WebRequest -UseBasicParsing -Uri 'https://npcap.com/'

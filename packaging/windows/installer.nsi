@@ -34,7 +34,7 @@ VIAddVersionKey "LegalCopyright" "Copyright 2026 ${PUBLISHER}. Apache License 2.
 !include "Sections.nsh"
 !define MUI_ICON "${ICON}"
 !define MUI_UNICON "${ICON}"
-!define MUI_WELCOMEPAGE_TEXT "This installs ${APPNAME} ${VERSION}, the ${FULLNAME}, which finds and diagnoses Ubiquiti and other WISP gear on your network.$\r$\n$\r$\nNo administrator rights are needed. The first time it scans, Windows Firewall may ask about Python: allow it on private networks so devices' replies get through."
+!define MUI_WELCOMEPAGE_TEXT "This installs ${APPNAME} ${VERSION}, the ${FULLNAME}, which finds and diagnoses Ubiquiti and other WISP gear.$\r$\n$\r$\nNo administrator rights are needed. The first time it scans, Windows Firewall may ask about Python: allow it on private networks so devices' replies get through."
 !define MUI_FINISHPAGE_RUN "${LAUNCHER}"
 !define MUI_FINISHPAGE_RUN_PARAMETERS "${LAUNCHARGS}"
 !define MUI_FINISHPAGE_RUN_TEXT "Open ${APPNAME}"
@@ -49,7 +49,7 @@ VIAddVersionKey "LegalCopyright" "Copyright 2026 ${PUBLISHER}. Apache License 2.
 !insertmacro MUI_LANGUAGE "English"
 
 ; Versions before 1.4.0 installed under the app's earlier names: remove such an install so there's
-; only one. Its uninstaller leaves your data, which the app copies over the first time it runs.
+; only one. Its uninstaller leaves the saved data, which the app copies over the first time it runs.
 !macro RemoveEarlierInstall NAME
   ReadRegStr $0 HKCU "Software\Microsoft\Windows\CurrentVersion\Uninstall\${NAME}" "UninstallString"
   ReadRegStr $1 HKCU "Software\${NAME}" "InstallDir"
@@ -98,15 +98,15 @@ Section "${APPNAME}" SecApp
 SectionEnd
 
 ; Npcap's license doesn't allow bundling it, so this fetches the official installer from npcap.com,
-; checks it's signed by the Nmap Project, and starts it for you to click through (it asks for
-; administrator rights itself). Ticked when Npcap isn't installed yet, like Wireshark does.
+; checks it's signed by the Nmap Project, and starts its installer (which asks for administrator
+; rights itself). Ticked when Npcap isn't installed yet, like Wireshark does.
 Section /o "Npcap (packet capture for Sniff, Trunk VLANs and Direct)" SecNpcap
   DetailPrint "Getting Npcap from npcap.com..."
   nsExec::ExecToLog 'powershell -NoProfile -ExecutionPolicy Bypass -File "$INSTDIR\app\opendisco\resources\get-npcap.ps1"'
   Pop $0
   ${If} $0 != 0
     MessageBox MB_ICONEXCLAMATION|MB_OK "Npcap wasn't installed (no internet, or its installer was cancelled). \
-      The app offers it again the first time you sniff, or get it from npcap.com."
+      The app offers it again before its first capture; it's also on npcap.com."
   ${EndIf}
 SectionEnd
 

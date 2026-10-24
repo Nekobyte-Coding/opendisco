@@ -178,7 +178,7 @@ class Session:
 
     def _watch(self, data: bytes) -> None:
         """Type the password when ssh asks for it, once per connection: if it asks again, the
-        password was wrong, and the prompt is left for you."""
+        password was wrong, and the prompt is left to answer by hand."""
         seen = self.tail + data  # all of it: ssh's warning can arrive in one long read
         if KEY_CHANGED in seen:
             self.key_changed = True
@@ -193,8 +193,8 @@ class Session:
         else:
             msg = f"Connection closed{f' (ssh exit code {code})' if code else ''}. Press Enter to connect again."
             if self.key_changed:
-                msg = ("This device's SSH key changed since you last connected: it was reset or replaced, or "
-                       "something is in between. If you expect that, right-click it and choose Forget SSH key, "
+                msg = ("This device's SSH key changed since the last connection: it was reset or replaced, or "
+                       "something is in between. If that's expected, right-click it and choose Forget SSH key, "
                        "then press Enter here.")
         return f"\r\n\x1b[33m[{msg}]\x1b[0m\r\n".encode()
 

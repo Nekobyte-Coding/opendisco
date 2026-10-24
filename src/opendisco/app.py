@@ -23,7 +23,7 @@ from opendisco import FULL_NAME, __version__, core
 # (name, description, command-line flags, needs) where needs is a capability from core.capabilities()
 MODES = [
     ("Quick", "Broadcast and multicast discovery only, like Ubiquiti's old Java tool.", ["--quick"], None),
-    ("Full scan", "Discovery plus a sweep of your subnets, mDNS, SSDP and the ARP table.", [], None),
+    ("Full scan", "Discovery plus a sweep of the local subnets, mDNS, SSDP and the ARP table.", [], None),
     ("Sniff the wire", "Listen on every port for gear on any subnet (ARP, LLDP, CDP, broadcasts).",
      ["--sniff"], "listen"),
     ("Trunk VLANs", "Find the VLANs on a trunk port, then probe each one through a temporary tagged interface.",
@@ -33,16 +33,21 @@ MODES = [
 ]
 COLUMNS = list(core.EXPORT_COLUMNS)
 ACCESSORS = [c.lower() for c in COLUMNS]
+# Phones: Android's table doesn't scroll sideways, so twelve columns ran off the screen. Three
+# larger ones instead; tapping a device shows the rest in Details.
+PHONE_COLUMNS = ["IP", "Model", "Name"]
 ANY_PORT = "Any port"
 # What a device's right-click menu (and the Device menu) offers; None separates groups.
 DEVICE_ACTIONS = [("web", "Open Web UI"), ("ssh", "Open SSH…"), ("ping", "Ping"), ("rescan", "Rescan device"), None,
                   ("copy_ip", "Copy IP address"), ("copy_mac", "Copy MAC address"), None,
                   ("forget", "Forget SSH key"), ("hide", "Hide device")]
 NO_SESSION = "Right-click a device to get started: Open SSH or Ping."
-# Where earlier versions kept their data, by the part of the data folder's path that changed:
+# Where earlier versions kept their data, by the parts of the data folder's path that changed:
 # folder name now -> patterns for its earlier names. macOS names the folder after the app ID
-# (earlier IDs ended .opendisco or .ubnt-discover); Windows and Linux after the app's name.
+# (earlier IDs ended .opendisco or .ubnt-discover); Windows after the author (unset until 1.4.1,
+# so "Unknown") and the app's name; Linux after the app's name.
 LEGACY_FOLDERS = {"com.michaelfroehlke.opendisco": ("*.opendisco", "*.ubnt-discover"),
+                  "Michael Froehlke": ("Unknown",),
                   "OpenDisco": ("UBNT Discovery Reloaded", "UBNT Discover"),
                   "opendisco": ("ubnt-discover", "ubnt_discover")}
 
@@ -99,10 +104,11 @@ class OpenDiscoApp(toga.App):
         mobile = self.caps["mobile"]
         self.mode = toga.Selection(items=[m[0] for m in self.modes], on_change=self.on_mode,
                                    style=Pack(flex=1) if mobile else Pack(width=190))
-        self.port = toga.Selection(items=self._ports(), style=Pack(width=230))
+        self.port_names = self._ports()  # what the Port list shows -> the interface name
+        self.port = toga.Selection(items=list(self.port_names), style=Pack(width=230))
         self.start_button = toga.Button("Start", on_press=self.on_start, style=Pack(width=90))
         self.stop_button = toga.Button("Stop", on_press=self.on_stop, enabled=False, style=Pack(width=90))
-        self.aliases = toga.Switch("Probe my networks (temporary addresses)", enabled=self.caps["aliases"])
+        self.aliases = toga.Switch("Probe listed networks (temporary addresses)", enabled=self.caps["aliases"])
         self.deep = toga.Switch("Deep checks (ports, console API)")
         # GTK draws − and + beside the number, so on Linux the box takes its own width (for "300")
         # instead of a fixed one, which pushed the + outside the box.
@@ -116,8 +122,11 @@ class OpenDiscoApp(toga.App):
         self.hidden_button = toga.Button("", on_press=self.on_hidden)
         self._update_hidden_button()
 
-        self.table = toga.Table(columns=COLUMNS, on_select=self.on_select, style=Pack(flex=1))
-        mono = Pack(flex=1, font_family="monospace", font_size=11)
+        if mobile:
+            self.table = toga.Table(columns=PHONE_COLUMNS, on_select=self.on_select, style=Pack(flex=1, font_size=16))
+        else:
+            self.table = toga.Table(columns=COLUMNS, on_select=self.on_select, style=Pack(flex=1))
+        mono = Pack(flex=1, font_family="monospace", font_size=12 if mobile else 11)
         self.details = toga.MultilineTextInput(readonly=True, placeholder="Select a device to see everything "
                                                "it reported and what to check.", style=mono)
         self.wire = toga.MultilineTextInput(readonly=True, placeholder="Sniff, Trunk VLANs and Direct show what "
@@ -180,6 +189,8 @@ class OpenDiscoApp(toga.App):
             toga.Box(style=row, children=footer),
         ])
         self.on_exit = self.handle_exit
+        if self.caps["platform"] == "android":
+            self._fit_phone_table()
         self.on_mode(self.mode)
         if not mobile:
             self._add_device_menu()
@@ -212,19 +223,20 @@ class OpenDiscoApp(toga.App):
 
     def _move_old_data(self):
         """Earlier versions kept the networks file, hidden devices and SSH keys in a folder named
-        after the app's earlier names or app ID: bring them over once."""
+        after the app's earlier names or app ID (and on Windows, no author): bring them over once.
+        The portable Linux version keeps its Python environment in the folder too: not data."""
         new = Path(self.paths.data)
         try:
-            if new.is_dir() and any(new.iterdir()):
+            if new.is_dir() and any(p.name != "python" for p in new.iterdir()):
                 return
-            for n, part in enumerate(new.parts):
-                parent = Path(*new.parts[:n])
-                for pattern in LEGACY_FOLDERS.get(part, ()):
-                    for found in sorted(parent.glob(pattern)):
-                        old = Path(found, *new.parts[n + 1:])
-                        if found.name != part and old.is_dir():
-                            shutil.copytree(old, new, dirs_exist_ok=True)
-                            return
+            # Every earlier spelling of the path, current names first, so the newest data wins.
+            found = [Path(new.anchor)]
+            for part in new.parts[1:]:
+                found = [match for folder in found for pattern in (part, *LEGACY_FOLDERS.get(part, ()))
+                         for match in ([folder / part] if pattern == part else sorted(folder.glob(pattern)))]
+            old = next((p for p in found if p != new and p.is_dir() and any(p.iterdir())), None)
+            if old:
+                shutil.copytree(old, new, dirs_exist_ok=True, ignore=shutil.ignore_patterns("python"))
         except OSError:
             pass
 
@@ -236,13 +248,16 @@ class OpenDiscoApp(toga.App):
             shutil.copyfile(core.DEFAULT_NETWORKS_FILE, path)
         return path
 
-    def _ports(self) -> list:
+    def _ports(self) -> dict:
+        """The Port list: {what it shows: interface name}. Windows adapter names can have spaces
+        ("Ethernet 2"), so the name is looked up rather than cut from what's shown."""
         try:
             links = core.hardware_links(core.local_interfaces())
         except Exception:
             links = []
         links = [l for l in links if l.active or not l.label.startswith("Ethernet Adapter (")]  # Apple's virtual ports
-        return [ANY_PORT] + [f"{l.name} ({l.label})" + ("" if l.active else ", no link") for l in links]
+        return {ANY_PORT: None, **{f"{l.name} ({l.label})" + ("" if l.active else ", no link"): l.name
+                                   for l in links}}
 
     def _align_tab_labels(self, *args, **kwargs):
         """macOS centres the tab labels inside the tab view, which can leave them half a pixel
@@ -330,6 +345,23 @@ class OpenDiscoApp(toga.App):
         except Exception:
             return None
 
+    def _fit_phone_table(self):
+        """Android: spread the columns over the screen's width and wrap a long name rather than
+        push it off the edge, with a thin line between devices."""
+        try:
+            from java import jclass
+            line = jclass("android.graphics.drawable.GradientDrawable")()
+            line.setColor(0x33808080)
+            line.setSize(1, 2)
+            gap = jclass("android.graphics.drawable.InsetDrawable")(line, 0, 6, 0, 6)
+            layout = self.table._impl.table_layout
+            layout.setStretchAllColumns(True)
+            layout.setShrinkAllColumns(True)
+            layout.setDividerDrawable(gap)
+            layout.setShowDividers(jclass("android.widget.LinearLayout").SHOW_DIVIDER_MIDDLE)
+        except Exception:
+            pass  # cosmetic
+
     def _over_main(self, size):
         """Where a window of this size sits centred over the main window, on whatever screen
         that's on (a new window otherwise opens on the primary screen)."""
@@ -401,7 +433,8 @@ class OpenDiscoApp(toga.App):
             self.aliases.enabled = not forced and name != "Quick"
             if forced:
                 self.aliases.value = True
-        self.listen.value = 45 if name == "Direct to a device" else 20
+        if self.listen.value in (20, 45):  # a time set by hand stays
+            self.listen.value = 45 if name == "Direct to a device" else 20
 
     def _args(self) -> list:
         name, _description, flags, needs = self._selected_mode()
@@ -412,9 +445,9 @@ class OpenDiscoApp(toga.App):
             args.append("--deep")
         if needs in ("listen", "vlans"):
             args += ["--vlan-listen", str(int(self.listen.value or 20))]
-        port = self.port.value
-        if port and port != ANY_PORT:
-            args += ["-i", port.split(" ")[0]]
+        port = self.port_names.get(self.port.value)
+        if port:
+            args += ["-i", port]
         if self.caps["mobile"]:  # phones can't do these, so don't waste the time
             args += ["--no-mdns", "--no-ssdp", "--no-arp"]
         return args
@@ -429,8 +462,8 @@ class OpenDiscoApp(toga.App):
                     "Npcap is needed",
                     "Sniffing, Trunk VLANs and Direct capture packets through Npcap, which isn't installed. "
                     "Install it now? This downloads the official installer from npcap.com, checks that it's "
-                    "signed by the Nmap Project, and starts it for you to click through (Windows will ask "
-                    "for permission). Npcap's free license covers 5 computers.")):
+                    "signed by the Nmap Project, and starts it (Windows asks for permission first). "
+                    "Npcap's free license covers 5 computers.")):
                 return False
             self.status.text = "Installing Npcap: follow its installer…"
             self.spinner.start()
@@ -445,9 +478,9 @@ class OpenDiscoApp(toga.App):
         if ("-a" in self._args() or needs == "vlans") and not winnet.is_admin():
             if await self.main_window.dialog(toga.QuestionDialog(
                     "Administrator rights needed",
-                    "Temporary addresses change your network adapter, which Windows only lets administrators "
-                    "do. Restart OpenDisco as administrator? Windows will ask first; then start "
-                    "the scan again.")):
+                    "Temporary addresses change a network adapter's settings, which Windows only lets "
+                    "administrators do. Restart OpenDisco as administrator? Windows asks first; then "
+                    "start the scan again.")):
                 if winnet.relaunch_as_admin(["-m", "opendisco"]):
                     self.request_exit()
             return False
@@ -517,7 +550,8 @@ class OpenDiscoApp(toga.App):
     def _show_devices(self, devices):
         """Fill the table, minus hidden devices. Rows change in place when the same devices are
         listed, so the selection stays put while a scan or a rescan updates them."""
-        rows = [(d.key, dict(zip(ACCESSORS, core.device_row(d)))) for d in devices if d.key not in self.hidden]
+        row = self._phone_row if self.caps["mobile"] else (lambda d: dict(zip(ACCESSORS, core.device_row(d))))
+        rows = [(d.key, row(d)) for d in devices if d.key not in self.hidden]
         data = self.table.data
         if [key for key, _ in rows] == [getattr(row, "key", None) for row in data]:
             for row, (_, values) in zip(data, rows):
@@ -526,6 +560,11 @@ class OpenDiscoApp(toga.App):
                         setattr(row, attr, value)
         else:
             self.table.data = [dict(values, key=key) for key, values in rows]
+
+    @staticmethod
+    def _phone_row(d) -> dict:
+        """A device as a phone lists it: address, model and name (Details has the rest)."""
+        return {"ip": d.ip or "-", "model": d.model or "?", "name": d.name or d.mac or ""}
 
     def _all_devices(self) -> list:
         if self.result:
@@ -804,7 +843,7 @@ class OpenDiscoApp(toga.App):
             where += "."
         user = toga.TextInput(value=self.settings.get("ssh_user", ""), placeholder="e.g. ubnt or admin",
                               style=Pack(flex=1))
-        password = toga.PasswordInput(placeholder="empty: type it in the terminal, or use your SSH key",
+        password = toga.PasswordInput(placeholder="empty: type it in the terminal, or use an SSH key",
                                       style=Pack(flex=1))
         port = toga.TextInput(value=str(d.port("ssh")), style=Pack(width=80))
         problem = toga.Label("", style=Pack(flex=1))
@@ -948,7 +987,7 @@ class OpenDiscoApp(toga.App):
 
         window = toga.Window(title="Hidden devices", size=(700, 380), position=self._over_main((700, 380)))
         window.content = toga.Box(style=Pack(direction=COLUMN, margin=12, gap=8), children=[
-            toga.Label("These are left out of the table, by MAC address, in every scan until you unhide them. "
+            toga.Label("These are left out of the table, by MAC address, in every scan until unhidden. "
                        "Exports still include them."),
             table,
             toga.Box(style=Pack(direction=ROW, gap=8), children=[
@@ -964,14 +1003,41 @@ class OpenDiscoApp(toga.App):
             return
         name = f"opendisco-scan-{time.strftime('%Y%m%d-%H%M')}.html"
         try:
+            if self.caps["platform"] == "android":  # Toga has no save dialog there: it returned nothing
+                self.status.text = f"Saved {self._save_to_downloads(name, core.export_text(self.result, '.html'))}"
+                return
             path = await self.main_window.dialog(toga.SaveFileDialog(
                 "Export results (.html opens on any phone; .csv, .json)", name, file_types=["html", "csv", "json"]))
-        except (NotImplementedError, AttributeError):  # no file dialogs on this platform
-            path = Path(self.paths.data) / name
-        if not path:
+            if not path:
+                return
+            core.write_export(self.result, str(path))
+        except Exception as e:  # a read-only folder, a full disk, Android refusing...
+            self.status.text = f"Couldn't save the export: {getattr(e, 'strerror', None) or e}"
             return
-        core.write_export(self.result, str(path))
         self.status.text = f"Saved {path}"
+
+    def _save_to_downloads(self, name: str, text: str) -> str:
+        """Android: save a report where a file manager or browser can open it, the Downloads
+        folder (Android 10 and later; earlier, the app's folder on shared storage)."""
+        from java import jclass
+        context = self._impl.native.getApplicationContext()
+        if jclass("android.os.Build$VERSION").SDK_INT < 29:
+            path = Path(str(context.getExternalFilesDir(None))) / name
+            path.write_text(text, encoding="utf-8")
+            return str(path)
+        columns = jclass("android.provider.MediaStore$MediaColumns")
+        values = jclass("android.content.ContentValues")()
+        values.put(columns.DISPLAY_NAME, name)
+        values.put(columns.MIME_TYPE, "text/html")
+        values.put(columns.RELATIVE_PATH, jclass("android.os.Environment").DIRECTORY_DOWNLOADS)
+        resolver = context.getContentResolver()
+        uri = resolver.insert(jclass("android.provider.MediaStore$Downloads").EXTERNAL_CONTENT_URI, values)
+        stream = resolver.openOutputStream(uri)
+        try:
+            stream.write(text.encode("utf-8"))
+        finally:
+            stream.close()
+        return f"{name} in Downloads"
 
     async def on_hold(self, widget, **kwargs):
         if self.holding:
@@ -982,10 +1048,10 @@ class OpenDiscoApp(toga.App):
 
         def work():
             try:
-                core.authorize_sudo("Keeping the addresses needs administrator rights.", lambda m: None)
+                res.mgr.authorize()  # sudo on macOS and Linux; on Windows the app already runs as administrator
                 lines = core.hold_start(res.mgr, res.inv, lambda m: self._from_worker(self._append_log, m))
             except SystemExit as e:
-                lines = [f"[error] {e.code}"]
+                lines = [f"[error] {str(e.code).removeprefix('error: ')}"]
             self._from_worker(self._held, lines)
 
         threading.Thread(target=work, daemon=True).start()
@@ -997,7 +1063,7 @@ class OpenDiscoApp(toga.App):
             return
         self.holding = True
         self.hold_button.text = "Release addresses"
-        self.notes.value = "Keeping these addresses so you can manage the gear:\n" + "\n".join(lines) + \
+        self.notes.value = "Keeping these addresses for working on the gear (Release addresses removes them):\n" + "\n".join(lines) + \
                            "\n\n" + self.notes.value
         self.tabs.current_tab = "Notes"
         asyncio.create_task(self._keepalive())
@@ -1049,4 +1115,7 @@ class OpenDiscoApp(toga.App):
 
 
 def main():
-    return OpenDiscoApp("OpenDisco", "com.michaelfroehlke.opendisco", icon="resources/icon")
+    # Author and version are given here because the Windows build has no package metadata: without
+    # them its About box showed no version and its data folder was named "Unknown".
+    return OpenDiscoApp("OpenDisco", "com.michaelfroehlke.opendisco", icon="resources/icon",
+                        author="Michael Froehlke", version=__version__)

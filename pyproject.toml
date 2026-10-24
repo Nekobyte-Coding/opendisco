@@ -9,7 +9,7 @@
 [tool.briefcase]
 project_name = "opendisco"
 bundle = "com.michaelfroehlke"
-version = "1.4.0"
+version = "1.4.1"
 license = "Apache-2.0"
 license-files = ["LICENSE"]
 author = "Michael Froehlke"
@@ -35,7 +35,7 @@ requires = [
     "std-nslog~=2.0.0",
 ]
 # Shown when macOS asks to let the app reach devices on the local network.
-info."NSLocalNetworkUsageDescription" = "OpenDisco finds and probes network devices on your local network."
+info."NSLocalNetworkUsageDescription" = "OpenDisco finds and probes network devices on the local network."
 info."NSHumanReadableCopyright" = "Copyright 2026 Michael Froehlke. Licensed under the Apache License 2.0."
 
 [tool.briefcase.app.opendisco.linux]
@@ -53,6 +53,8 @@ system_runtime_requires = [
     "libgirepository-2.0-0",
     "libcanberra-gtk3-module",
     "tcpdump",
+    "iproute2",  # ip: interfaces and temporary addresses
+    "iw",  # the access point a Wi-Fi port is joined to
     "gir1.2-webkit2-4.1",  # the Terminal tab's web view
     "openssh-client",
 ]
@@ -67,6 +69,8 @@ system_runtime_requires = [
     "gtk3",
     "libcanberra-gtk3",
     "tcpdump",
+    "iproute",
+    "iw",
     "webkit2gtk4.1",
     "openssh-clients",
 ]
@@ -81,6 +85,8 @@ system_runtime_requires = [
     "gobject-introspection", "typelib(Gtk) = 3.0",
     "libcanberra-gtk3-module",
     "tcpdump",
+    "iproute2",
+    "iw",
     "typelib(WebKit2) = 4.1",
     "openssh-clients",
 ]
@@ -97,6 +103,8 @@ system_runtime_requires = [
     "gobject-introspection-runtime",
     "libcanberra",
     "tcpdump",
+    "iproute2",
+    "iw",
     "webkit2gtk-4.1",
     "openssh",
 ]
@@ -133,7 +141,7 @@ requires = [
 # iOS asks before an app may talk to the local network. Broadcast discovery also needs the
 # com.apple.developer.networking.multicast entitlement, which Apple grants on request; without
 # it the app still finds gear by sweeping the phone's Wi-Fi subnet.
-info."NSLocalNetworkUsageDescription" = "OpenDisco finds network devices on your Wi-Fi network."
+info."NSLocalNetworkUsageDescription" = "OpenDisco finds network devices on the Wi-Fi network."
 
 [tool.briefcase.app.opendisco.android]
 requires = [

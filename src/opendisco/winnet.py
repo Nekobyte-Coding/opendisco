@@ -227,7 +227,6 @@ def capture(names, seconds: float, on_frames=None, stop=None, snaplen: int = 160
 
 def wifi_association(name: str) -> dict:
     """SSID and BSSID of the access point a Wi-Fi adapter is joined to (netsh wlan)."""
-    import re
     try:
         out = subprocess.run(["netsh", "wlan", "show", "interfaces"], capture_output=True, text=True, timeout=10,
                              errors="replace", creationflags=CREATE_NO_WINDOW).stdout
@@ -238,7 +237,7 @@ def wifi_association(name: str) -> dict:
         key, _, value = (part.strip() for part in line.partition(":"))
         if key.lower() == "name":
             current = value
-        elif current == name and key.upper() == "BSSID" and value:
+        elif current == name and key.upper() in ("BSSID", "AP BSSID") and value:  # "AP BSSID" on Windows 11
             info["bssid"] = value.split()[0].lower()
         elif current == name and key.upper() == "SSID" and value:
             info["ssid"] = value

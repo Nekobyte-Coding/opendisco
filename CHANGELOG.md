@@ -6,6 +6,31 @@ when it came out. The Linux packages of 1.1.0 to 1.3.1 were added then too; thos
 never released for Linux. README.md's "Versions and platforms" lists each version's platforms
 and known issues.
 
+## 1.4.1
+
+- The Android app is signed with OpenDisco's own release key instead of Android's debug key,
+  so later versions install over it. Android won't replace the debug-signed 1.4.0 with it:
+  uninstall 1.4.0 first, which removes its hidden devices.
+- Android: the device list shows just IP, Model and Name, in larger text. Its twelve columns
+  ran off a phone's screen. Tapping a device shows everything else in Details.
+- Fixed: on Android, Export did nothing. It now saves the HTML report to the Downloads folder.
+- Fixed: on Windows, Keep addresses failed and stayed greyed out (it looked for sudo).
+- Fixed: on Windows, picking a Port whose adapter name has a space ("Ethernet 2", "Wi-Fi 2")
+  scanned the adapter named by its first word, or none.
+- Fixed: on Windows, the About box showed no version, and saved data went into a folder named
+  "Unknown". It's now in `%LOCALAPPDATA%\Michael Froehlke\OpenDisco`, and 1.4.1 brings the
+  earlier data over.
+- Fixed: on Windows 11, the access point a Wi-Fi adapter is joined to wasn't named (Windows 11
+  labels its BSSID "AP BSSID").
+- Fixed: Excel showed the ✓ and ✗ in CSV exports as garbled characters.
+- Fixed: on Debian and openSUSE, Sniff the wire over Wi-Fi didn't name the access point: they
+  keep `iw` in an sbin folder, outside an ordinary user's PATH. Tools are now looked for there
+  too.
+- macOS: an argument Finder can add when it opens an app (`-psn_…`) is ignored rather than
+  read as a command-line option.
+- The app's messages describe the computer and the gear instead of addressing the reader:
+  "Probe my networks" is now "Probe listed networks".
+
 ## 1.4.0
 
 - New full name: Open Discovery Tool for Ubiquiti Devices, OpenDisco for short. An independent

@@ -6,7 +6,7 @@
 #
 # Formats:
 #   192.168.1.0/24                        whole subnet; a free address near the top is picked
-#   192.168.1.0/24 alias=192.168.1.199    pin the alias address yourself
+#   192.168.1.0/24 alias=192.168.1.199    pin the alias address
 #   172.16.10.1-20/30                     split a range into blocks: every /30 with a
 #                                         usable address in .1-.20 (.0, .4, .8, .12, .16)
 # Networks that overlap a subnet this computer already has are probed directly instead.

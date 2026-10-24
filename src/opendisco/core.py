@@ -82,7 +82,7 @@ def capabilities() -> dict:
     plat = platform_name()
     unix_desktop = plat in ("macos", "linux")
     caps = {"platform": plat, "mobile": plat in ("ios", "android"),
-            "aliases": unix_desktop, "listen": unix_desktop and bool(shutil.which("tcpdump")),
+            "aliases": unix_desktop, "listen": unix_desktop and bool(find_tool("tcpdump")),
             "vlan_tagging": unix_desktop, "arp": plat in ("macos", "linux", "windows")}
     if plat == "windows":  # netsh adds addresses (as administrator); Npcap captures
         from opendisco import winnet
@@ -973,9 +973,16 @@ class Link:
         return f"{self.name} ({self.label}, {addrs})"
 
 
+def find_tool(name: str) -> str | None:
+    """A program's path, looking in the sbin folders too: Debian and openSUSE leave them out of
+    an ordinary user's PATH, though tcpdump, ip and iw live there on some releases."""
+    return shutil.which(name) or (None if IS_WINDOWS else shutil.which(name, path="/usr/sbin:/sbin:/usr/local/sbin"))
+
+
 def _run(cmd) -> str:
     # In the Windows GUI (pythonw, no console) each ipconfig/arp would otherwise flash a console window.
     flags = getattr(subprocess, "CREATE_NO_WINDOW", 0) if IS_WINDOWS else 0
+    cmd = [find_tool(cmd[0]) or cmd[0], *cmd[1:]]
     try:
         return subprocess.run(cmd, capture_output=True, text=True, timeout=5,
                               errors="replace", creationflags=flags).stdout
@@ -1729,7 +1736,7 @@ def web_redirect_port(ip: str, timeout: float = 2.0) -> int | None:
 def check_ports(devs, opts, log, everyone=()) -> None:
     """Connect to each device's management ports and name what answers: the common ones,
     the ones it says it uses, and the ones the rest of the gear here says it uses (so a device
-    that doesn't say is still checked on your ports). Then read where its HTTP page
+    that doesn't say is still checked on the ports its neighbours use). Then read where its HTTP page
     redirects, which shows the HTTPS port of gear that doesn't report it."""
     devs = [d for d in devs if d.ip]
     used = Counter(p for d in (list(everyone) or devs) for kind in ("https", "ssh")
@@ -2197,8 +2204,8 @@ class Scanner:
             reason = "; ".join(sorted(set(self.bcast_errors.values())))
             msg = f"Every discovery broadcast failed to send ({reason})."
             if sys.platform == "darwin":
-                msg += (" On macOS this usually means your terminal app lacks Local Network access: "
-                        "System Settings > Privacy & Security > Local Network.")
+                msg += (" On macOS this usually means the app running the scan (OpenDisco, or the terminal) "
+                        "lacks Local Network access: System Settings > Privacy & Security > Local Network.")
             else:
                 msg += " Check for a local firewall blocking outbound UDP 10001."
             self.notes.append(("error", msg))
@@ -2431,7 +2438,7 @@ def capture_frames(names, seconds: float, sudo, log, on_frames=None, stop=None, 
     for name in names:
         r = {"proc": None, "buf": bytearray(), "pos": 0, "reader": CaptureReader(), "frames": [], "err": ""}
         try:
-            r["proc"] = subprocess.Popen(sudo + ["tcpdump", "-i", name] + TCPDUMP_ARGS,
+            r["proc"] = subprocess.Popen(sudo + [find_tool("tcpdump") or "tcpdump", "-i", name] + TCPDUMP_ARGS,
                                          stdout=subprocess.PIPE, stderr=subprocess.PIPE)
             r["pump"] = threading.Thread(target=_pump, args=(r["proc"].stdout, r["buf"]), daemon=True)
             r["pump"].start()
@@ -2841,7 +2848,7 @@ def render_direct(trunks, inv: Inventory) -> str:
             lines.append(f"      => {neighbor_verdict(nb, dev)}")
         if len(found) > 2:
             lines.append(f"    {len(found)} devices are talking here, so something (a switch, or a bridged wireless "
-                         "link) is between you and the device.")
+                         "link) is between this computer and the device.")
     return "\n".join(lines)
 
 
@@ -3042,7 +3049,7 @@ def authorize_sudo(why: str, log) -> None:
             return
     password = SUDO_ASKPASS(why)
     if password is None:
-        raise SystemExit("error: this needs your administrator password")
+        raise SystemExit("error: this needs an administrator password")
     r = subprocess.run(["sudo", "-S", "-p", "", "-v"], input=password + "\n", capture_output=True, text=True)
     if r.returncode != 0:
         raise SystemExit("error: sudo didn't accept that password")
@@ -3125,7 +3132,7 @@ class AliasManager:
                                  "administrator (right-click > Run as administrator, or an Administrator terminal)")
             return
         if self.sudo:
-            authorize_sudo("Temporary IP aliases need administrator rights; sudo may ask for your password.",
+            authorize_sudo("Temporary IP aliases need administrator rights; sudo may ask for a password.",
                            self.log)
 
     def keepalive(self) -> None:
@@ -3166,7 +3173,8 @@ class AliasManager:
 
     def _run(self, cmd) -> str | None:
         try:
-            r = subprocess.run(self.sudo + cmd, capture_output=True, text=True, timeout=30, errors="replace",
+            r = subprocess.run(self.sudo + [find_tool(cmd[0]) or cmd[0], *cmd[1:]], capture_output=True, text=True,
+                               timeout=30, errors="replace",
                                creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0) if IS_WINDOWS else 0)
         except (OSError, subprocess.SubprocessError) as e:
             return str(e)
@@ -3387,7 +3395,7 @@ def hold_aliases(mgr: AliasManager, inv: Inventory, log) -> None:
     held = hold_start(mgr, inv, log)
     if not held:
         return
-    print("\n" + Style.bold("Holding temporary addresses so you can manage this gear (Ctrl+C removes them):"))
+    print("\n" + Style.bold("Holding temporary addresses for working on this gear (Ctrl+C removes them):"))
     print("\n".join(held))
     try:
         while mgr.active:
@@ -3769,18 +3777,19 @@ def diagnose(inv: Inventory, all_ifaces, scan_nets, opts, alias_used=(), skipped
             else:
                 why = (f"Reached through temporary {a['alias']} on {a['interface']}, which had no address "
                        "of its own.")
-            issues.append(("note", "ALIAS", why + " Add --hold to keep that address while you work on it."))
+            issues.append(("note", "ALIAS", why + " Keep addresses (--hold) keeps that address for working on it."))
         elif (heard_ubnt and d.ips and local_nets and not any(_in_any(ip, local_nets) for ip in d.ips)
                 and not any(_in_any(ip, scan_nets) for ip in d.ips)):
             nets = ", ".join(str(n) for n in local_nets)
             issues.append(("warn", "OFF-SUBNET",
                            f"Answers discovery from other subnets (older firmware does), but its address "
-                           f"isn't in this computer's subnet(s) ({nets}), so you can't reach its web UI or "
-                           "SSH. Run with --aliases --hold (its subnet in networks.txt), or fix its IP/VLAN."))
+                           f"isn't in this computer's subnet(s) ({nets}), so its web UI and SSH can't be "
+                           "reached from here. Probe its subnet through a temporary address (its subnet in the "
+                           "networks file, then -a --hold), or fix its IP/VLAN."))
         if d.wifi:
-            msg = f"Your Wi-Fi ({d.wifi['iface']}) is joined to this access point (BSSID {d.wifi['bssid']})."
+            msg = f"This computer's Wi-Fi ({d.wifi['iface']}) is joined to this access point (BSSID {d.wifi['bssid']})."
             if not d.ip:
-                msg += (" Its management address isn't on your Wi-Fi network: probe its management VLAN from a "
+                msg += (" Its management address isn't on that Wi-Fi network: probe its management VLAN from a "
                         "wired trunk port with --vlans, or give its subnet with --alias.")
             issues.append(("note", "WIFI-AP", msg))
         link = d.alias.get("interface")
@@ -3831,8 +3840,8 @@ def diagnose(inv: Inventory, all_ifaces, scan_nets, opts, alias_used=(), skipped
             if (d.key, kind) in odd_ports:
                 issues.append(("warn", tag, odd_ports[(d.key, kind)]))
             if reported and standard and reported not in standard:
-                issues.append(("warn", tag, f"Reports its {name} on port {reported}, not your standard "
-                                            f"{', '.join(map(str, standard))}: a typo in its config?"))
+                issues.append(("warn", tag, f"Reports its {name} on port {reported}, not the standard "
+                                            f"{', '.join(map(str, standard))} given: a typo in its config?"))
             if reported and d.ports is not None:
                 found = d.services.get(reported)
                 elsewhere = sorted(p for p, k in d.services.items() if k == kind and p != reported)
@@ -3854,14 +3863,14 @@ def diagnose(inv: Inventory, all_ifaces, scan_nets, opts, alias_used=(), skipped
                 issues.append(("warn", "DAMAGED",
                                f"Discovery packets arrived damaged: {'; '.join(bad[:4])}"
                                + (f" and {len(bad) - 4} more" if len(bad) > 4 else "")
-                               + ". On your own subnet, damage that comes and goes points to a cable or "
+                               + ". On this computer's own subnet, damage that comes and goes points to a cable or "
                                  "connector, a failing port, or a speed/duplex mismatch. See its packets "
                                  "(Packets tab, or -v --raw)."))
         answered, sent = reply_rounds(d, inv.rounds)
         if sent >= 5 and sent - answered >= 2 and (sent - answered) / sent >= 0.1:
             issues.append(("warn", "LOSS",
                            f"Answered {answered} of {sent} rounds of discovery probes while in view: "
-                           f"{sent - answered} went unanswered. On your own subnet that's packet loss: "
+                           f"{sent - answered} went unanswered. On this computer's own subnet that's packet loss: "
                            "Wi-Fi interference, a bad cable or port, a busy link, or a busy device."))
         d.issues = issues
 
@@ -4077,7 +4086,7 @@ def render_packets(d: Device, inv: Inventory | None = None, counters: dict | Non
                 + ": how its firmware writes them, not damage")
         answered, sent = reply_rounds(d, inv.rounds) if inv else (0, 0)
         if sent:
-            row("Answered", f"{answered} of {sent} rounds of our probes while in view"
+            row("Answered", f"{answered} of {sent} rounds of probes while in view"
                             + (f" ({sent - answered} unanswered)" if answered < sent else ""))
     if garbled:
         row("Unreadable", f"{len(garbled)} packet(s) on UDP {UBNT_PORT} from its address, too damaged to read")
@@ -4193,8 +4202,8 @@ def render_notes(inv: Inventory, sc: Scanner, opts) -> list:
             msg += " More than one controller on a network can adopt devices out from under each other."
         notes.append((level, msg))
     if not inv.devices and not opts.listen and not opts.direct:
-        notes.append(("note", "Nothing answered. Check that you're on the same VLAN as the devices, that "
-                              "Wi-Fi client isolation isn't on, and that your firewall allows inbound UDP. "
+        notes.append(("note", "Nothing answered. Check that this computer is on the same VLAN as the devices, "
+                              "that Wi-Fi client isolation isn't on, and that the firewall allows inbound UDP. "
                               "Newer gear on another subnet needs -a (temporary aliases); for routed or "
                               "VPN networks, give the device subnet: opendisco.py 10.0.5.0/24"))
     return notes
@@ -4224,7 +4233,7 @@ examples:
 
   %(prog)s --vlans             on a trunk port: find its VLANs by listening, then probe each
                                one through a temporary tagged interface (macOS/Linux, sudo)
-  %(prog)s --vlan 20,30        probe these VLANs on your wired ports (no listening)
+  %(prog)s --vlan 20,30        probe these VLANs on the wired ports (no listening)
   %(prog)s --sniff             listen on every port for gear on any subnet (ARP, LLDP, CDP)
   %(prog)s --sniff -a          ... and probe what it heard through temporary addresses
   %(prog)s --direct -i en7     wired straight into a radio: find its IP and VLAN from what it
@@ -4232,7 +4241,7 @@ examples:
 
 VIA column:  ubnt = answered UBNT discovery (broadcast/unicast)   mcast = answered the
 multicast probe   announce = sent an unsolicited announcement   sniff = heard in traffic on a
-port (--sniff, --vlans, --direct)   wifi = the access point your Wi-Fi is joined to
+port (--sniff, --vlans, --direct)   wifi = the access point this computer's Wi-Fi is joined to
 mdns / ssdp = found by mDNS / UPnP   arp = known vendor's MAC in the ARP table
 VLAN column: the VLAN it was found on; untagged shows the port's native VLAN (1 unless LLDP
 from the switch says otherwise)
@@ -4257,10 +4266,10 @@ def parse_args(argv=None):
     g.add_argument("--ports", action="store_true", help=f"check TCP {', '.join(map(str, CHECK_PORTS))}")
     g.add_argument("--deep", action="store_true", help="--ports plus the UniFi OS console API")
     g.add_argument("--https-port", action="append", default=[], metavar="PORTS",
-                   help="your standard web UI port(s), e.g. 8443: gear reporting another is flagged, and "
+                   help="the standard web UI port(s), e.g. 8443: gear reporting another is flagged, and "
                         "--ports/--deep check them")
     g.add_argument("--ssh-port", action="append", default=[], metavar="PORTS",
-                   help="your standard SSH port(s), e.g. 2222 (same as --https-port)")
+                   help="the standard SSH port(s), e.g. 2222 (same as --https-port)")
     g.add_argument("-i", "--interface", action="append", metavar="NAME|IP",
                    help="only use this interface (repeatable)")
     g.add_argument("-t", "--timeout", type=float, metavar="SEC",
@@ -4286,7 +4295,8 @@ def parse_args(argv=None):
     o.add_argument("--version", action="version", version=f"%(prog)s {__version__}")
     a = p.add_argument_group("temporary IP aliases (macOS/Linux, uses sudo)",
                              "Newer firmware only answers discovery from its own subnet. These options "
-                             "briefly give each active interface an address in your usual networks.")
+                             "briefly give each active interface an address in the networks listed in the "
+                             "networks file.")
     a.add_argument("-a", "--aliases", action="store_true",
                    help="probe the networks listed in the networks file")
     a.add_argument("--alias", action="append", default=[], metavar="NET",
@@ -4310,7 +4320,7 @@ def parse_args(argv=None):
                    help="how long --sniff/--vlans/--direct listen (default 20, 45 for --direct; 35+ catches LLDP)")
     v.add_argument("--sniff", action="store_true",
                    help="listen passively on every active port (Wi-Fi too) for ARP, LLDP/CDP and broadcasts: "
-                        "finds gear on subnets you're not on. With -a, also probes what it heard")
+                        "finds gear on subnets this computer isn't on. With -a, also probes what it heard")
     v.add_argument("--pcap", metavar="PREFIX",
                    help="save what --sniff/--vlans/--direct capture as PREFIX-<interface>.pcap (for Wireshark)")
     v.add_argument("--direct", action="store_true",
@@ -4557,12 +4567,18 @@ pre{{background:#f6f6f6;padding:10px;overflow-x:auto}}.wrap{{overflow-x:auto}}
 """
 
 
+def export_text(res: ScanResult, ext: str) -> str:
+    """A report in the format of this file extension (.json, .csv, otherwise HTML)."""
+    return (json.dumps(result_to_dict(res), indent=2, default=str) if ext == ".json"
+            else export_csv(res) if ext == ".csv" else export_html(res))
+
+
 def write_export(res: ScanResult, path: str) -> None:
     """Write a report; the format follows the file extension (.json, .csv, otherwise HTML)."""
     ext = os.path.splitext(path)[1].lower()
-    text = (json.dumps(result_to_dict(res), indent=2, default=str) if ext == ".json"
-            else export_csv(res) if ext == ".csv" else export_html(res))
-    with open(path, "w", encoding="utf-8", newline="") as f:
+    text = export_text(res, ext)
+    # A byte order mark, or Excel reads the CSV in the PC's legacy code page and garbles ✓ and ✗.
+    with open(path, "w", encoding="utf-8-sig" if ext == ".csv" else "utf-8", newline="") as f:
         f.write(text)
 
 
@@ -4651,7 +4667,7 @@ def run_scan(opts, log, progress=None, on_inventory=None):
             return 0
     elif unaddressed:
         extra_notes += [("note", f"{l.name} ({l.label}) has link but no IPv4 address (no DHCP?). Run with -a "
-                                 "to probe your usual networks on it through temporary aliases.")
+                                 "to probe the listed networks on it through temporary aliases.")
                         for l in unaddressed]
     if not ifaces and not opts.alias_mode:
         names = ", ".join(str(i) for i in all_ifaces) or "none found"
@@ -4679,7 +4695,11 @@ def run_scan(opts, log, progress=None, on_inventory=None):
     mgr = None
     if opts.alias_mode:
         mgr = AliasManager(log)
-        mgr.authorize()
+        try:
+            mgr.authorize()
+        except BaseException:
+            sc.close()
+            raise
         if mgr.sudo:
             ARP_SUDO[:] = ["sudo", "-n"]
         mgr.cleanup_leftovers()
@@ -4731,7 +4751,7 @@ def run_scan(opts, log, progress=None, on_inventory=None):
             sudo = mgr.sudo if mgr else AliasManager(log).sudo
             if not mgr and sudo:
                 authorize_sudo("Listening needs tcpdump, which needs administrator rights; sudo may ask "
-                               "for your password.", log)
+                               "for a password.", log)
                 ARP_SUDO[:] = ["sudo", "-n"]
             by_name = {l.name: Trunk(l, opts.vlan_listen) for l in listen_on}
             trunks = list(by_name.values())
@@ -4820,8 +4840,8 @@ def run_scan(opts, log, progress=None, on_inventory=None):
     finally:
         if mgr:
             mgr.remove_all()
+        sc.close()
     sc.finish_notes()
-    sc.close()
     enrich(inv, sc, opts, log, alias_result)
     counters = counter_changes(counters_before, interface_counters(watched))
     natives = {tr.link.name: tr.native() for tr in trunks if tr.native()}
@@ -4843,13 +4863,14 @@ def run_scan(opts, log, progress=None, on_inventory=None):
                                   "ARP table through sudo instead."))
         else:
             notes.append(("warn", "macOS is hiding MAC addresses and the ARP table from Python, so ARP-based "
-                                  "vendor detection is off. Allow Local Network access for the app you run this "
-                                  "from (Terminal, iTerm, VS Code...) in System Settings > Privacy & Security > "
+                                  "vendor detection is off. Allow Local Network access for the app running it "
+                                  "(OpenDisco, Terminal, iTerm, VS Code...) in System Settings > Privacy & Security > "
                                   "Local Network, then quit and reopen it. Modes that use sudo (-a, --sniff, "
                                   "--vlans, --direct) read the ARP table as root instead."))
     notes += [("note", f"{net}: no free address to borrow (both are in use, or one is what a device keeps "
-                       "asking for), so it wasn't probed. If that device's uplink is down, nobody is using "
-                       "the address it asks for: you can take it yourself to reach it.") for net in skipped]
+                       "asking for), so it wasn't probed. If that device's uplink is down, nothing else is "
+                       "using the address it asks for, so a static address set to it here reaches the "
+                       "device.") for net in skipped]
 
     return ScanResult(opts, devs, notes, trunks, ifaces, links, base_targets, inv, mgr, elapsed, interrupted,
                       counters, diag_args)
