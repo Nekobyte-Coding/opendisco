@@ -7,6 +7,7 @@ Windows can't capture traffic, add addresses or tag VLANs.
 import asyncio
 import json
 import shutil
+import textwrap
 import threading
 import time
 import traceback
@@ -103,7 +104,9 @@ class OpenDiscoApp(toga.App):
         self.listen = toga.NumberInput(min=5, max=300, step=5, value=20, style=Pack() if gtk else Pack(width=70))
         if gtk:
             self.listen._impl.native.set_width_chars(3)
-        self.mode_help = toga.Label("", style=Pack(flex=1, margin_left=8))
+        # Android sizes a label to its text on one line and never wraps it, so on phones the
+        # description gets its own line and on_mode wraps it by hand.
+        self.mode_help = toga.Label("", style=Pack(margin_left=2) if mobile else Pack(flex=1, margin_left=8))
         self.hidden_button = toga.Button("", on_press=self.on_hidden)
         self._update_hidden_button()
 
@@ -144,7 +147,7 @@ class OpenDiscoApp(toga.App):
         controls = [toga.Label("Mode"), self.mode]
         if not mobile:
             controls += [toga.Label("Port"), self.port]
-        controls += [self.start_button, self.stop_button, self.mode_help]
+        controls += [self.start_button, self.stop_button] + ([] if mobile else [self.mode_help])
         options = [self.aliases, self.deep] if not mobile else [self.deep]
         if self.offers_listening:
             options += [toga.Label("Listen (s)"), self.listen]
@@ -163,6 +166,7 @@ class OpenDiscoApp(toga.App):
         self.main_window = toga.MainWindow(title=f"{self.formal_name} {__version__}", size=(1250, 780))
         self.main_window.content = toga.Box(style=Pack(direction=COLUMN, margin=10, gap=8), children=[
             toga.Box(style=row, children=controls),
+            *([self.mode_help] if mobile else []),
             toga.Box(style=row, children=options),
             body,
             toga.Box(style=row, children=footer),
@@ -376,7 +380,7 @@ class OpenDiscoApp(toga.App):
 
     def on_mode(self, widget, **kwargs):
         name, description, flags, needs = self._selected_mode()
-        self.mode_help.text = description
+        self.mode_help.text = textwrap.fill(description, 44) if self.caps["mobile"] else description
         forced = needs == "vlans"  # these always probe through temporary addresses
         if self.caps["aliases"]:
             self.aliases.enabled = not forced and name != "Quick"
