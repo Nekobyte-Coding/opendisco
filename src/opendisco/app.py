@@ -93,7 +93,12 @@ class OpenDiscoApp(toga.App):
         self.stop_button = toga.Button("Stop", on_press=self.on_stop, enabled=False, style=Pack(width=90))
         self.aliases = toga.Switch("Probe my networks (temporary addresses)", enabled=self.caps["aliases"])
         self.deep = toga.Switch("Deep checks (ports, console API)")
-        self.listen = toga.NumberInput(min=5, max=300, step=5, value=20, style=Pack(width=70))
+        # GTK draws − and + beside the number, so on Linux the box takes its own width (for "300")
+        # instead of a fixed one, which pushed the + outside the box.
+        gtk = self.caps["platform"] == "linux"
+        self.listen = toga.NumberInput(min=5, max=300, step=5, value=20, style=Pack() if gtk else Pack(width=70))
+        if gtk:
+            self.listen._impl.native.set_width_chars(3)
         self.mode_help = toga.Label("", style=Pack(flex=1, margin_left=8))
         self.hidden_button = toga.Button("", on_press=self.on_hidden)
         self._update_hidden_button()
