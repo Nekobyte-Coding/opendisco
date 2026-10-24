@@ -40,7 +40,7 @@ Installers are on the [Releases](https://github.com/Nekobyte-Coding/opendisco/re
 | 1.2.0 | macOS, Windows | Linux | Windows: the table's columns open too narrow to read (1.4.0). UCG Fiber port 7080 (1.3.2) |
 | 1.1.0 | macOS, Windows | Linux | Same as 1.2.0, and the unicast sweep misses UniFi OS gear (1.2.0) |
 
-- **Rebuilds:** every installer before 1.4.0 was rebuilt on 2026-10-23 from that version's
+- **Rebuilds:** every installer before 1.4.0 was rebuilt in October 2026 from that version's
   own source, under the current name, license and app ID, with the default networks list cut
   down to 192.168.1.0/24. No fixes were back-ported: each version behaves as it did when it
   came out, known issues included.

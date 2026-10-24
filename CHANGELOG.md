@@ -1,6 +1,6 @@
 # Changelog
 
-Installers for 1.1.0 to 1.3.2 were rebuilt on 2026-10-23 from each version's own source, under
+Installers for 1.1.0 to 1.3.2 were rebuilt in October 2026 from each version's own source, under
 the current name, license and app ID. No fixes were back-ported, so each one behaves as it did
 when it came out. The Linux packages of 1.1.0 to 1.3.1 were added then too; those versions were
 never released for Linux. README.md's "Versions and platforms" lists each version's platforms
