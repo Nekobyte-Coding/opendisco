@@ -1,5 +1,5 @@
 #!/bin/sh
-# Add OpenDisco (this folder's copy) to your desktop's app menu.
+# Add OpenDisco (this folder's copy) to the desktop's app menu.
 # Run it again after moving the folder; remove the entry with: ./install-desktop-entry.sh --remove
 set -e
 HERE="$(cd "$(dirname "$(readlink -f "$0")")" && pwd)"
@@ -23,4 +23,4 @@ Terminal=false
 Categories=Network;Utility;
 EOF
 chmod 644 "$ENTRY"
-echo "Added OpenDisco to your app menu ($ENTRY)."
+echo "Added OpenDisco to the app menu ($ENTRY)."

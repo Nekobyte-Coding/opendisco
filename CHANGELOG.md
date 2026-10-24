@@ -1,58 +1,68 @@
 # Changelog
 
+Installers for 1.1.0 to 1.3.2 were rebuilt on 2026-10-23 from each version's own source, under
+the current name, license and app ID. No fixes were back-ported, so each one behaves as it did
+when it came out. The Linux packages of 1.1.0 to 1.3.1 were added then too; those versions were
+never released for Linux. README.md's "Versions and platforms" lists each version's platforms
+and known issues.
+
 ## 1.4.0
 
-- The full name is now Open Discovery Tool for Ubiquiti Devices, OpenDisco for short. It's an
-  independent project, not affiliated with Ubiquiti. Your networks file, hidden devices and SSH
-  keys come along from the earlier version, and the Windows installer replaces the earlier
-  install.
+- New full name: Open Discovery Tool for Ubiquiti Devices, OpenDisco for short. An independent
+  project, not affiliated with Ubiquiti Inc.
 - Licensed under the Apache License 2.0 (LICENSE, with NOTICE).
-- Windows does what the Mac and Linux versions do: Sniff the wire, Trunk VLANs and Direct
-  capture through Npcap (the installer offers to download it from npcap.com), Probe my
-  networks through temporary addresses (as administrator), and discovery broadcasts out of
-  every adapter. Windows can't tag VLANs itself, so it finds them by listening and probes
-  untagged only.
-- Fixed: the Windows app didn't open in 1.3.0 to 1.3.2.
-- Android: the mode description has its own line, so the top row fits a phone.
-- Linux: the Listen box's − and + buttons fit inside it.
-- Sniff, Trunk VLANs and Direct say so when there's no wired or Wi-Fi port to listen on.
+- Saved data (the networks file, hidden devices and SSH host keys) is retained when 1.4.0 is
+  installed over an earlier version, and the Windows installer replaces the earlier install.
+- Windows can do what the macOS and Linux versions do: the Sniff the wire, Trunk VLANs and
+  Direct modes capture packets through Npcap (the installer offers to download it from
+  npcap.com), the "Probe my networks" switch adds temporary addresses (as administrator), and
+  discovery broadcasts go out of every adapter. Windows can't tag VLANs, so Trunk VLANs finds
+  them by listening and probes the untagged network only.
+- First Android release, with a layout that fits a phone. Phones can run Quick and Full scans.
+- Fixed: the Windows app stopped at startup in 1.3.0 to 1.3.2 (it read a bundled file with
+  Windows' default text encoding).
+- Fixed: on Windows, the device table's columns opened too narrow to read, with no headings
+  (1.1.0 and 1.2.0; the 1.3.x Windows app didn't open).
+- Fixed: on Linux, the Listen box's − and + buttons were drawn partly outside it.
+- Sniff, Trunk VLANs and Direct report it when there's no wired or Wi-Fi port to listen on.
 - Installers are named by system and CPU, e.g. OpenDisco-1.4.0-macos-universal.dmg.
 
 ## 1.3.2
 
-- Fixed: a UCG Fiber (and any gear that does the same) showed port 7080 in the HTTPS column
-  with HTTPS-PORT warnings. Its discovery reply carries 7080 without the flag that marks the
-  web UI port, so that port is no longer used; its HTTPS port comes from its HTTP redirect.
-- Linux: a .deb for Ubuntu 24.04, an .rpm for Fedora 44 and a portable .tar.gz, and the
-  right-click menu and copying work there too.
-- The default networks list is just 192.168.1.0/24, Ubiquiti's factory subnet.
+- Fixed: a UCG Fiber (and other gear that does the same) showed port 7080 in the HTTPS column,
+  with HTTPS-PORT warnings (1.1.0 to 1.3.1). Its discovery reply carries 7080 without the flag
+  that marks the web UI port, so that port is no longer used; the HTTPS port comes from the
+  device's HTTP redirect instead.
+- First Linux release: a .deb for Ubuntu 24.04, an .rpm for Fedora 44 and a portable .tar.gz,
+  with the right-click menu and copying working on Linux.
+- The default networks list holds only 192.168.1.0/24, Ubiquiti's factory subnet.
 
 ## 1.3.1
 
-- Renamed to OpenDisco.
 - Popup windows (SSH login, administrator password, hidden devices) open centred over the
   app's window, on whichever screen it's on.
-- Open Web UI uses the port the device says when a deep check found nothing answering.
+- Open Web UI uses the port the device reports when a deep check found nothing answering.
 
 ## 1.3.0
 
-- Right-click a device (or use the Device menu): Open Web UI, Open SSH, Ping, Rescan device,
-  Copy IP/MAC, Forget SSH key, Hide device.
+- A right-click menu for each device (also under the Device menu): Open Web UI, Open SSH,
+  Ping, Rescan device, Copy IP/MAC, Forget SSH key, Hide device. On macOS and Windows.
 - Terminal tab: SSH and ping sessions that keep running per device. SSH host keys are pinned
-  to each device's MAC, and old airOS crypto is allowed.
+  to each device's MAC address, and old airOS ciphers are allowed.
 - HTTPS and SSH ports come from what each device reports (discovery, HTTP redirect, mDNS,
-  UPnP), with no ports to enter. A port that differs from the rest of your gear is flagged as
-  a likely typo.
+  UPnP), with no ports to enter. A port that differs from the rest of the gear in the scan is
+  flagged as a likely typo.
 - Hidden devices.
 
 ## 1.2.0
 
 - Packets tab: each device's discovery packets, decoded and checked for damage.
 - Missed-reply counting, and interface and checksum error counters.
-- Sharp tab labels after dragging the divider.
-- The unicast sweep reaches UniFi OS gear (it ignores probes from port 10001).
+- Sharp tab labels after dragging the divider (macOS).
+- Fixed: the unicast sweep missed UniFi OS gear, which ignores probes sent from port 10001.
 
 ## 1.1.0
 
-- The first app release: a Mac and Windows GUI over the scanner.
-- Touch ID for sudo, and HTTPS/SSH port columns.
+- First app release: a macOS and Windows window over the command-line scanner.
+- Touch ID for sudo on macOS, and HTTPS/SSH port columns checked against standard ports
+  entered in the window.
