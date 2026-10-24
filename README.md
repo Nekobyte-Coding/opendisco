@@ -174,7 +174,7 @@ up in iCloud. Finished installers go in `dist/`.
 | `src/opendisco/resources/xterm/` | xterm.js 5.5.0 (MIT), the terminal emulator; `packaging/fetch_xterm.py` fetches it from npm and checks it |
 | `packaging/windows/` | The Windows installer build script and NSIS installer definition |
 | `opendisco.py` | The command-line launcher |
-| `networks.txt` | The CLI's networks file (the app keeps its own copy in its data folder) |
+| `networks.txt` | Your networks file for the CLI: not in git, made from the default (`src/opendisco/resources/networks.txt`) the first time you run it. The app keeps its own copy in its data folder |
 
 ## Quick start
 

@@ -6,3 +6,5 @@ __pycache__/
 *.pcap
 .briefcase/
 .DS_Store
+networks.txt
+!src/opendisco/resources/networks.txt
