@@ -27,6 +27,17 @@ It comes two ways:
     replies can't get back to it.
   - **Command line:** for the CLI on Windows, run `opendisco.cmd` from the install
     folder (`%LOCALAPPDATA%\Programs\OpenDisco`), for example `opendisco.cmd --quick`.
+- **Linux:**
+  - **Ubuntu 24.04 LTS, Linux Mint 22, Pop!_OS 24.04:**
+    `sudo apt install ./OpenDisco-<version>-ubuntu-24.04_amd64.deb`
+  - **Fedora 44:** `sudo dnf install ./OpenDisco-<version>-fedora-44.x86_64.rpm`
+  - **Any other distro** (Debian 13, Arch, newer Ubuntu or Fedora...): the portable
+    `OpenDisco-<version>-linux.tar.gz`. Extract it and run
+    `./opendisco`; its `README-LINUX.md` lists the packages to install first.
+
+  The `.deb` and `.rpm` install the app's own copy of Toga and PyGObject, built for that
+  release, and pull in GTK, WebKitGTK, tcpdump and the ssh client. Run it from your app menu,
+  or `opendisco` in a terminal (with options, that's the command-line tool).
 
 **The window:**
 - Pick a mode and a port, then press Start.
@@ -92,7 +103,7 @@ addresses or tagging VLANs, so the app only offers the modes the platform suppor
 
 ### Right-click menu and the Terminal tab
 
-Right-click a device in the table (on Linux, select it and use the **Device** menu):
+Right-click a device in the table (or select it and use the **Device** menu):
 
 - **Open Web UI** opens `https://ip:port/` in your browser: the port a deep check found
   HTTPS on, else the one the device says.
@@ -150,6 +161,13 @@ python3 -m venv .venv && .venv/bin/pip install briefcase toga
 
   NSIS then turns them into `dist/OpenDisco-<version>-setup.exe`. On a Windows PC,
   `briefcase package windows` makes an `.msi` instead.
+- **Linux (.deb, .rpm, .tar.gz), from this Mac or a Linux PC:**
+  `.venv/bin/python packaging/linux/build_packages.py` (`--arch arm64` for ARM PCs). It runs
+  Briefcase inside Ubuntu 24.04 and Fedora 44 containers, so it needs Docker. On a Mac:
+  `brew install colima docker docker-buildx`, then `colima start --vz-rosetta=false`, since x86-64 builds
+  run emulated and Rosetta crashes Ubuntu's Python. Emulated compilers occasionally crash: if
+  a build fails with "internal compiler error", run it again. The portable `.tar.gz` needs no
+  Docker (`--only tar.gz`).
 - **Android (.apk):** `.venv/bin/briefcase build android` (works on a Mac). The first run
   downloads Java and Google's Android SDK and asks you to accept Google's SDK license. The
   APK lands in `build/` and can be sideloaded; `briefcase package android` makes a Play
@@ -160,8 +178,9 @@ python3 -m venv .venv && .venv/bin/pip install briefcase toga
   request the `com.apple.developer.networking.multicast` entitlement from Apple and add it
   in Xcode; without it the app still finds gear by sweeping the Wi-Fi subnet.
 
-Both build scripts do their work in `~/Library/Caches/opendisco`, so nothing big ends
-up in iCloud. Finished installers go in `dist/`.
+The Mac and Windows build scripts do their work in `~/Library/Caches/opendisco`, and
+the Linux one inside containers, so nothing big ends up in iCloud. Finished installers go in
+`dist/`. `CHANGELOG.md` lists what changed in each version.
 
 **Project layout:**
 
@@ -173,6 +192,7 @@ up in iCloud. Finished installers go in `dist/`.
 | `src/opendisco/resources/` | App icon (redraw with `packaging/make_icons.py`) and the default networks file |
 | `src/opendisco/resources/xterm/` | xterm.js 5.5.0 (MIT), the terminal emulator; `packaging/fetch_xterm.py` fetches it from npm and checks it |
 | `packaging/windows/` | The Windows installer build script and NSIS installer definition |
+| `packaging/linux/` | The Linux build script, and the portable version's launcher, menu-entry script and README |
 | `opendisco.py` | The command-line launcher |
 | `networks.txt` | Your networks file for the CLI: not in git, made from the default (`src/opendisco/resources/networks.txt`) the first time you run it. The app keeps its own copy in its data folder |
 

@@ -511,6 +511,8 @@ class OpenDiscoApp(toga.App):
                 self._context_menu_macos()
             elif self.caps["platform"] == "windows":
                 self._context_menu_windows()
+            elif self.caps["platform"] == "linux":
+                self._context_menu_gtk()
         except Exception:  # the Device menu still offers everything
             self._append_log("Couldn't add the right-click menu:\n" + traceback.format_exc())
 
@@ -560,6 +562,43 @@ class OpenDiscoApp(toga.App):
         view.ContextMenuStrip = strip
         self._menu_strip = strip
 
+    def _context_menu_gtk(self):
+        from gi.repository import Gdk, GLib, Gtk
+        view = self.table._impl.native_table  # a Gtk.TreeView
+        menu = Gtk.Menu()
+        self._menu_items = {}
+        for entry in DEVICE_ACTIONS:
+            if entry is None:
+                menu.append(Gtk.SeparatorMenuItem())
+                continue
+            item = Gtk.MenuItem(label=entry[1])
+            item.connect("activate", lambda widget, name=entry[0]: self._device_action(name))
+            menu.append(item)
+            self._menu_items[entry[0]] = item
+        menu.show_all()
+
+        def pressed(widget, event):
+            if event.type != Gdk.EventType.BUTTON_PRESS or event.button != Gdk.BUTTON_SECONDARY:
+                return False
+            hit = widget.get_path_at_pos(int(event.x), int(event.y))
+            if hit is None:
+                return True
+            index, trigger = hit[0].get_indices()[0], event.copy()
+
+            def show():
+                # Not in the press handler itself: selecting refreshes Details, and Toga flushes
+                # GTK's pending events while it does, which would include this press, forever.
+                widget.get_selection().select_path(Gtk.TreePath.new_from_indices([index]))
+                self._update_menu_items(self._device(getattr(self.table.data[index], "key", None)))
+                menu.popup_at_pointer(trigger)
+                return False
+
+            GLib.idle_add(show)
+            return True
+
+        view.connect("button-press-event", pressed)
+        self._menu_gtk = menu
+
     def _context_menu_opening(self):
         """macOS, just before the menu shows: select the row that was right-clicked."""
         from rubicon.objc import ObjCClass
@@ -578,6 +617,9 @@ class OpenDiscoApp(toga.App):
                 continue
             if self.caps["platform"] == "windows":
                 item.Text, item.Enabled = title, enabled
+            elif self.caps["platform"] == "linux":
+                item.set_label(title)
+                item.set_sensitive(enabled)
             else:
                 item.title, item.enabled = title, enabled
 
@@ -789,6 +831,11 @@ class OpenDiscoApp(toga.App):
             elif self.caps["platform"] == "windows":
                 import System.Windows.Forms as WinForms
                 WinForms.Clipboard.SetText(text)
+            elif self.caps["platform"] == "linux":
+                from gi.repository import Gdk, Gtk
+                board = Gtk.Clipboard.get(Gdk.SELECTION_CLIPBOARD)
+                board.set_text(text, -1)
+                board.store()
             else:
                 raise NotImplementedError
             self.status.text = f"Copied {what} {text}"

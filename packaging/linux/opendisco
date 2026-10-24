@@ -1,0 +1,39 @@
+#!/bin/sh
+# OpenDisco, portable Linux version.
+#   ./opendisco            the app
+#   ./opendisco --quick    the command-line tool (any options: see --help)
+#
+# The command-line tool needs only Python 3.8 or newer. The app needs Toga for GTK, which this
+# sets up in its own Python environment the first time it opens: see README-LINUX.md for the
+# system packages that needs.
+set -e
+HERE="$(cd "$(dirname "$(readlink -f "$0")")" && pwd)"
+export PYTHONPATH="$HERE/src${PYTHONPATH:+:$PYTHONPATH}"
+PYTHON="${PYTHON:-python3}"
+
+if [ "$#" -gt 0 ]; then
+    exec "$PYTHON" -m opendisco "$@"
+fi
+
+TOGA="toga-gtk==0.5.7"
+ENV="${XDG_DATA_HOME:-$HOME/.local/share}/opendisco/python"
+if [ ! -f "$ENV/.ready-$TOGA" ]; then
+    if ! "$PYTHON" -c 'import sys; sys.exit(sys.version_info < (3, 11))'; then
+        echo "The app needs Python 3.11 or newer (this is $("$PYTHON" -V 2>&1))." >&2
+        echo "The command-line tool still works: $0 --help" >&2
+        exit 1
+    fi
+    echo "Setting up the app's Python environment in $ENV (first time only, a minute or two)..."
+    rm -rf "$ENV"
+    # System site-packages, so a new enough PyGObject from the distro is used instead of compiled.
+    if ! { "$PYTHON" -m venv --system-site-packages "$ENV" &&
+           "$ENV/bin/python" -m pip install --quiet --disable-pip-version-check "$TOGA"; }; then
+        rm -rf "$ENV"
+        echo >&2
+        echo "Couldn't set up Toga. Install the packages README-LINUX.md lists for your distro," >&2
+        echo "then run this again. The command-line tool works without them: $0 --help" >&2
+        exit 1
+    fi
+    touch "$ENV/.ready-$TOGA"
+fi
+exec "$ENV/bin/python" -m opendisco

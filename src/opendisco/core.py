@@ -662,9 +662,13 @@ class Device:
 
     @property
     def web_port(self) -> int | None:
-        """The web UI port the device reports in UBNT discovery."""
+        """The HTTPS web UI port the device reports in UBNT discovery. Flag bit 0 marks the port
+        as the web UI: a UniFi Express sends 0x0001 with 443, while a UCG Fiber sends 0x0000 with
+        7080, which nothing outside answers on."""
         webui = self.info.get("webui")
-        return (webui.get("port") or None) if isinstance(webui, dict) else None
+        if isinstance(webui, dict) and webui.get("port") and webui.get("flags", 0) & 1:
+            return webui["port"]
+        return None
 
     @property
     def reported_ssh_port(self) -> int | None:
@@ -3820,7 +3824,8 @@ def _fmt_value(key: str, value) -> str:
         return "yes" if value else "no"
     if isinstance(value, dict):
         if key == "webui" and "port" in value:
-            return f"port {value['port']}" + (f" (flags 0x{value['flags']:04x})" if value.get("flags") else "")
+            web = " (the web UI)" if value.get("flags", 0) & 1 else " (not marked as the web UI)"
+            return f"port {value['port']}, flags 0x{value.get('flags', 0):04x}{web}"
         bits = [str(value[k]) for k in ("name", "type") if value.get(k)]
         if "plugged" in value:
             bits.append("link up" if value["plugged"] else "no link")

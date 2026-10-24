@@ -1,0 +1,34 @@
+# Changelog
+
+## 1.3.1
+
+- Renamed to OpenDisco.
+- Popup windows (SSH login, administrator password, hidden devices) open centred over the
+  app's window, on whichever screen it's on.
+- Open Web UI uses the port the device says when a deep check found nothing answering.
+- Linux: a .deb for Ubuntu 24.04, an .rpm for Fedora 44 and a portable .tar.gz, and the
+  right-click menu and copying work there too.
+- The default networks list is just 192.168.1.0/24, Ubiquiti's factory subnet.
+
+## 1.3.0
+
+- Right-click a device (or use the Device menu): Open Web UI, Open SSH, Ping, Rescan device,
+  Copy IP/MAC, Forget SSH key, Hide device.
+- Terminal tab: SSH and ping sessions that keep running per device. SSH host keys are pinned
+  to each device's MAC, and old airOS crypto is allowed.
+- HTTPS and SSH ports come from what each device reports (discovery, HTTP redirect, mDNS,
+  UPnP), with no ports to enter. A port that differs from the rest of your gear is flagged as
+  a likely typo.
+- Hidden devices.
+
+## 1.2.0
+
+- Packets tab: each device's discovery packets, decoded and checked for damage.
+- Missed-reply counting, and interface and checksum error counters.
+- Sharp tab labels after dragging the divider.
+- The unicast sweep reaches UniFi OS gear (it ignores probes from port 10001).
+
+## 1.1.0
+
+- The first app release: a Mac and Windows GUI over the scanner.
+- Touch ID for sudo, and HTTPS/SSH port columns.
