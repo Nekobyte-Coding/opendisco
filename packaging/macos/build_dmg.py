@@ -67,6 +67,11 @@ def main() -> int:
     steps = [["update", "--update-resources"]] if (MIRROR / "build").exists() else [["create"]]
     steps += [["build"], ["package", "--adhoc-sign"]]
     for step in steps:
+        if step[0] == "package":
+            # pip writes the packages' command-line scripts with this machine's Python (and so its
+            # folders) on their first line; the app doesn't use them. Drop them before signing.
+            for scripts in (MIRROR / "build").glob("*/macos/app/*.app/Contents/Resources/app_packages/bin"):
+                shutil.rmtree(scripts)
         subprocess.run([str(briefcase), step[0], "macOS", *step[1:], "--no-input"], cwd=MIRROR, check=True)
 
     dmg = max((MIRROR / "dist").glob("*.dmg"), key=lambda p: p.stat().st_mtime)

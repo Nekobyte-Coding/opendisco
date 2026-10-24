@@ -81,6 +81,9 @@ def main() -> int:
                     "--platform", "win_amd64", "--python-version", major_minor, "--implementation", "cp",
                     "--only-binary=:all:", "--no-compile", f"toga-winforms=={TOGA_VERSION}",
                     f"pywinpty=={PYWINPTY_VERSION}"], check=True)
+    # pip also writes the packages' command-line scripts for the Python running this build (their
+    # first line names it, and so the build machine's folders); Windows can't run them anyway.
+    shutil.rmtree(stage / "python" / "Lib" / "site-packages" / "bin", ignore_errors=True)
 
     # 3. The app, plus a command-line launcher: "opendisco.cmd --quick" works like ./opendisco.py
     shutil.copytree(ROOT / "src" / "opendisco", stage / "app" / "opendisco",
