@@ -82,7 +82,8 @@ def build_system_package(fmt: str, arch: str, out: Path, version: str) -> Path:
     name = f"opendisco-build-{fmt}-{arch}"
     subprocess.run(["docker", "rm", "-f", name], capture_output=True)
     print(f"--- {image} ({arch}): Briefcase {briefcase}", flush=True)
-    docker("run", "-d", "--name", name, "--platform", f"linux/{arch}", "--cpuset-cpus", "0,1",
+    emulated = ["--cpuset-cpus", "0,1"] if sys.platform == "darwin" else []  # see the notes above
+    docker("run", "-d", "--name", name, "--platform", f"linux/{arch}", *emulated,
            image, "sleep", "infinity", stdout=subprocess.DEVNULL)
     try:
         docker("exec", name, "mkdir", "-p", "/src")
@@ -96,8 +97,9 @@ def build_system_package(fmt: str, arch: str, out: Path, version: str) -> Path:
         docker("exec", name, "sh", "-c", install.format(requires=" ".join(requires)))
         docker("exec", name, "sh", "-c",
                f"python3 -m venv /briefcase && /briefcase/bin/pip install -q briefcase=={briefcase} && cd /src && "
-               "for step in create build 'package --adhoc-sign'; do "
-               "/briefcase/bin/briefcase $step linux system --no-input || exit 1; done")
+               "for step in create build package; do "
+               "/briefcase/bin/briefcase $step linux system $([ $step = package ] && echo --adhoc-sign) --no-input "
+               "|| exit 1; done")
         made = docker("exec", name, "sh", "-c", f"ls /src/dist/*.{fmt}", capture_output=True,
                       text=True).stdout.split()
         dest = out / (f"{NAME}-{version}-{label}_{arch}.deb" if fmt == "deb"
