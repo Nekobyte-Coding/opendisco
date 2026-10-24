@@ -91,15 +91,36 @@ They don't search every port: a port that no device mentions and that isn't one 
 can't be found. The command line also takes your standard ports, `--https-port 8443
 --ssh-port 2222`, and warns about any device that isn't on one of them.
 
-**What each platform can do.** Phones and Windows don't allow capturing traffic, adding
-addresses or tagging VLANs, so the app only offers the modes the platform supports:
+**What each platform can do.** Phones don't allow apps to capture traffic, add addresses or
+tag VLANs, so the app only offers the modes the platform supports:
 
-| | Quick / Full scan | Sniff the wire | Temporary addresses, Trunk VLANs, Direct |
-|---|---|---|---|
-| macOS, Linux | yes | yes | yes |
-| Windows | yes | no | no |
-| Android | yes, broadcast and subnet sweep | no | no |
-| iPhone | subnet sweep; broadcast needs Apple's multicast entitlement | no | no |
+| | Quick / Full scan | Sniff the wire | Temporary addresses | Trunk VLANs, Direct |
+|---|---|---|---|---|
+| macOS, Linux | yes | yes | yes | yes |
+| Windows | yes | yes, with Npcap | yes, as administrator (Windows 10 2004 or later) | listens for VLANs; probes untagged only |
+| Android | yes, broadcast and subnet sweep | no | no | no |
+| iPhone | subnet sweep; broadcast needs Apple's multicast entitlement | no | no | no |
+
+**Windows details:**
+- **Npcap** captures packets for Sniff, Trunk VLANs and Direct. Its license doesn't allow
+  bundling it, so the installer has an optional **Npcap** step (ticked when it's missing, like
+  Wireshark's). The step downloads the current official installer from npcap.com, checks that
+  it's signed by the Nmap Project, and starts it for you to click through. The app offers the
+  same the first time you pick one of those modes. Wireshark installs Npcap too. Npcap's free
+  license covers 5 computers (virtual machines count); more need Npcap OEM from the Nmap
+  Project. Leave "Restrict Npcap driver's access to Administrators only" unticked, so
+  sniffing works without administrator rights.
+- **Temporary addresses** (Probe my networks, Keep addresses, Trunk VLANs, Direct) change
+  your network adapter, which Windows only lets administrators do. The app offers to restart
+  as administrator (one UAC prompt, which Windows Hello can approve). On the command line, run
+  it from an Administrator terminal. Addresses are added with `netsh`, alongside DHCP's
+  (DHCP/static coexistence, Windows 10 2004 and later, put back afterwards), and only until
+  the next restart, so none can be left behind.
+- **VLANs:** Windows can't tag VLANs itself; only some network cards' own drivers (Intel
+  PROSet, Realtek) or a Hyper-V virtual switch can. So Trunk VLANs lists the VLANs and gear
+  it hears, and probes the untagged network. Many network card drivers also remove VLAN tags
+  before Npcap sees them: if no tagged VLANs show up on a trunk, look for a "Packet Priority
+  & VLAN" setting on the adapter (Device Manager > Advanced) and turn VLAN off there.
 
 ### Right-click menu and the Terminal tab
 

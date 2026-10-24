@@ -30,6 +30,7 @@ VIAddVersionKey "LegalCopyright" "Copyright (c) 2026 ${PUBLISHER}"
 
 !include "MUI2.nsh"
 !include "LogicLib.nsh"
+!include "Sections.nsh"
 !define MUI_ICON "${ICON}"
 !define MUI_UNICON "${ICON}"
 !define MUI_WELCOMEPAGE_TEXT "This installs ${APPNAME} ${VERSION}, which finds and diagnoses Ubiquiti and other WISP gear on your network.$\r$\n$\r$\nNo administrator rights are needed. The first time it scans, Windows Firewall may ask about Python: allow it on private networks so devices' replies get through."
@@ -38,6 +39,7 @@ VIAddVersionKey "LegalCopyright" "Copyright (c) 2026 ${PUBLISHER}"
 !define MUI_FINISHPAGE_RUN_TEXT "Open ${APPNAME}"
 
 !insertmacro MUI_PAGE_WELCOME
+!insertmacro MUI_PAGE_COMPONENTS
 !insertmacro MUI_PAGE_DIRECTORY
 !insertmacro MUI_PAGE_INSTFILES
 !insertmacro MUI_PAGE_FINISH
@@ -45,7 +47,8 @@ VIAddVersionKey "LegalCopyright" "Copyright (c) 2026 ${PUBLISHER}"
 !insertmacro MUI_UNPAGE_INSTFILES
 !insertmacro MUI_LANGUAGE "English"
 
-Section "Install"
+Section "${APPNAME}" SecApp
+  SectionIn RO
   ; Until 1.3.1 the app was called OpenDisco: remove that install so there's only one. Its
   ; uninstaller leaves your data, which the app copies to its new folder the first time it runs.
   ReadRegStr $0 HKCU "Software\Microsoft\Windows\CurrentVersion\Uninstall\${OLDNAME}" "UninstallString"
@@ -78,6 +81,33 @@ Section "Install"
   WriteRegDWORD HKCU "${UNINSTKEY}" "NoModify" 1
   WriteRegDWORD HKCU "${UNINSTKEY}" "NoRepair" 1
 SectionEnd
+
+; Npcap's license doesn't allow bundling it, so this fetches the official installer from npcap.com,
+; checks it's signed by the Nmap Project, and starts it for you to click through (it asks for
+; administrator rights itself). Ticked when Npcap isn't installed yet, like Wireshark does.
+Section /o "Npcap (packet capture for Sniff, Trunk VLANs and Direct)" SecNpcap
+  DetailPrint "Getting Npcap from npcap.com..."
+  nsExec::ExecToLog 'powershell -NoProfile -ExecutionPolicy Bypass -File "$INSTDIR\app\opendisco\resources\get-npcap.ps1"'
+  Pop $0
+  ${If} $0 != 0
+    MessageBox MB_ICONEXCLAMATION|MB_OK "Npcap wasn't installed (no internet, or its installer was cancelled). \
+      The app offers it again the first time you sniff, or get it from npcap.com."
+  ${EndIf}
+SectionEnd
+
+!insertmacro MUI_FUNCTION_DESCRIPTION_BEGIN
+  !insertmacro MUI_DESCRIPTION_TEXT ${SecApp} "The app, with its own copy of Python."
+  !insertmacro MUI_DESCRIPTION_TEXT ${SecNpcap} "Downloads Npcap from npcap.com and starts its installer. Needed only \
+    for capturing packets: Sniff the wire, Trunk VLANs and Direct to a device. Free for up to 5 computers."
+!insertmacro MUI_FUNCTION_DESCRIPTION_END
+
+Function .onInit
+  ; A 32-bit installer sees the real System32 as Sysnative.
+  ${IfNot} ${FileExists} "$WINDIR\Sysnative\Npcap\wpcap.dll"
+  ${AndIfNot} ${FileExists} "$WINDIR\System32\Npcap\wpcap.dll"
+    !insertmacro SelectSection ${SecNpcap}
+  ${EndIf}
+FunctionEnd
 
 Section "Uninstall"
   Delete "$SMPROGRAMS\${APPNAME}.lnk"

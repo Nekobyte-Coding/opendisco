@@ -67,7 +67,11 @@ class OpenDiscoApp(toga.App):
     def startup(self):
         self.caps = core.capabilities()
         self.caps["vlans"] = self.caps["aliases"] and self.caps["listen"]
-        self.modes = [m for m in MODES if m[3] is None or self.caps.get(m[3])]
+        offered = dict(self.caps)
+        if self.caps["platform"] == "windows":  # listed before Npcap is installed: starting one offers it
+            offered.update(listen=True, vlans=self.caps["aliases"])
+        self.modes = [m for m in MODES if m[3] is None or offered.get(m[3])]
+        self.offers_listening = offered["listen"]
         self.result = None  # the last finished scan
         self.live_inv = None  # the inventory of the scan that's running
         self.running = False
@@ -122,7 +126,7 @@ class OpenDiscoApp(toga.App):
             tabs.append(("Terminal", self.term.box))
         tabs += [("On the wire", self.wire), ("Notes", self.notes), ("Log", self.log)]
         if self.caps["aliases"]:
-            self.networks = toga.MultilineTextInput(value=self.networks_path.read_text(), style=mono)
+            self.networks = toga.MultilineTextInput(value=self.networks_path.read_text(encoding="utf-8"), style=mono)
             networks_box = toga.Box(style=Pack(direction=COLUMN, flex=1, gap=6), children=[
                 toga.Label(f"Networks probed through temporary addresses ({self.networks_path})"),
                 self.networks,
@@ -142,7 +146,7 @@ class OpenDiscoApp(toga.App):
             controls += [toga.Label("Port"), self.port]
         controls += [self.start_button, self.stop_button, self.mode_help]
         options = [self.aliases, self.deep] if not mobile else [self.deep]
-        if self.caps["listen"]:
+        if self.offers_listening:
             options += [toga.Label("Listen (s)"), self.listen]
         if not mobile:
             options += [toga.Box(style=Pack(flex=1)), self.hidden_button]
@@ -172,15 +176,17 @@ class OpenDiscoApp(toga.App):
             self._install_context_menu()
         # macOS re-centres the tab labels whenever it re-tiles the tab view (window resizes,
         # dragging the divider, tab changes, moving to another display), so snap a moment later.
-        self.main_window.on_resize = lambda *args, **kwargs: self.loop.call_later(0.05, self._align_tab_labels)
+        self.main_window.on_resize = lambda *args, **kwargs: (self.loop.call_later(0.05, self._align_tab_labels),
+                                                              self.loop.call_later(0.05, self._size_columns))
         self.tabs.on_select = lambda *args, **kwargs: self.loop.call_later(0.05, self._align_tab_labels)
         self._watch_tab_labels()
         self.loop.call_later(0.3, self._align_tab_labels)
+        self.loop.call_later(0.5, self._size_columns)
 
     # -- set-up helpers -----------------------------------------------------
     def _load_settings(self) -> dict:
         try:
-            return json.loads(self.settings_path.read_text())
+            return json.loads(self.settings_path.read_text(encoding="utf-8"))
         except (OSError, ValueError):
             return {}
 
@@ -188,7 +194,7 @@ class OpenDiscoApp(toga.App):
         try:
             self.settings_path.parent.mkdir(parents=True, exist_ok=True)
             self.settings_path.write_text(json.dumps({k: v for k, v in self.settings.items()
-                                                      if k in ("hidden", "ssh_user")}, indent=1))
+                                                      if k in ("hidden", "ssh_user")}, indent=1), encoding="utf-8")
         except OSError:
             pass
 
@@ -239,6 +245,24 @@ class OpenDiscoApp(toga.App):
                     sub.setFrameOrigin(NSPoint(sub.frame.origin.x + dx, sub.frame.origin.y + dy))
         except Exception:
             pass  # purely cosmetic
+
+    COLUMN_WEIGHTS = (1.1, 0.5, 0.9, 1.3, 1.0, 1.4, 0.9, 0.7, 0.6, 0.7, 1.1, 1.3)  # IP ... Status
+
+    def _size_columns(self, *args, **kwargs):
+        """Windows: toga sizes the table's columns once, before the window has its width, which left
+        them as slivers with no headings. Spread them over the table's width instead."""
+        if self.caps["platform"] != "windows":
+            return
+        try:
+            view = self.table._impl.native
+            width = view.ClientSize.Width
+            if width < 200:
+                return
+            weights = self.COLUMN_WEIGHTS[:view.Columns.Count]
+            for column, weight in zip(view.Columns, weights):
+                column.Width = int(width * weight / sum(weights))
+        except Exception:
+            pass  # cosmetic
 
     def _watch_tab_labels(self):
         """Snap the tab labels after every frame change of the tab view or its label strip, and
@@ -376,8 +400,44 @@ class OpenDiscoApp(toga.App):
             args += ["--no-mdns", "--no-ssdp", "--no-arp"]
         return args
 
+    async def _windows_ready(self) -> bool:
+        """Windows: Npcap for the listening modes, administrator rights for temporary addresses.
+        Offers to get each; False when the scan can't start yet."""
+        from opendisco import winnet
+        _name, _description, _flags, needs = self._selected_mode()
+        if needs in ("listen", "vlans") and not self.caps["listen"]:
+            if not await self.main_window.dialog(toga.QuestionDialog(
+                    "Npcap is needed",
+                    "Sniffing, Trunk VLANs and Direct capture packets through Npcap, which isn't installed. "
+                    "Install it now? This downloads the official installer from npcap.com, checks that it's "
+                    "signed by the Nmap Project, and starts it for you to click through (Windows will ask "
+                    "for permission). Npcap's free license covers 5 computers.")):
+                return False
+            self.status.text = "Installing Npcap: follow its installer…"
+            self.spinner.start()
+            error = await asyncio.get_running_loop().run_in_executor(None, winnet.install_npcap)
+            self.spinner.stop()
+            self.caps["listen"] = winnet.npcap() is not None
+            self.caps["vlans"] = self.caps["aliases"] and self.caps["listen"]
+            if error:
+                self.status.text = f"Npcap: {error}"
+                return False
+            self.status.text = "Npcap is installed."
+        if ("-a" in self._args() or needs == "vlans") and not winnet.is_admin():
+            if await self.main_window.dialog(toga.QuestionDialog(
+                    "Administrator rights needed",
+                    "Temporary addresses change your network adapter, which Windows only lets administrators "
+                    "do. Restart OpenDisco as administrator? Windows will ask first; then start "
+                    "the scan again.")):
+                if winnet.relaunch_as_admin(["-m", "opendisco"]):
+                    self.request_exit()
+            return False
+        return True
+
     async def on_start(self, widget, **kwargs):
         if self.running:
+            return
+        if self.caps["platform"] == "windows" and not await self._windows_ready():
             return
         try:
             opts = core.parse_args(self._args())
@@ -948,11 +1008,11 @@ class OpenDiscoApp(toga.App):
         except ValueError as e:
             self.status.text = f"Networks line {n}: {e}"
             return
-        self.networks_path.write_text(self.networks.value)
+        self.networks_path.write_text(self.networks.value, encoding="utf-8")
         self.status.text = f"Saved {self.networks_path}"
 
     def on_reset_networks(self, widget, **kwargs):
-        self.networks.value = Path(core.DEFAULT_NETWORKS_FILE).read_text()
+        self.networks.value = Path(core.DEFAULT_NETWORKS_FILE).read_text(encoding="utf-8")
 
     def handle_exit(self, app, **kwargs):
         core.STOP.set()

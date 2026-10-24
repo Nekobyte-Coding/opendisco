@@ -81,9 +81,14 @@ def capabilities() -> dict:
     tag VLANs; iOS also blocks broadcasts unless Apple grants the app the multicast entitlement."""
     plat = platform_name()
     unix_desktop = plat in ("macos", "linux")
-    return {"platform": plat, "mobile": plat in ("ios", "android"),
+    caps = {"platform": plat, "mobile": plat in ("ios", "android"),
             "aliases": unix_desktop, "listen": unix_desktop and bool(shutil.which("tcpdump")),
-            "arp": plat in ("macos", "linux", "windows")}
+            "vlan_tagging": unix_desktop, "arp": plat in ("macos", "linux", "windows")}
+    if plat == "windows":  # netsh adds addresses (as administrator); Npcap captures
+        from opendisco import winnet
+        caps["aliases"] = winnet.supports_temporary_addresses()
+        caps["listen"] = winnet.npcap() is not None
+    return caps
 
 # Ubiquiti IEEE OUIs, from Wireshark's manuf database (Oct 2026). Add new ones with --oui.
 UBNT_OUIS = {
@@ -1031,7 +1036,9 @@ def _parse_ipconfig(text: str) -> list:
 
 def local_interfaces() -> list:
     if IS_WINDOWS:
-        ifaces = _parse_ipconfig(_run(["ipconfig"]))
+        from opendisco import winnet
+        ifaces = ([Iface(name, ip, prefix) for name, ip, prefix in winnet.ipv4_addresses()]
+                  or _parse_ipconfig(_run(["ipconfig"])))
     else:
         ifaces = _parse_ip_addr(_run(["ip", "-o", "-4", "addr", "show"])) or _parse_ifconfig(_run(["ifconfig"]))
     ifaces = [i for i in ifaces if not i.ip.startswith("127.")]
@@ -1087,7 +1094,11 @@ def active_links(all_ifaces) -> list:
 def hardware_links(all_ifaces) -> list:
     """Every Ethernet/Wi-Fi port, with .active saying whether it has link."""
     links = []
-    if sys.platform == "darwin":
+    if IS_WINDOWS:
+        from opendisco import winnet
+        links = [Link(a["name"], a["description"] or ("Wi-Fi" if a["wireless"] else "Ethernet"), a["wireless"],
+                      active=a["up"]) for a in winnet.adapters()]
+    elif sys.platform == "darwin":
         status = _parse_ifconfig_status(_run(["ifconfig"]))
         for name, label in _parse_hardware_ports(_run(["networksetup", "-listallhardwareports"])).items():
             if name in status and not _SKIP_PORTS.search(label):
@@ -1116,6 +1127,10 @@ def hardware_links(all_ifaces) -> list:
 
 def link_media(name: str) -> str:
     """Negotiated speed/duplex, e.g. "1000baseT full-duplex"."""
+    if IS_WINDOWS:
+        from opendisco import winnet
+        a = next((a for a in winnet.adapters() if a["name"] == name), None)
+        return " ".join(x for x in (a["speed"], a["duplex"]) if x) if a else ""
     if sys.platform == "darwin":
         m = re.search(r"media: \S+(?: <[^>]*>)? \(([^)<]+?)\s*(?:<([^>]*)>)?\)", _run(["ifconfig", name]))
         return " ".join(x for x in (m.group(1), m.group(2)) if x) if m else ""
@@ -1136,7 +1151,10 @@ def local_macs() -> set:
     """This computer's own MAC addresses, so captures can ignore its own frames. On macOS
     networksetup still reports them when Local Network privacy masks ifconfig's."""
     macs = set()
-    if os.path.isdir("/sys/class/net"):
+    if IS_WINDOWS:
+        from opendisco import winnet
+        macs = {norm_mac(a["mac"]) for a in winnet.adapters() if a["mac"]}
+    elif os.path.isdir("/sys/class/net"):
         for name in os.listdir("/sys/class/net"):
             try:
                 with open(f"/sys/class/net/{name}/address") as f:
@@ -1162,6 +1180,15 @@ def wifi_association(iface: str, sudo) -> dict:
     """SSID and BSSID of the access point a Wi-Fi interface is joined to. macOS hides both
     from ordinary programs (they need Location Services); `wdutil info` run as root may not."""
     info = {"iface": iface}
+    if IS_WINDOWS:
+        from opendisco import winnet
+        found = winnet.wifi_association(iface)
+        if found.get("bssid"):
+            info["bssid"] = norm_mac(found["bssid"])
+            info["vendor"] = bssid_vendor(info["bssid"])
+        if found.get("ssid"):
+            info["ssid"] = found["ssid"]
+        return info
     if sys.platform == "darwin":
         out = _run((["sudo", "-n"] if sudo else []) + ["wdutil", "info"])
         bssid = re.search(r"^\s*BSSID\s*:\s*((?:[0-9A-Fa-f]{1,2}:){5}[0-9A-Fa-f]{1,2})\s*$", out, re.M)
@@ -1352,7 +1379,7 @@ def counter_notes(changes: dict) -> list:
                     if "collisions" in errors else
                     "damaged frames point to the cable or a connector, the switch port, or a speed/duplex mismatch")
             notes.append(("warn", f"{name} counted {counter_text(errors)} during this scan: {hint}."))
-        elif up.get("drops"):
+        elif up.get("drops") and name != "all adapters":  # Windows' total also counts ignored protocols
             notes.append(("note", f"{name} dropped {up['drops']} packet(s) during this scan."))
     if changes.get("system"):
         notes.append(("warn", f"This computer counted {counter_text(changes['system'])} during this scan (all "
@@ -1806,20 +1833,24 @@ def scoped_broadcast_socket(iface: Iface, port: int):
 
     A plain send to 255.255.255.255 only goes out of the interface with the default route, yet
     it's the one broadcast that old gear on *another* subnet accepts (it drops other subnets'
-    directed broadcasts). macOS scopes the socket with IP_BOUND_IF; Linux sends a limited
-    broadcast out of whichever interface owns the address the socket is bound to. Port 10001
-    is used when it can be shared, since some legacy gear only answers probes from it."""
-    if IS_WINDOWS or iface.prefix >= 32 or iface.ip.startswith("127."):
+    directed broadcasts). macOS scopes the socket with IP_BOUND_IF; Linux and Windows send a
+    limited broadcast out of whichever interface owns the address the socket is bound to, and
+    replies to it arrive on it, which says which interface they came in on. Port 10001 is used
+    when it can be shared, since some legacy gear only answers probes from it."""
+    if iface.prefix >= 32 or iface.ip.startswith("127."):
         return None
     s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM, socket.IPPROTO_UDP)
     try:
         s.setsockopt(socket.SOL_SOCKET, socket.SO_BROADCAST, 1)
-        s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-        if sys.platform == "darwin":
+        if IS_WINDOWS:  # Windows sends it out of the adapter that owns the socket's address;
+            addr = iface.ip  # SO_REUSEADDR would let it take the port from another program
+        elif sys.platform == "darwin":
+            s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
             s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEPORT, 1)
             s.setsockopt(socket.IPPROTO_IP, IP_BOUND_IF, socket.if_nametoindex(iface.name))
             addr = ""
         else:
+            s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
             addr = iface.ip
         try:
             s.bind((addr, port))
@@ -1914,6 +1945,7 @@ class Scanner:
         self.scoped: dict = {}  # interface -> socket that sends 255.255.255.255 out of it
         self.pktinfo_socks: set = set()  # sockets that report which interface a packet came in on
         self.last_ingress: str | None = None
+        self.socket_iface: dict = {}  # scoped socket -> its interface, for replies to it
         self.sweep_hosts: list = []
         self.sweep_pass, self.sweep_i, self.sweep_last, self.sweep_pause_until = 3, 0, 0.0, 0.0
 
@@ -1972,6 +2004,7 @@ class Scanner:
                 s = scoped_broadcast_socket(i, self.port)
                 if s:
                     out[i.name] = s
+                    self.socket_iface[s] = i.name
                     self.handlers[s] = lambda d, a: self._on_ubnt(d, a, "ubnt")
                     if _enable_pktinfo(s):
                         self.pktinfo_socks.add(s)
@@ -1980,6 +2013,7 @@ class Scanner:
     def _close_scoped(self) -> None:
         for s in self.scoped.values():
             self.handlers.pop(s, None)
+            self.socket_iface.pop(s, None)
             self.pktinfo_socks.discard(s)
             s.close()
         self.scoped = {}
@@ -2067,7 +2101,9 @@ class Scanner:
         pkt = parse_packet(data)
         if addr[0] in self.local_ips and (pkt is None or pkt.is_request):
             return  # our own probes, looped back
-        iface = self.last_ingress or ""
+        # Where the OS can't say which interface it came in on (Windows), the local subnet it came from
+        ingress = self.last_ingress or next((i.name for i in self.ifaces if _in_any(addr[0], [i.network])), None)
+        iface = ingress or ""
         rec = PacketRecord(time.time(), "UBNT", f"{addr[0]}:{addr[1]}", via, iface,
                            self.vlan_map.get(iface, (0, ""))[0] if iface else None, data,
                            problems=check_packet(data))
@@ -2087,10 +2123,10 @@ class Scanner:
             dev.direct = True
         if not dev.alias:
             dev.alias = next((ctx for net, ctx in self.alias_routes if _in_any(addr[0], [net])), {})
-        if self.last_ingress:
-            dev.seen_on.add(self.last_ingress)
+        if ingress:
+            dev.seen_on.add(ingress)
             if dev.vlan is None:  # first interface it answered on: a VLAN interface or untagged
-                dev.vlan, dev.vlan_parent = self.vlan_map.get(self.last_ingress, (0, self.last_ingress))
+                dev.vlan, dev.vlan_parent = self.vlan_map.get(ingress, (0, ingress))
         if self.on_change:
             self.on_change(dev, changes)
 
@@ -2104,7 +2140,7 @@ class Scanner:
                     self.last_ingress = _ingress_name(anc)
                 else:
                     data, addr = sock.recvfrom(65535)
-                    self.last_ingress = None
+                    self.last_ingress = self.socket_iface.get(sock)
             except (BlockingIOError, InterruptedError):
                 return
             except ConnectionResetError:  # Windows reports ICMP port-unreachable here
@@ -2364,11 +2400,33 @@ def _pump(stream, buf: bytearray, cap: int = 64 * 1024 * 1024) -> None:
 TCPDUMP_ARGS = ["-w", "-", "-U", "-s", "1600", "-c", "200000", "ether multicast"]
 
 
+def write_pcap(path: str, frames) -> None:
+    """Frames as a pcap file Wireshark opens (Ethernet, microsecond timestamps of now)."""
+    now = time.time()
+    with open(path, "wb") as f:
+        f.write(struct.pack("<IHHiIII", 0xA1B2C3D4, 2, 4, 0, 0, SNAPLEN, 1))
+        for frame in frames:
+            f.write(struct.pack("<IIII", int(now), int(now % 1 * 1e6), len(frame), len(frame)) + frame)
+
+
 def capture_frames(names, seconds: float, sudo, log, on_frames=None, stop=None, pcap=None) -> dict:
-    """Capture broadcast/multicast frames on every interface at once with tcpdump.
-    on_frames(name, frames) is called as frames arrive; stop() can end the capture early;
-    pcap saves each interface's capture as <pcap>-<interface>.pcap for Wireshark.
+    """Capture broadcast/multicast frames on every interface at once with tcpdump (Npcap on
+    Windows). on_frames(name, frames) is called as frames arrive; stop() can end the capture
+    early; pcap saves each interface's capture as <pcap>-<interface>.pcap for Wireshark.
     Returns {interface: (frames, error)}."""
+    if IS_WINDOWS:
+        from opendisco import winnet
+        got = winnet.capture(list(names), seconds, on_frames, lambda: bool(stop and stop()) or STOP.is_set(),
+                             SNAPLEN)
+        for name, (frames, _err) in got.items():
+            if pcap and frames:
+                path = f"{pcap}-{re.sub(r'[^A-Za-z0-9._-]+', '_', name)}.pcap"
+                try:
+                    write_pcap(path, frames)
+                    log(f"  saved {path}")
+                except OSError as e:
+                    log(f"  couldn't save {path}: {e.strerror or e}")
+        return got
     running = {}
     for name in names:
         r = {"proc": None, "buf": bytearray(), "pos": 0, "reader": CaptureReader(), "frames": [], "err": ""}
@@ -2921,7 +2979,7 @@ def load_alias_targets(path, extra, error) -> list:
     specs = []
     if path:
         try:
-            with open(path) as f:
+            with open(path, encoding="utf-8") as f:
                 lines = f.read().splitlines()
         except OSError as e:
             error(f"can't read networks file {path}: {e.strerror or e}")
@@ -2961,7 +3019,7 @@ def sudo_uses_touch_id() -> bool:
         return False
     for path in ("/etc/pam.d/sudo_local", "/etc/pam.d/sudo"):
         try:
-            with open(path) as f:
+            with open(path, encoding="utf-8") as f:
                 if any("pam_tid.so" in line.split("#", 1)[0] for line in f):
                     return True
         except OSError:
@@ -3003,8 +3061,10 @@ class AliasManager:
 
     def __init__(self, log):
         self.log = log
-        self.active: list = []  # ("alias", iface, ip, prefix) / ("vlan", iface, parent, vid), in order made
+        # ("alias", iface, ip, prefix) / ("vlan", iface, parent, vid) / ("coexist", iface, was, 0), in order made
+        self.active: list = []
         self.used: set = set()  # (iface, ip) for every alias taken during this run
+        self.prepared: set = set()  # Windows adapters checked for DHCP/static coexistence
         if IS_WINDOWS or os.geteuid() == 0:
             self.sudo = []
         else:  # without a terminal (a GUI), sudo must never stop to ask: authorize() did that
@@ -3017,6 +3077,10 @@ class AliasManager:
     @staticmethod
     def command(iface: str, ip: str, prefix: int, add: bool) -> list:
         net = ipaddress.IPv4Network(f"{ip}/{prefix}", strict=False)
+        if IS_WINDOWS:  # store=active: gone at the next restart even if this run dies
+            if add:
+                return ["netsh", "interface", "ipv4", "add", "address", iface, ip, str(net.netmask), "store=active"]
+            return ["netsh", "interface", "ipv4", "delete", "address", iface, ip, "store=active"]
         if sys.platform == "darwin":
             if add:
                 return ["ifconfig", iface, "alias", ip, "netmask", str(net.netmask),
@@ -3054,6 +3118,12 @@ class AliasManager:
         return [n for n in (f"ubnt{vid}", f"ubnt{vid}b") if n not in taken][:1]
 
     def authorize(self) -> None:
+        if IS_WINDOWS:
+            from opendisco import winnet
+            if not winnet.is_admin():
+                raise SystemExit("error: temporary addresses need administrator rights on Windows: run it as "
+                                 "administrator (right-click > Run as administrator, or an Administrator terminal)")
+            return
         if self.sudo:
             authorize_sudo("Temporary IP aliases need administrator rights; sudo may ask for your password.",
                            self.log)
@@ -3064,7 +3134,7 @@ class AliasManager:
 
     def _load_state(self) -> list:
         try:
-            with open(ALIAS_STATE_FILE) as f:
+            with open(ALIAS_STATE_FILE, encoding="utf-8") as f:
                 raw = json.load(f)
         except (OSError, ValueError):
             return []
@@ -3072,7 +3142,7 @@ class AliasManager:
         for e in raw if isinstance(raw, list) else []:
             if isinstance(e, list) and len(e) == 3:  # older format: alias only
                 entries.append(("alias",) + tuple(e))
-            elif isinstance(e, list) and len(e) == 4 and e[0] in ("alias", "vlan"):
+            elif isinstance(e, list) and len(e) == 4 and e[0] in ("alias", "vlan", "coexist"):
                 entries.append(tuple(e))
         return entries
 
@@ -3080,7 +3150,7 @@ class AliasManager:
         try:
             if entries:
                 tmp = ALIAS_STATE_FILE + ".tmp"
-                with open(tmp, "w") as f:
+                with open(tmp, "w", encoding="utf-8") as f:
                     json.dump([list(e) for e in entries], f)
                 os.replace(tmp, ALIAS_STATE_FILE)
             elif os.path.exists(ALIAS_STATE_FILE):
@@ -3096,12 +3166,44 @@ class AliasManager:
 
     def _run(self, cmd) -> str | None:
         try:
-            r = subprocess.run(self.sudo + cmd, capture_output=True, text=True, timeout=30)
+            r = subprocess.run(self.sudo + cmd, capture_output=True, text=True, timeout=30, errors="replace",
+                               creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0) if IS_WINDOWS else 0)
         except (OSError, subprocess.SubprocessError) as e:
             return str(e)
         return None if r.returncode == 0 else ((r.stderr or r.stdout).strip() or f"exit status {r.returncode}")
 
+    def _coexist(self, iface: str) -> None:
+        """Windows refuses a static address on an adapter that uses DHCP unless DHCP/static
+        coexistence is on (Windows 10 2004 and later). Turn it on, and back off afterwards if
+        it was off; when Windows' wording can't be read, it's left on, which changes nothing."""
+        if iface in self.prepared:
+            return
+        self.prepared.add(iface)
+        m = re.search(r"coexistence\s*:\s*(\w+)", _run(["netsh", "interface", "ipv4", "show", "interface", iface]), re.I)
+        if m and m.group(1).lower() == "enabled":
+            return
+        entry = ("coexist", iface, "disabled", 0)
+        if m:
+            self._remember(entry)
+        err = self._run(["netsh", "interface", "ipv4", "set", "interface", iface, "dhcpstaticipcoexistence=enabled"])
+        if err:
+            self._forget(lambda e: e != entry)
+            self.log(f"  couldn't allow a static address next to DHCP on {iface}: {err}")
+        elif m:
+            self.active.append(entry)
+
+    def _restore_coexist(self, iface: str, was: str) -> None:
+        err = self._run(["netsh", "interface", "ipv4", "set", "interface", iface, f"dhcpstaticipcoexistence={was}"])
+        entry = ("coexist", iface, was, 0)
+        if not err:
+            self._forget(lambda e: e != entry)
+        if entry in self.active:
+            self.active.remove(entry)
+        self.prepared.discard(iface)
+
     def add(self, iface: str, ip: str, prefix: int) -> bool:
+        if IS_WINDOWS:
+            self._coexist(iface)
         entry = ("alias", iface, ip, prefix)
         self._remember(entry)  # write it down first so a crash can't leak it
         err = self._run(self.command(iface, ip, prefix, True))
@@ -3125,6 +3227,10 @@ class AliasManager:
 
     def create_vlan(self, parent: str, vid: int) -> str | None:
         """Create a tagged interface for `vid` on `parent`; returns its name."""
+        if IS_WINDOWS:
+            self.log(f"  VLAN {vid} on {parent}: heard, but not probed: Windows can't tag VLANs itself (only the "
+                     "network card's driver or a Hyper-V switch can)")
+            return None
         err = "no free interface name"
         for name in self.vlan_names(vid, (e[1] for e in self.active if e[0] == "vlan")):
             entry = ("vlan", name, parent, vid)
@@ -3160,6 +3266,8 @@ class AliasManager:
                 continue
             if entry[0] == "alias":
                 self.remove(*entry[1:])
+            elif entry[0] == "coexist":
+                self._restore_coexist(entry[1], entry[2])
             else:
                 self.destroy_vlan(*entry[1:])
 
@@ -3169,6 +3277,8 @@ class AliasManager:
             if kind == "alias":
                 self.log(f"Removing leftover alias {a}/{b} from {iface}")
                 self._run(self.command(iface, a, b, False))
+            elif kind == "coexist":
+                self._run(["netsh", "interface", "ipv4", "set", "interface", iface, f"dhcpstaticipcoexistence={a}"])
             else:
                 self.log(f"Removing leftover VLAN {b} interface {iface} (on {a})")
                 for cmd in self.vlan_commands(iface, a, b, False):
@@ -3207,7 +3317,7 @@ def run_alias_rounds(sc: Scanner, inv: Inventory, mgr: AliasManager, plans, opts
         added = [(t, ip) for t, ip in plan if mgr.add(link.name, ip, t.network.prefixlen)]
         if not added:
             return
-        time.sleep(0.5)  # let the new routes settle
+        time.sleep(3.0 if IS_WINDOWS else 0.5)  # let the new routes settle (Windows checks for duplicates first)
         nets = [t.network for t, _ in added]
         hosts = [] if opts.quick else [str(h) for t, ip in added for h in t.network.hosts() if str(h) != ip]
         sc.begin_alias_round([Iface(link.name, ip, t.network.prefixlen, link.label) for t, ip in added],
@@ -3371,7 +3481,7 @@ def print_interfaces(links, all_ifaces) -> None:
         addrs = ", ".join(f"{i.ip}/{i.prefix}" for i in link.addrs) or "link up, no IPv4 address"
         print(f"  {link.name:<8} {link.label:<28} {addrs}")
     if not links:
-        print("  none found" + (" (alias mode needs macOS or Linux)" if IS_WINDOWS else ""))
+        print("  none found")
     others = [i for i in all_ifaces if i.name not in {l.name for l in links}]
     if others:
         print(Style.bold("Other IPv4 interfaces") + " (VPNs, bridges...: probed, never given aliases)")
@@ -3977,6 +4087,8 @@ def render_packets(d: Device, inv: Inventory | None = None, counters: dict | Non
         for name in names:
             if name in counters.get("interfaces", {}):
                 up = counters["interfaces"][name]
+                if name == "all adapters":  # Windows' total drops also count protocols it just ignores
+                    up = {k: n for k, n in up.items() if k != "drops"}
                 row(name, f"during the scan: {counter_text(up)}" if up else "no errors or drops during the scan")
         if counters.get("system_read"):
             row("This computer", f"during the scan: {counter_text(counters['system'])}" if counters["system"]
@@ -4516,9 +4628,8 @@ def run_scan(opts, log, progress=None, on_inventory=None):
         return out
 
     if opts.alias_mode:
-        if IS_WINDOWS:
-            raise SystemExit("error: aliases and VLANs work on macOS and Linux only (Windows won't add a "
-                             "second address to a DHCP interface)")
+        if IS_WINDOWS and not capabilities()["aliases"]:
+            raise SystemExit("error: temporary addresses need Windows 10 version 2004 or later")
         base_targets = drop_overlaps(load_alias_targets(opts.networks if opts.use_networks_file else None,
                                                         opts.alias, lambda m: sys.exit(f"error: {m}")))
         if opts.direct:  # a factory-reset radio of any brand we know sits on its default subnet
@@ -4578,8 +4689,9 @@ def run_scan(opts, log, progress=None, on_inventory=None):
             raise SystemExit(128 + signum)  # unwinds through the finally that removes aliases
 
         if threading.current_thread() is threading.main_thread():  # a GUI scans in a worker thread
-            for sig in (signal.SIGTERM, signal.SIGHUP):
-                signal.signal(sig, exit_on_signal)
+            for name in ("SIGTERM", "SIGHUP", "SIGBREAK"):  # whichever this OS has
+                if hasattr(signal, name):
+                    signal.signal(getattr(signal, name), exit_on_signal)
 
     duration = max(opts.timeout, sc.sweep_seconds() + 2.5)
     what = []
@@ -4608,7 +4720,10 @@ def run_scan(opts, log, progress=None, on_inventory=None):
         listen_on = ports if opts.direct else list({l.name: l for l in (ports if opts.vlans else [])
                                                      + (links if opts.sniff else [])}.values())
         if listen_on and (opts.vlans or opts.direct or opts.sniff):
-            if not shutil.which("tcpdump"):
+            if not capabilities()["listen"]:
+                if IS_WINDOWS:
+                    from opendisco import winnet
+                    raise SystemExit(f"error: listening (--sniff, --vlans, --direct): {winnet.NPCAP_HELP}")
                 raise SystemExit("error: listening (--sniff, --vlans, --direct) needs tcpdump")
             sudo = mgr.sudo if mgr else AliasManager(log).sudo
             if not mgr and sudo:

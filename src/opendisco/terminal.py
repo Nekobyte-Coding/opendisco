@@ -319,8 +319,8 @@ function drop(id) {
 }
 function take() { const s = JSON.stringify(outbox); outbox.length = 0; return s; }
 new ResizeObserver(() => { if (current && S[current]) S[current].fit.fit(); }).observe(document.body);
-</script></body></html>""" % ((xterm / "xterm.css").read_text(), (xterm / "xterm.js").read_text(),
-                               (xterm / "addon-fit.js").read_text())
+</script></body></html>""" % ((xterm / "xterm.css").read_text(encoding="utf-8"), (xterm / "xterm.js").read_text(encoding="utf-8"),
+                               (xterm / "addon-fit.js").read_text(encoding="utf-8"))
 
 
 class TerminalPane:
