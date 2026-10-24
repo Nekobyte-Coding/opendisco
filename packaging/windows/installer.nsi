@@ -56,7 +56,16 @@ VIAddVersionKey "LegalCopyright" "Copyright (c) 2026 ${PUBLISHER}"
   ${If} $0 != ""
   ${AndIf} $1 != ""
     ExecWait '$0 /S _?=$1'
-    Delete "$1\Uninstall.exe"
+    ; Windows (Defender's scan) can hold the finished uninstaller for a moment: retry for 5s.
+    StrCpy $2 0
+    ${Do}
+      Delete "$1\Uninstall.exe"
+      ${IfNot} ${FileExists} "$1\Uninstall.exe"
+        ${Break}
+      ${EndIf}
+      Sleep 250
+      IntOp $2 $2 + 1
+    ${LoopUntil} $2 >= 20
     RMDir "$1"
   ${EndIf}
 !macroend
