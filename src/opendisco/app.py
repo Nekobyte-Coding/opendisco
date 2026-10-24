@@ -44,12 +44,16 @@ DEVICE_ACTIONS = [("web", "Open Web UI"), ("ssh", "Open SSH…"), ("ping", "Ping
 NO_SESSION = "Right-click a device to get started: Open SSH or Ping."
 # Where earlier versions kept their data, by the parts of the data folder's path that changed:
 # folder name now -> patterns for its earlier names. macOS names the folder after the app ID
-# (earlier IDs ended .opendisco or .ubnt-discover); Windows after the author (unset until 1.4.1,
-# so "Unknown") and the app's name; Linux after the app's name.
+# (earlier IDs ended .opendisco or .ubnt-discover); Windows after the publisher (until 1.4.1,
+# "Unknown") and the app's name; Linux after the app's name.
 LEGACY_FOLDERS = {"com.michaelfroehlke.opendisco": ("*.opendisco", "*.ubnt-discover"),
-                  "Michael Froehlke": ("Unknown",),
+                  "Nekobyte-Coding": ("Unknown",),
                   "OpenDisco": ("UBNT Discovery Reloaded", "UBNT Discover"),
                   "opendisco": ("ubnt-discover", "ubnt_discover")}
+
+# Windows keeps an app's files in %LOCALAPPDATA%\<publisher>\<app>; Toga would use the author's
+# name as the publisher.
+WINDOWS_PUBLISHER = "Nekobyte-Coding"
 
 _MENU_TARGET = None
 
@@ -76,6 +80,14 @@ def _menu_target_class():
 
 
 class OpenDiscoApp(toga.App):
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        paths = getattr(self.paths, "_impl", None)
+        if core.IS_WINDOWS and hasattr(paths, "platformdirs_args"):
+            toga_args = paths.platformdirs_args
+            paths.platformdirs_args = lambda: {**toga_args(), "appauthor": WINDOWS_PUBLISHER}
+            paths.__dict__.pop("_dirs", None)  # in case the folders were looked up already
+
     def startup(self):
         self.caps = core.capabilities()
         self.caps["vlans"] = self.caps["aliases"] and self.caps["listen"]
@@ -1116,6 +1128,6 @@ class OpenDiscoApp(toga.App):
 
 def main():
     # Author and version are given here because the Windows build has no package metadata: without
-    # them its About box showed no version and its data folder was named "Unknown".
+    # them its About box showed no version.
     return OpenDiscoApp("OpenDisco", "com.michaelfroehlke.opendisco", icon="resources/icon",
                         author="Michael Froehlke", version=__version__)

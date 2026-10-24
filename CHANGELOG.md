@@ -18,7 +18,7 @@ and known issues.
 - Fixed: on Windows, picking a Port whose adapter name has a space ("Ethernet 2", "Wi-Fi 2")
   scanned the adapter named by its first word, or none.
 - Fixed: on Windows, the About box showed no version, and saved data went into a folder named
-  "Unknown". It's now in `%LOCALAPPDATA%\Michael Froehlke\OpenDisco`, and 1.4.1 brings the
+  "Unknown". It's now in `%LOCALAPPDATA%\Nekobyte-Coding\OpenDisco`, and 1.4.1 brings the
   earlier data over.
 - Fixed: on Windows 11, the access point a Wi-Fi adapter is joined to wasn't named (Windows 11
   labels its BSSID "AP BSSID").

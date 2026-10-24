@@ -91,7 +91,7 @@ Installers are on the [Releases](https://github.com/Nekobyte-Coding/opendisco/re
 **Upgrading:** saved data (the networks file, hidden devices and SSH host keys) is retained
 with the new install and picked up the first time the new version opens. The Windows
 installer removes the earlier install; from 1.4.1 the Windows app keeps its data in
-`%LOCALAPPDATA%\Michael Froehlke\OpenDisco` (earlier, `%LOCALAPPDATA%\Unknown\OpenDisco`).
+`%LOCALAPPDATA%\Nekobyte-Coding\OpenDisco` (earlier, `%LOCALAPPDATA%\Unknown\OpenDisco`).
 Versions before 1.4.0 used a different app ID, so on a Mac such an app stays in
 Applications until deleted, on Linux its package stays until removed, and on Android the
 new version installs as a separate app.
