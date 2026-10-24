@@ -7,5 +7,5 @@ OpenDisco is an independent project. It isn't made, endorsed or supported by Ubi
 Ubiquiti, UniFi, airMAX, EdgeMAX, UISP, AmpliFi and WiFiman are trademarks of Ubiquiti Inc.,
 and other product names belong to their owners; they're used only to say what the tool works with.
 
-This product includes xterm.js (src/opendisco/resources/xterm), used under the MIT License; its
-copyright notices and license are in src/opendisco/resources/xterm/LICENSE.
+This product includes xterm.js, used under the MIT License; its copyright notices and license
+are in opendisco/resources/xterm/LICENSE.
