@@ -17,8 +17,8 @@ It comes two ways:
 
 ## The app
 
-- **Mac:** open `dist/OpenDisco-1.3.1.dmg` and drag the app to Applications.
-- **Windows:** run `dist/OpenDisco-1.3.1-setup.exe`. It installs for the current user
+- **Mac:** open `dist/OpenDisco-1.3.2.dmg` and drag the app to Applications.
+- **Windows:** run `dist/OpenDisco-1.3.2-setup.exe`. It installs for the current user
   (no admin rights), with Start menu and desktop shortcuts and an uninstaller in Apps.
   - **SmartScreen:** the installer isn't code-signed, so the first time Windows shows
     "Windows protected your PC": click **More info**, then **Run anyway**.

@@ -1,14 +1,20 @@
 # Changelog
 
+## 1.3.2
+
+- Fixed: a UCG Fiber (and any gear that does the same) showed port 7080 in the HTTPS column
+  with HTTPS-PORT warnings. Its discovery reply carries 7080 without the flag that marks the
+  web UI port, so that port is no longer used; its HTTPS port comes from its HTTP redirect.
+- Linux: a .deb for Ubuntu 24.04, an .rpm for Fedora 44 and a portable .tar.gz, and the
+  right-click menu and copying work there too.
+- The default networks list is just 192.168.1.0/24, Ubiquiti's factory subnet.
+
 ## 1.3.1
 
 - Renamed to OpenDisco.
 - Popup windows (SSH login, administrator password, hidden devices) open centred over the
   app's window, on whichever screen it's on.
 - Open Web UI uses the port the device says when a deep check found nothing answering.
-- Linux: a .deb for Ubuntu 24.04, an .rpm for Fedora 44 and a portable .tar.gz, and the
-  right-click menu and copying work there too.
-- The default networks list is just 192.168.1.0/24, Ubiquiti's factory subnet.
 
 ## 1.3.0
 

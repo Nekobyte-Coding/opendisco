@@ -74,8 +74,8 @@ def build_system_package(fmt: str, arch: str, out: Path, version: str) -> Path:
     """Run Briefcase natively inside a container of the target release."""
     image, label, install = TARGETS[fmt]
     project = tomllib.loads((ROOT / "pyproject.toml").read_text())
-    requires = project["tool"]["briefcase"]["app"]["opendisco"]["linux"]["system"][DISTRO_KEY[fmt]][
-        "system_requires"]
+    distro = project["tool"]["briefcase"]["app"]["opendisco"]["linux"]["system"][DISTRO_KEY[fmt]]
+    requires = distro["system_requires"] + distro["system_runtime_requires"]  # Briefcase checks both
     briefcase = subprocess.run([sys.executable, "-m", "pip", "show", "briefcase"], capture_output=True,
                                text=True).stdout
     briefcase = re.search(r"^Version: (\S+)", briefcase, re.M).group(1)  # the same Briefcase as here
