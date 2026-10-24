@@ -39,8 +39,10 @@ DEVICE_ACTIONS = [("web", "Open Web UI"), ("ssh", "Open SSH…"), ("ping", "Ping
                   ("copy_ip", "Copy IP address"), ("copy_mac", "Copy MAC address"), None,
                   ("forget", "Forget SSH key"), ("hide", "Hide device")]
 NO_SESSION = "Right-click a device to get started: Open SSH or Ping."
-# The data folder's name before 1.4.0, which renamed the app: folder name now -> earlier names.
-LEGACY_FOLDERS = {"com.michaelfroehlke.opendisco": ("com.michaelfroehlke.ubnt-discover",),
+# Where earlier versions kept their data, by the part of the data folder's path that changed:
+# folder name now -> patterns for its earlier names. macOS names the folder after the app ID
+# (earlier IDs ended .opendisco or .ubnt-discover); Windows and Linux after the app's name.
+LEGACY_FOLDERS = {"com.michaelfroehlke.opendisco": ("*.opendisco", "*.ubnt-discover"),
                   "OpenDisco": ("UBNT Discovery Reloaded", "UBNT Discover"),
                   "opendisco": ("ubnt-discover", "ubnt_discover")}
 
@@ -209,19 +211,20 @@ class OpenDiscoApp(toga.App):
             pass
 
     def _move_old_data(self):
-        """Versions before 1.4.0 kept the networks file, hidden devices and SSH keys in a folder
-        named after the app's earlier names (the app ID on macOS, its name on Windows and Linux):
-        bring them over once."""
+        """Earlier versions kept the networks file, hidden devices and SSH keys in a folder named
+        after the app's earlier names or app ID: bring them over once."""
         new = Path(self.paths.data)
         try:
             if new.is_dir() and any(new.iterdir()):
                 return
             for n, part in enumerate(new.parts):
-                for old_part in LEGACY_FOLDERS.get(part, ()):
-                    old = Path(*new.parts[:n], old_part, *new.parts[n + 1:])
-                    if old.is_dir():
-                        shutil.copytree(old, new, dirs_exist_ok=True)
-                        return
+                parent = Path(*new.parts[:n])
+                for pattern in LEGACY_FOLDERS.get(part, ()):
+                    for found in sorted(parent.glob(pattern)):
+                        old = Path(found, *new.parts[n + 1:])
+                        if found.name != part and old.is_dir():
+                            shutil.copytree(old, new, dirs_exist_ok=True)
+                            return
         except OSError:
             pass
 
