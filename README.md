@@ -22,8 +22,9 @@ It comes two ways:
 
 ## The app
 
-- **Mac:** open `dist/OpenDisco-1.4.0.dmg` and drag the app to Applications.
-- **Windows:** run `dist/OpenDisco-1.4.0-setup.exe`. It installs for the current user
+- **Mac:** open `dist/OpenDisco-1.4.0-macos-universal.dmg` (Apple silicon and Intel Macs) and
+  drag the app to Applications.
+- **Windows:** run `dist/OpenDisco-1.4.0-windows-x64-setup.exe`. It installs for the current user
   (no admin rights), with Start menu and desktop shortcuts and an uninstaller in Apps.
   - **SmartScreen:** the installer isn't code-signed, so the first time Windows shows
     "Windows protected your PC": click **More info**, then **Run anyway**.
@@ -34,8 +35,8 @@ It comes two ways:
     folder (`%LOCALAPPDATA%\Programs\OpenDisco`), for example `opendisco.cmd --quick`.
 - **Linux:**
   - **Ubuntu 24.04 LTS, Linux Mint 22, Pop!_OS 24.04:**
-    `sudo apt install ./OpenDisco-<version>-ubuntu-24.04_amd64.deb`
-  - **Fedora 44:** `sudo dnf install ./OpenDisco-<version>-fedora-44.x86_64.rpm`
+    `sudo apt install ./OpenDisco-<version>-ubuntu-24.04-amd64.deb`
+  - **Fedora 44:** `sudo dnf install ./OpenDisco-<version>-fedora-44-x86_64.rpm`
   - **Any other distro** (Debian 13, Arch, newer Ubuntu or Fedora...): the portable
     `OpenDisco-<version>-linux.tar.gz`. Extract it and run
     `./opendisco`; its `README-LINUX.md` lists the packages to install first.
@@ -190,7 +191,7 @@ python3 -m venv .venv && .venv/bin/pip install briefcase toga
   - Toga's Windows backend, installed from Windows wheels;
   - the app's code.
 
-  NSIS then turns them into `dist/OpenDisco-<version>-setup.exe`. On a Windows PC,
+  NSIS then turns them into `dist/OpenDisco-<version>-windows-x64-setup.exe`. On a Windows PC,
   `briefcase package windows` makes an `.msi` instead.
 - **Linux (.deb, .rpm, .tar.gz), from this Mac or a Linux PC:**
   `.venv/bin/python packaging/linux/build_packages.py` (`--arch arm64` for ARM PCs). It runs

@@ -31,6 +31,14 @@ def built_version():
     return None
 
 
+def mac_cpus() -> str:
+    """Which Macs the built app runs on, for the .dmg's name: universal, apple-silicon or intel."""
+    binary = next((MIRROR / "build").glob("*/macos/app/*.app/Contents/MacOS/*"))
+    archs = set(subprocess.run(["lipo", "-archs", str(binary)], capture_output=True, text=True,
+                               check=True).stdout.split())
+    return "universal" if {"arm64", "x86_64"} <= archs else "apple-silicon" if "arm64" in archs else "intel"
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description="Build the macOS app and .dmg.")
     parser.add_argument("--fresh", action="store_true", help="recreate the app bundle (and its packages)")
@@ -63,8 +71,9 @@ def main() -> int:
 
     dmg = max((MIRROR / "dist").glob("*.dmg"), key=lambda p: p.stat().st_mtime)
     (ROOT / "dist").mkdir(exist_ok=True)
-    shutil.copyfile(dmg, ROOT / "dist" / dmg.name)
-    print(f"Built {ROOT / 'dist' / dmg.name}")
+    dest = ROOT / "dist" / f"OpenDisco-{version}-macos-{mac_cpus()}.dmg"
+    shutil.copyfile(dmg, dest)
+    print(f"Built {dest}")
     return 0
 
 

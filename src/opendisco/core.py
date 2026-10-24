@@ -4719,6 +4719,9 @@ def run_scan(opts, log, progress=None, on_inventory=None):
             clear_progress()
         listen_on = ports if opts.direct else list({l.name: l for l in (ports if opts.vlans else [])
                                                      + (links if opts.sniff else [])}.values())
+        if not listen_on and (opts.vlans or opts.direct or opts.sniff):
+            log("Not listening: there's no wired or Wi-Fi port to listen on (VPN, bridge and virtual "
+                "adapters are left out). See --interfaces.")
         if listen_on and (opts.vlans or opts.direct or opts.sniff):
             if not capabilities()["listen"]:
                 if IS_WINDOWS:

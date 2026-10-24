@@ -102,8 +102,8 @@ def build_system_package(fmt: str, arch: str, out: Path, version: str) -> Path:
                "|| exit 1; done")
         made = docker("exec", name, "sh", "-c", f"ls /src/dist/*.{fmt}", capture_output=True,
                       text=True).stdout.split()
-        dest = out / (f"{NAME}-{version}-{label}_{arch}.deb" if fmt == "deb"
-                      else f"{NAME}-{version}-{label}.{'x86_64' if arch == 'amd64' else 'aarch64'}.rpm")
+        dest = out / (f"{NAME}-{version}-{label}-{arch}.deb" if fmt == "deb"
+                      else f"{NAME}-{version}-{label}-{'x86_64' if arch == 'amd64' else 'aarch64'}.rpm")
         docker("cp", f"{name}:{made[-1]}", str(dest))
         return dest
     finally:

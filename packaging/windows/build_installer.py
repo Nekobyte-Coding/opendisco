@@ -90,7 +90,7 @@ def main() -> int:
     # 4. The installer.
     out = Path(args.out)
     out.mkdir(parents=True, exist_ok=True)
-    setup = out / f"OpenDisco-{version}-setup.exe"
+    setup = out / f"OpenDisco-{version}-windows-x64-setup.exe"  # 64-bit Python; Windows on ARM emulates it
     numeric = ".".join((version.split(".") + ["0"] * 4)[:4])
     subprocess.run([makensis, "-V2", "-NOCD", f"-DVERSION={version}", f"-DVERSION_NUMERIC={numeric}",
                     f"-DSTAGE={stage}", f"-DOUTFILE={setup}",
