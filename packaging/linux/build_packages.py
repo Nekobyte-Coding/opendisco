@@ -95,8 +95,13 @@ def build_system_package(fmt: str, arch: str, out: Path, version: str) -> Path:
         docker("exec", name, "sh", "-c", "find /src -name __pycache__ -prune -exec rm -rf {} + ; "
                                          "find /src -name .DS_Store -delete")
         docker("exec", name, "sh", "-c", install.format(requires=" ".join(requires)))
+        # Briefcase writes "License: Unknown" into every .rpm (its TODO, issue #1829): use ours.
+        rpm_license = ("sed -i 's/\"License:        Unknown\"/f\"License:        {app.license}\"/' "
+                       "/briefcase/lib/python3*/site-packages/briefcase/platforms/linux/system.py && "
+                       if fmt == "rpm" else "")
         docker("exec", name, "sh", "-c",
-               f"python3 -m venv /briefcase && /briefcase/bin/pip install -q briefcase=={briefcase} && cd /src && "
+               f"python3 -m venv /briefcase && /briefcase/bin/pip install -q briefcase=={briefcase} && "
+               f"{rpm_license}cd /src && "
                "for step in create build package; do "
                "/briefcase/bin/briefcase $step linux system $([ $step = package ] && echo --adhoc-sign) --no-input "
                "|| exit 1; done")
