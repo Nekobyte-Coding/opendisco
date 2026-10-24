@@ -10,6 +10,8 @@ finished .dmg into dist/.
     .venv/bin/python packaging/macos/build_dmg.py --fresh   # start the app bundle from scratch
 """
 import argparse
+import plistlib
+import re
 import shutil
 import subprocess
 import sys
@@ -21,6 +23,14 @@ NEEDED = ("src", "pyproject.toml", "LICENSE")  # all Briefcase reads
 SKIP = shutil.ignore_patterns("__pycache__", "*.pyc", ".DS_Store")
 
 
+def built_version():
+    """The version in the already-built app's Info.plist, if there is one."""
+    for plist in (MIRROR / "build").glob("*/macos/app/*.app/Contents/Info.plist"):
+        with open(plist, "rb") as f:
+            return plistlib.load(f).get("CFBundleShortVersionString")
+    return None
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description="Build the macOS app and .dmg.")
     parser.add_argument("--fresh", action="store_true", help="recreate the app bundle (and its packages)")
@@ -29,7 +39,10 @@ def main() -> int:
     if not briefcase.exists():
         sys.exit("error: run this with the project's venv: .venv/bin/python packaging/macos/build_dmg.py")
 
-    if args.fresh:
+    # briefcase update refreshes the code but not Info.plist, so a new version (or a new app
+    # name) needs the app bundle made again, or Finder keeps showing the old version.
+    version = re.search(r'^version = "([^"]+)"', (ROOT / "pyproject.toml").read_text(), re.M).group(1)
+    if args.fresh or built_version() not in (None, version):
         shutil.rmtree(MIRROR, ignore_errors=True)
     MIRROR.mkdir(parents=True, exist_ok=True)
     for name in NEEDED:  # shutil copies data only on macOS, so no iCloud attributes come along
