@@ -6,6 +6,7 @@
   independent project, not affiliated with Ubiquiti. Your networks file, hidden devices and SSH
   keys come along from the earlier version, and the Windows installer replaces the earlier
   install.
+- Licensed under the Apache License 2.0 (LICENSE, with NOTICE).
 - Windows does what the Mac and Linux versions do: Sniff the wire, Trunk VLANs and Direct
   capture through Npcap (the installer offers to download it from npcap.com), Probe my
   networks through temporary addresses (as administrator), and discovery broadcasts out of
@@ -14,6 +15,8 @@
 - Fixed: the Windows app didn't open in 1.3.0 to 1.3.2.
 - Android: the mode description has its own line, so the top row fits a phone.
 - Linux: the Listen box's − and + buttons fit inside it.
+- Sniff, Trunk VLANs and Direct say so when there's no wired or Wi-Fi port to listen on.
+- Installers are named by system and CPU, e.g. OpenDisco-1.4.0-macos-universal.dmg.
 
 ## 1.3.2
 

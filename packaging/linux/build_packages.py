@@ -129,7 +129,7 @@ def build_tarball(out: Path, version: str) -> Path:
     with tarfile.open(dest, "w:gz") as tar:
         tar.add(ROOT / "src" / "opendisco", f"{top}/src/opendisco", filter=clean)
         for path in (HERE / "opendisco", HERE / "install-desktop-entry.sh", HERE / "README-LINUX.md",
-                     ROOT / "LICENSE"):
+                     ROOT / "LICENSE", ROOT / "NOTICE"):
             tar.add(path, f"{top}/{path.name}", filter=clean)
     return dest
 

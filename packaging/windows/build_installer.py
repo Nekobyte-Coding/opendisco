@@ -86,6 +86,8 @@ def main() -> int:
     shutil.copytree(ROOT / "src" / "opendisco", stage / "app" / "opendisco",
                     ignore=shutil.ignore_patterns("__pycache__", "*.pyc", "*.icns"))
     (stage / "opendisco.cmd").write_text('@"%~dp0python\\python.exe" -m opendisco %*\r\n')
+    for name in ("LICENSE", "NOTICE"):  # Apache 2.0, as .txt so Windows opens them
+        shutil.copyfile(ROOT / name, stage / f"{name}.txt")
 
     # 4. The installer.
     out = Path(args.out)

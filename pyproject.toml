@@ -36,6 +36,7 @@ requires = [
 ]
 # Shown when macOS asks to let the app reach devices on the local network.
 info."NSLocalNetworkUsageDescription" = "OpenDisco finds and probes network devices on your local network."
+info."NSHumanReadableCopyright" = "Copyright 2026 Michael Froehlke. Licensed under the Apache License 2.0."
 
 [tool.briefcase.app.opendisco.linux]
 requires = [

@@ -227,6 +227,7 @@ the Linux one inside containers, so nothing big ends up in iCloud. Finished inst
 | `packaging/windows/` | The Windows installer build script and NSIS installer definition |
 | `packaging/linux/` | The Linux build script, and the portable version's launcher, menu-entry script and README |
 | `opendisco.py` | The command-line launcher |
+| `LICENSE`, `NOTICE` | The Apache License 2.0, and the copyright and trademark notices |
 | `networks.txt` | Your networks file for the CLI: not in git, made from the default (`src/opendisco/resources/networks.txt`) the first time you run it. The app keeps its own copy in its data folder |
 
 ## Quick start
@@ -664,9 +665,10 @@ capture a packet for decoding.
 ## Limitations
 
 - IPv4 only.
-- The alias, VLAN, `--sniff` and `--direct` logic and the other-vendor parsing (CDP, LLDP)
-  were tested against simulated networks and devices, not yet on real ones. The
-  per-interface 255.255.255.255 broadcast was tested live. Run `-a --dry-run` or `--vlan 20 --dry-run` to
+- Temporary addresses, `--sniff` and `--direct` have run on a real UniFi network (Windows,
+  1.4.0). VLAN tagging and the other-vendor parsing (CDP, LLDP) were tested against
+  simulated networks and devices only. The per-interface 255.255.255.255 broadcast was
+  tested live. Run `-a --dry-run` or `--vlan 20 --dry-run` to
   review the commands.
 - Some built-in NICs strip VLAN tags in hardware before a capture can see them. If
   `--vlans` reports several subnets as untagged on a port you know is a trunk, name the
@@ -677,3 +679,8 @@ capture a packet for decoding.
   `0x1B`, `0x20`, `0x33`.
 - The OUI list is a snapshot from Wireshark's vendor database (October 2026). Add new
   prefixes with `--oui`.
+
+## License
+
+Apache License 2.0: see [LICENSE](LICENSE) and [NOTICE](NOTICE). xterm.js, bundled for the
+Terminal tab, is under the MIT License (`src/opendisco/resources/xterm/LICENSE`).
