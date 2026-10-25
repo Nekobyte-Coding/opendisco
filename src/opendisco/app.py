@@ -1519,7 +1519,7 @@ class OpenDiscoApp(toga.App):
         place of the main window's content (iOS: pushed over it, with a back button). Returns what
         closes it. on_close runs when it's closed from its title bar."""
         if self.phone_ui:
-            return phone.push_panel(self, title, content)
+            return phone.push_panel(self, title, content, on_close)
         if self.caps["mobile"]:
             page = toga.Box(style=Pack(direction=COLUMN, margin=12, gap=10), children=[
                 toga.Label(title, style=Pack(font_weight="bold", font_size=18)), content])

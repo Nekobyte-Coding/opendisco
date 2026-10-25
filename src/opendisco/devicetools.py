@@ -31,7 +31,12 @@ import urllib.request
 from dataclasses import dataclass
 from pathlib import Path
 
-from opendisco import sshrun
+from opendisco import core
+
+if core.platform_name() in ("ios", "android"):  # no ssh program there: the app's own SSH, same calls
+    from opendisco import phonessh as sshrun
+else:
+    from opendisco import sshrun
 
 INDEX_URL = "https://fw-update.ubnt.com/api/firmware-latest"
 INDEX_TTL = 1800  # seconds the firmware list is kept before asking again
