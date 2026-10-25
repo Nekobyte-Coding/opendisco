@@ -8,3 +8,4 @@ __pycache__/
 .DS_Store
 networks.txt
 !src/opendisco/resources/networks.txt
+notes/
