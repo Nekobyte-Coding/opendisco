@@ -1475,7 +1475,7 @@ def counter_notes(changes: dict) -> list:
     if changes.get("system"):
         notes.append(("warn", f"This computer counted {counter_text(changes['system'])} during this scan (all "
                               "interfaces and programs): packets are arriving damaged. The interface counts "
-                              "above show which port, if they went up too."))
+                              "above show which interface, if they went up too."))
     return notes
 
 
@@ -3946,7 +3946,7 @@ def hold_start(mgr: AliasManager, inv: Inventory, log) -> list:
 def print_alias_plan(plans, sudo, listen_on=(), listen_seconds=0.0) -> None:
     print(Style.bold("Alias plan (dry run: nothing is changed)"))
     if listen_on:
-        print(f"\n  First, listen {listen_seconds:g}s on each wired port for VLAN tags, subnets and LLDP:")
+        print(f"\n  First, listen {listen_seconds:g}s on each wired interface for VLAN tags, subnets and LLDP:")
         for name in listen_on:
             args = [f"'{a}'" if " " in a else a for a in TCPDUMP_ARGS]
             print("      " + " ".join(sudo + ["tcpdump", "-i", name] + args))
@@ -4294,12 +4294,13 @@ def diagnose(inv: Inventory, all_ifaces, scan_nets, opts, alias_used=(), skipped
                            f"Answers discovery from other subnets (older firmware does), but its address "
                            f"isn't in this computer's subnet(s) ({nets}), so its web UI and SSH can't be "
                            "reached from here. Probe its subnet through a temporary address (its subnet in the "
-                           "networks file, then -a --hold), or fix its IP/VLAN."))
+                           "networks file, then Probe listed networks and Keep addresses: -a --hold), or fix "
+                           "its IP/VLAN."))
         if d.wifi:
             msg = f"This computer's Wi-Fi ({d.wifi['iface']}) is joined to this access point (BSSID {d.wifi['bssid']})."
             if not d.ip:
-                msg += (" Its management address isn't on that Wi-Fi network: probe its management VLAN from a "
-                        "wired trunk port with --vlans, or give its subnet with --alias.")
+                msg += (" Its management address isn't on that Wi-Fi network: probe its management VLAN with Trunk "
+                        "VLANs (--vlans) from a wired interface on a trunk, or give its subnet with --alias.")
             issues.append(("note", "WIFI-AP", msg))
         link = d.alias.get("interface")
         clashes = sorted(ip for ip in d.ips if (link, ip) in alias_used)
@@ -4307,7 +4308,7 @@ def diagnose(inv: Inventory, all_ifaces, scan_nets, opts, alias_used=(), skipped
             issues.append(("warn", "ALIAS-CONFLICT",
                            f"Uses {', '.join(clashes)}, which this tool borrowed on {link} for a few seconds "
                            "before it knew the address was taken. For a whole subnet, pin another alias "
-                           "with alias= in networks.txt."))
+                           "with alias= in the networks file."))
         for port in info.get("ports", []):
             if isinstance(port, dict) and port.get("type") == "WAN" and port.get("plugged") is False:
                 issues.append(("warn", "WAN-DOWN", f"WAN port {port.get('name', '?')} reports no link."))
@@ -4326,11 +4327,12 @@ def diagnose(inv: Inventory, all_ifaces, scan_nets, opts, alias_used=(), skipped
               and not any(_in_any(ip, local_nets) for ip in d.ips)):
             nets = ", ".join(sorted({str(ipaddress.IPv4Network(f"{ip}/24", strict=False)) for ip in d.ips}))
             if d.vlan and not (opts.vlans or opts.vlan_ids or opts.direct):
-                advice = " It's on tagged VLAN %d: --vlans probes it through a temporary tagged interface." % d.vlan
+                advice = (" It's on tagged VLAN %d: Trunk VLANs (--vlans) probes it through a temporary tagged "
+                          "interface." % d.vlan)
             elif opts.alias_mode:
                 advice = " It didn't answer probes from a temporary address in its subnet." if d.vendor == "Ubiquiti" else ""
             else:
-                advice = " Add -a to probe it through a temporary address (--sniff -a does that automatically)."
+                advice = " Adding Probe listed networks (-a) probes it through a temporary address in its subnet."
             issues.append(("note", "OTHER-SUBNET", f"Heard on the wire, outside this computer's subnets ({nets})."
                            + advice))
         elif d.tftp:
@@ -4465,7 +4467,7 @@ def nested_ip(d: Device, depth: int) -> str:
 
 # What the Status column says for each finding, in a word or two; Diagnostics say the rest.
 STATUS_LABELS = {
-    "IP-CONFLICT": "IP conflict", "LINK-LOCAL": "No IP address", "DEFAULT": "Factory default",
+    "IP-CONFLICT": "IP conflict", "LINK-LOCAL": "Self-assigned IP", "DEFAULT": "Factory default",
     "LOCATING": "Locating (LED)", "NOT-SET-UP": "Not set up", "NOT-PROBED": "Not probed",
     "OTHER-SUBNET": "Other subnet", "WIFI-AP": "This Wi-Fi's AP", "ALIAS": "Via temporary address",
     "ALIAS-CONFLICT": "Address clash", "DAMAGED": "Damaged packets", "FALLBACK-IP": "Fallback IP",
@@ -4825,8 +4827,9 @@ def render_notes(inv: Inventory, sc: Scanner, opts) -> list:
     if not inv.devices and not opts.listen and not opts.direct:
         notes.append(("note", "Nothing answered. Check that this computer is on the same VLAN as the devices, "
                               "that Wi-Fi client isolation isn't on, and that the firewall allows inbound UDP. "
-                              "Newer gear on another subnet needs -a (temporary aliases); for routed or "
-                              "VPN networks, give the device subnet: opendisco.py 10.0.5.0/24"
+                              "Newer gear on another subnet needs a temporary address in it (Probe listed "
+                              "networks, -a); for routed or VPN networks, give the device subnet: "
+                              "opendisco.py 10.0.5.0/24"
                               + (". On macOS, also check that OpenDisco (or the terminal running it) is allowed in "
                                  "System Settings > Privacy & Security > Local Network: blocked, it hears nothing "
                                  "and macOS doesn't say so." if sys.platform == "darwin" else "")))
@@ -4852,25 +4855,25 @@ examples:
   %(prog)s --interfaces        show the active interfaces it will use
   %(prog)s --update-cves       download the current list of known firmware CVEs from the NVD
   %(prog)s -a                  also probe the networks in networks.txt through temporary
-                               IP aliases on every active interface (macOS/Linux, sudo)
+                                IP aliases on every active interface (administrator rights)
   %(prog)s -a --hold           ... and keep the aliases that reached gear until Ctrl+C
   %(prog)s -a --dry-run        print the alias commands without running anything
 
   %(prog)s --vlans             on a trunk port: find its VLANs by listening, then probe each
-                               one through a temporary tagged interface (macOS/Linux, sudo)
-  %(prog)s --vlan 20,30        probe these VLANs on the wired ports (no listening)
-  %(prog)s --sniff             listen on every port for gear on any subnet (ARP, LLDP, CDP)
+                                one through a temporary tagged interface (macOS/Linux, sudo)
+  %(prog)s --vlan 20,30        probe these VLANs on the wired interfaces (no listening)
+  %(prog)s --sniff             listen on every interface for gear on any subnet (ARP, LLDP, CDP)
   %(prog)s --sniff -a          ... and probe what it heard through temporary addresses
   %(prog)s --direct -i en7     wired straight into a radio: find its IP and VLAN from what it
-                               says, live, and whether its config survived
+                                says, live, and whether its config survived
 
 VIA column:  ubnt = answered UBNT discovery (broadcast/unicast)   mcast = answered the
-multicast probe   announce = sent an unsolicited announcement   sniff = heard in traffic on a
-port (--sniff, --vlans, --direct)   wifi = the access point this computer's Wi-Fi is joined to
-mdns / ssdp = found by mDNS / UPnP   arp = known vendor's MAC in the ARP table
+multicast probe   announce = sent an unsolicited announcement   sniff = heard in traffic on
+an interface (--sniff, --vlans, --direct)   wifi = the access point this computer's Wi-Fi is
+joined to   mdns / ssdp = found by mDNS / UPnP   arp = known vendor's MAC in the ARP table
 from-device = known to another device (the app's Scan from device: its stations, LLDP, ARP)
-VLAN column: the VLAN it was found on; untagged shows the port's native VLAN (1 unless LLDP
-from the switch says otherwise)
+VLAN column: the VLAN it was found on; untagged shows the switch port's native VLAN (1 unless
+LLDP from the switch says otherwise)
 """
 
 
@@ -4927,7 +4930,7 @@ def parse_args(argv=None):
                         "and used when it's newer than the built-in list), then exit")
     o.add_argument("--debug", action="store_true", help=argparse.SUPPRESS)
     o.add_argument("--version", action="version", version=f"%(prog)s {__version__}")
-    a = p.add_argument_group("temporary IP aliases (macOS/Linux, uses sudo)",
+    a = p.add_argument_group("temporary IP aliases (sudo on macOS/Linux; on Windows, run as administrator)",
                              "Newer firmware only answers discovery from its own subnet. These options "
                              "briefly give each active interface an address in the networks listed in the "
                              "networks file.")
@@ -4943,24 +4946,24 @@ def parse_args(argv=None):
     a.add_argument("--dry-run", action="store_true", help="print the alias commands, change nothing")
     a.add_argument("--cleanup-aliases", action="store_true",
                    help="remove aliases and VLAN interfaces left behind by a run that was killed")
-    v = p.add_argument_group("VLANs (macOS/Linux, uses sudo)",
+    v = p.add_argument_group("VLANs and listening (sudo on macOS/Linux; Npcap on Windows, which can't tag VLANs)",
                              "Plugged into a trunk port without tagging? These create temporary tagged "
                              "interfaces and probe each VLAN like -a does. Untagged results show VLAN 1, "
                              "or the native VLAN the switch reports over LLDP.")
     v.add_argument("--vlans", action="store_true",
-                   help="listen on wired ports for the VLANs they carry, then probe each one")
+                   help="listen on wired interfaces for the VLANs they carry, then probe each one")
     v.add_argument("--vlan", action="append", default=[], metavar="IDS",
-                   help="probe these VLANs on wired ports, e.g. 20 or 20,30,100-105 (repeatable)")
+                   help="probe these VLANs on wired interfaces, e.g. 20 or 20,30,100-105 (repeatable)")
     v.add_argument("--vlan-listen", type=float, metavar="SEC",
                    help="how long --sniff/--vlans/--direct listen (default 20, 45 for --direct; 35+ catches LLDP)")
     v.add_argument("--sniff", action="store_true",
-                   help="listen passively on every active port (Wi-Fi too) for ARP, LLDP/CDP and broadcasts: "
+                   help="listen passively on every active interface (Wi-Fi too) for ARP, LLDP/CDP and broadcasts: "
                         "finds gear on subnets this computer isn't on. With -a, also probes what it heard")
     v.add_argument("--pcap", metavar="PREFIX",
                    help="save what --sniff/--vlans/--direct capture as PREFIX-<interface>.pcap (for Wireshark)")
     v.add_argument("--direct", action="store_true",
                    help="plugged straight into one device (a radio, say): listen to what it says to find "
-                        "its IP and VLAN, show it live, then probe it. Use -i to pick the port")
+                        "its IP and VLAN, show it live, then probe it. Use -i to pick the interface")
     opts = p.parse_args(argv)
     opts.vlan_ids = parse_vlan_ids(opts.vlan, p.error)
     opts.https_ports = parse_port_list(opts.https_port, p.error)
@@ -5116,7 +5119,7 @@ class ScanResult:
     def wire_title(self) -> str:
         if self.opts.direct:
             return "Plugged directly into"
-        return "Heard on the wire" if self.opts.sniff else "VLANs heard on wired ports"
+        return "Heard on the wire" if self.opts.sniff else "VLANs heard on wired interfaces"
 
     def wire_text(self, verbose: bool = False) -> str:
         if not self.trunks:
@@ -5269,9 +5272,9 @@ def run_scan(opts, log, progress=None, on_inventory=None):
         else:  # a port with link but no real address is the one plugged into the device
             ports = [l for l in every_wired if l.active and all(i.ip.startswith("169.254.") for i in l.addrs)]
         if not ports:
-            have = ", ".join(str(l) for l in every_wired if l.active) or "none has link"
-            raise SystemExit("error: --direct needs the wired port that's plugged into the device; ports with "
-                             f"link: {have}. Name it with -i, e.g. -i en7.")
+            have = ", ".join(str(l) for l in every_wired if l.active) or "none"
+            raise SystemExit("error: --direct needs the wired interface that's plugged into the device; "
+                             f"interfaces with link: {have}. Name it with -i, e.g. -i en7.")
         names = {l.name for l in ports}
         ifaces = [i for i in ifaces if i.name in names]
 
@@ -5284,7 +5287,7 @@ def run_scan(opts, log, progress=None, on_inventory=None):
             elif t.network not in overlap_noted:
                 overlap_noted.add(t.network)
                 extra_notes.append(("note", f"No alias for {t.network}: {clash} is already in it, so it was "
-                                            "probed directly. If gear on another port uses that subnet too, "
+                                            "probed directly. If gear on another interface uses that subnet too, "
                                             "disconnect this network (e.g. turn Wi-Fi off) and run again."))
         return kept
 
@@ -5307,7 +5310,7 @@ def run_scan(opts, log, progress=None, on_inventory=None):
         if not links and not opts.direct:
             raise SystemExit("error: no active Ethernet or Wi-Fi interface to put aliases on (see --interfaces)")
         if (opts.vlans or opts.vlan_ids) and not ports:
-            raise SystemExit("error: VLANs need an active wired port (see --interfaces)")
+            raise SystemExit("error: VLANs need an active wired interface (see --interfaces)")
         if opts.dry_run:
             plans = [{"link": l, "targets": base_targets} for l in (ports if opts.direct else links)]
             plans += [{"link": Link("", f"VLAN {v}", vlan=v, parent=p.name), "targets": base_targets}
@@ -5318,15 +5321,16 @@ def run_scan(opts, log, progress=None, on_inventory=None):
                 print(f"\n  * {msg}")
             return 0
     elif unaddressed:
-        extra_notes += [("note", f"{l.name} ({l.label}) has link but no IPv4 address (no DHCP?). Run with -a "
-                                 "to probe the listed networks on it through temporary aliases.")
+        extra_notes += [("note", f"{l.name} ({l.label}) has link but no IPv4 address (no DHCP?). Probe listed "
+                                 "networks (-a) reaches gear on it through temporary addresses.")
                         for l in unaddressed]
     if not all_ifaces and not opts.alias_mode and not links:  # an IPv6-only network, or none at all
         raise SystemExit("error: no IPv4 network here. UBNT discovery, the sweep, mDNS and SSDP all work over "
                          "IPv4, so an IPv6-only network (or none) leaves nothing to scan.")
     if not ifaces and not opts.alias_mode:
         names = ", ".join(str(i) for i in all_ifaces) or "none found"
-        hint = f" {', '.join(l.name for l in unaddressed)} has link but no address: try -a." if unaddressed else ""
+        hint = (f" {', '.join(l.name for l in unaddressed)} has link but no address: try Probe listed "
+                "networks (-a).") if unaddressed else ""
         raise SystemExit(f"error: no usable IPv4 interface (have: {names}).{hint}")
 
     hosts, scan_nets = expand_targets(opts.targets, lambda m: sys.exit(f"error: {m}"))
@@ -5395,8 +5399,8 @@ def run_scan(opts, log, progress=None, on_inventory=None):
         listen_on = ports if opts.direct else list({l.name: l for l in (ports if opts.vlans else [])
                                                      + (links if opts.sniff else [])}.values())
         if not listen_on and (opts.vlans or opts.direct or opts.sniff):
-            log("Not listening: there's no wired or Wi-Fi port to listen on (VPN, bridge and virtual "
-                "adapters are left out). See --interfaces.")
+            log("Not listening: there's no wired or Wi-Fi interface to listen on (VPN, bridge and virtual "
+                "interfaces are left out). See --interfaces.")
         if listen_on and (opts.vlans or opts.direct or opts.sniff):
             if not capabilities()["listen"]:
                 if IS_WINDOWS:
@@ -5524,8 +5528,8 @@ def run_scan(opts, log, progress=None, on_inventory=None):
                                   "--vlans, --direct) read the ARP table as root instead."))
     notes += [("note", f"{net}: no free address to borrow (both are in use, or one is what a device keeps "
                        "asking for), so it wasn't probed. If that device's uplink is down, nothing else is "
-                       "using the address it asks for, so a static address set to it here reaches the "
-                       "device.") for net in skipped]
+                       "using the address it asks for, so giving this computer that address by hand reaches "
+                       "the device.") for net in skipped]
 
     return ScanResult(opts, devs, notes, trunks, ifaces, links, base_targets, inv, mgr, elapsed, interrupted,
                       counters, diag_args)
