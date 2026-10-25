@@ -691,6 +691,8 @@ class OpenDiscoApp(toga.App):
         for d, depth in records.filter_tree(listed, self.search.value or ""):
             values = row(d)
             values["ip"] = core.nested_ip(d, depth)
+            if self.caps["mobile"] and health.latency_cell(d):  # "192.168.1.20 · 8 ms"
+                values["ip"] += f" · {health.latency_cell(d)}"
             if d.note:
                 for attr in ("name", "summary"):
                     if attr in values:
@@ -715,13 +717,12 @@ class OpenDiscoApp(toga.App):
     @staticmethod
     def _phone_row(d) -> dict:
         """A device as a phone lists it: address, model and name (Details has the rest). iOS
-        lists the model and name under the address, then the newer firmware that's out and its
-        latency, once known (what doesn't fit ends in …)."""
+        lists the model and name under the address, and the newer firmware that's out ("↑ 8.7.25")
+        once the check has answered; _show_devices adds the latency to the address's line."""
         model, name = d.model or "?", d.name or d.mac or ""
         fw = d.health.get("firmware") or {}
-        extra = [f"update {fw['latest']}" if fw.get("newer") else "", health.latency_cell(d)]
         return {"ip": d.ip or "-", "model": model, "name": name,
-                "summary": " · ".join(x for x in (model, name, *extra) if x)}
+                "summary": " · ".join(x for x in (model, name, f"↑ {fw['latest']}" if fw.get("newer") else "") if x)}
 
     def _all_devices(self) -> list:
         if self.result:
