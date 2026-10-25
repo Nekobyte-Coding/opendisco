@@ -2272,10 +2272,18 @@ def _ingress_name(ancdata) -> str | None:
     for level, kind, data in ancdata:
         if level == socket.IPPROTO_IP and kind == socket.IP_PKTINFO and len(data) >= 4:
             try:
-                return socket.if_indextoname(struct.unpack_from("I", data)[0])
+                return _if_indextoname(struct.unpack_from("I", data)[0])
             except OSError:
                 return None
     return None
+
+
+def _if_indextoname(index: int) -> str | None:
+    if hasattr(socket, "if_indextoname"):
+        return socket.if_indextoname(index)
+    import ctypes  # Android's Python 3.13 leaves it out: ask the C library
+    name = ctypes.create_string_buffer(16)  # IF_NAMESIZE
+    return name.value.decode(errors="replace") if ctypes.CDLL(None).if_indextoname(index, name) else None
 
 
 def hexdump(data: bytes, indent: str = "    ") -> str:

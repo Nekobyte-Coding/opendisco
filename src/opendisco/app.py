@@ -131,7 +131,8 @@ class OpenDiscoApp(toga.App):
         self.updating = False  # checking for, downloading or installing an update
         self.update_cancel = None  # stops a download
         self.close_settings = None
-        self._panels = []  # Android: pages shown in place of the main window's content, newest last
+        self._panels = []  # phones: (page, what Back does) shown in place of the main window's content, newest last
+        self.back_callback = None  # Android: takes Back while a page is open
         self._move_old_data()
         self.networks_path = self._networks_file()
         self.settings_path = Path(self.paths.data) / "settings.json"
@@ -253,6 +254,7 @@ class OpenDiscoApp(toga.App):
             self._add_app_commands()
         if self.caps["platform"] == "android":
             self._fit_phone_table()
+            self.back_callback = self._android_back()
         elif self.caps["platform"] == "ios":
             self._fit_ios()
         self.on_mode(self.mode)
@@ -412,6 +414,29 @@ class OpenDiscoApp(toga.App):
             return lock
         except Exception:
             return None
+
+    def _android_back(self):
+        """Android: the Back button and back gesture close the page on top (Settings, an update)
+        the way a window's close button would, rather than leaving the app. With no page open,
+        Back does what it always does."""
+        try:
+            from java import dynamic_proxy, jclass
+            app = self
+
+            class Pressed(dynamic_proxy(jclass("kotlin.jvm.functions.Function1"))):
+                def invoke(self, callback):
+                    app._back()
+
+            activity = self._impl.native
+            return jclass("androidx.activity.OnBackPressedDispatcherKt").addCallback(
+                activity.getOnBackPressedDispatcher(), activity, False, Pressed())
+        except Exception:
+            self._append_log("Couldn't take over the Back button:\n" + traceback.format_exc(), status=False)
+            return None
+
+    def _back(self):
+        if self._panels:
+            self._panels[-1][1]()
 
     def _fit_phone_table(self):
         """Android: spread the columns over the screen's width and wrap a long name rather than
@@ -1561,13 +1586,22 @@ class OpenDiscoApp(toga.App):
         if self.caps["mobile"]:
             page = toga.Box(style=Pack(direction=COLUMN, margin=12, gap=10), children=[
                 toga.Label(title, style=Pack(font_weight="bold", font_size=18)), content])
-            self._panels.append(page)
-            self.main_window.content = page
 
             def close():
-                if page in self._panels:
-                    self._panels.remove(page)
-                    self.main_window.content = self._panels[-1] if self._panels else self.main_content
+                shown = [entry for entry in self._panels if entry[0] is page]
+                if shown:
+                    self._panels.remove(shown[0])
+                    self.main_window.content = self._panels[-1][0] if self._panels else self.main_content
+                    self._back_taken()
+
+            def back():  # Back, like a window's close button: close it, then on_close
+                close()
+                if on_close:
+                    on_close()
+
+            self._panels.append((page, back))
+            self.main_window.content = page
+            self._back_taken()
             return close
         closed = []
 
@@ -1588,6 +1622,11 @@ class OpenDiscoApp(toga.App):
         self._show_over_main(window)
         self._fit_window(window)
         return close
+
+    def _back_taken(self):
+        """Android: Back closes a page while one is open, and otherwise leaves the app."""
+        if self.back_callback is not None:
+            self.back_callback.setEnabled(bool(self._panels))
 
     def _fit_window(self, window):
         """macOS: Toga grows a window to fit its content by comparing the content with the whole
