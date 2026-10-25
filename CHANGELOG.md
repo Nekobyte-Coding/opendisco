@@ -6,6 +6,54 @@ when it came out. The Linux packages of 1.1.0 to 1.3.1 were added then too; thos
 never released for Linux. README.md's "Versions and platforms" lists each version's platforms
 and known issues.
 
+## 1.5.0
+
+**Finding ports**
+- **Find HTTP port, Find HTTPS port, Find SSH port** in the right-click and Device menus: the
+  deep check first, then every TCP port of that one device, likeliest first (the usual ports,
+  the ones the rest of the gear uses and typos of those), until the service answers.
+- **Scan all ports** lists every open port and what answers on it: the SSH banner, the web
+  page's status, server and title, the TLS certificate's name.
+- A warning first that intrusion prevention may take a port search for a port scan.
+  Command line: `--all-ports` for the addresses given.
+- An **HTTP** column; the columns read HTTP, HTTPS, SSH and show any other port the service was
+  found on.
+
+**Status and diagnostics**
+- **Status** names the finding in a word or two, or "Multiple issues (N)". Hovering lists the
+  issues; double-click or **Show issues…** opens the list with links to each CVE's page.
+- **CVE check:** each device's firmware is checked against known CVEs for Ubiquiti gear (84 at
+  release, from the NVD and Ubiquiti's security advisories). A match shows a red ❗ and names
+  the version that fixes it. The list can refresh itself about once a day (Settings), and
+  `--update-cves` refreshes it from the command line.
+- **TFTP recovery mode:** gear that's silent to discovery but answers TFTP is reported as
+  waiting for firmware.
+
+**Device tools over SSH** (macOS, Windows, Linux and the phones)
+- **Check for firmware update** and **Update firmware…** (airMAX, UniFi access points and
+  switches, UniFi OS consoles): the download is checked against Ubiquiti's SHA-256, copied to
+  the device and installed.
+- **Edit config…** (airMAX): `/tmp/system.cfg` in an editor, with Save (to flash) and Apply.
+- **Change login…** (airMAX), and logins remembered per device in the system's own credential
+  store (Keychain, Credential Manager, Secret Service) when asked.
+- **Scan from device…:** what a device sees (its stations, LLDP neighbours, ARP table) is
+  added to the list, indented under it, as deep as the chain goes. Devices behind other
+  devices get SSH, ping, Web UI, port searches and the device tools through the ones before
+  them.
+
+**The app**
+- **Settings:** check for OpenDisco updates when opening (download, check and install in the
+  app, on macOS, Windows, Linux and Android) and check for new CVEs when opening.
+- **Phones:** a new layout shared by Android and iPhone/iPad: Quick Scan, Full Scan and Stop
+  above the device list; a page per device with Details, Packets and Tools (ping, SSH, port
+  finder, Scan from device, firmware, config, login). Android now also uses mDNS and SSDP.
+- The iPhone/iPad app is in the source, with Apple's multicast entitlement for broadcast and
+  multicast discovery, but isn't released yet.
+- Fixed: on a Mac with an older OpenDisco (another app ID) or another app built with
+  Briefcase, macOS's Local Network privacy could mistake OpenDisco for it and block its
+  traffic without asking, and a scan found nothing. The app's launcher now has its own ID.
+  When nothing answers on a Mac, the scan's note points to the Local Network setting.
+
 ## 1.4.2
 
 - Fixed: picking Direct to a device or Trunk VLANs turned on "Probe listed networks", and it

@@ -21,8 +21,8 @@ works with.
 | UniFi Network app / controller | multicast probe to 233.89.188.1, **passive listening** for adoption announcements, mDNS + SSDP, UniFi OS console API | unadopted devices, consoles, other controllers on the LAN |
 
 It comes two ways:
-- **A native app** for macOS, Windows, Linux and Android (see [The app](#the-app)). An iPhone
-  build is in the source but not released yet.
+- **A native app** for macOS, Windows, Linux and Android (see [The app](#the-app)). The
+  iPhone and iPad version is in the source too, but isn't released yet.
 - **The command-line tool,** which needs only Python 3.8 or newer with no packages to
   install, and runs on macOS, Linux and Windows.
 
@@ -32,7 +32,8 @@ Installers are on the [Releases](https://github.com/Nekobyte-Coding/opendisco/re
 
 | Version | Released for | Builds added later | Known issues (fixed in) |
 |---|---|---|---|
-| 1.4.2 | macOS, Windows, Linux, Android | | |
+| 1.5.0 | macOS, Windows, Linux, Android | | |
+| 1.4.2 | macOS, Windows, Linux, Android | | macOS: a scan can find nothing on a Mac that has an older OpenDisco (another app ID) or another app built with Briefcase (1.5.0) |
 | 1.4.1 | macOS, Windows, Linux, Android | | "Probe listed networks" stays on after Direct or Trunk VLANs, so the next scan adds temporary addresses (1.4.2). Android: a second export in the same minute is reported under the first one's file name (1.4.2) |
 | 1.4.0 | macOS, Windows, Linux, Android | | Windows: Keep addresses fails, and a Port whose adapter name has a space (Ethernet 2) isn't the one scanned. Android: Export does nothing (1.4.1). "Probe listed networks" stays on after Direct or Trunk VLANs (1.4.2) |
 | 1.3.2 | macOS, Windows, Linux | | Windows: the app doesn't open (1.4.0). Mac and Linux: "Probe listed networks" stays on after Direct or Trunk VLANs (1.4.2) |
@@ -45,6 +46,11 @@ Installers are on the [Releases](https://github.com/Nekobyte-Coding/opendisco/re
   own source, under the current name, license and app ID, with the default networks list cut
   down to 192.168.1.0/24. No fixes were back-ported: each version behaves as it did when it
   came out, known issues included.
+- **macOS before 1.5.0:** every version's app started from the same prebuilt launcher, and
+  macOS's Local Network privacy can mistake one app built that way for another. On a Mac that
+  has an older OpenDisco under another app ID (or another app built with Briefcase), it
+  applied that app's setting, showed no prompt and blocked the scan, which found nothing.
+  1.5.0's launcher has its own ID.
 - **Linux before 1.3.2:** 1.1.0 to 1.3.1 were never released for Linux. Their Linux packages
   were built later, from each version's source with 1.3.2's Linux packaging, for
   completeness. They run, but those versions weren't made or tested for Linux at the time.
@@ -58,9 +64,9 @@ Installers are on the [Releases](https://github.com/Nekobyte-Coding/opendisco/re
 
 ## The app
 
-- **Mac:** open `OpenDisco-1.4.2-macos-universal.dmg` (Apple silicon and Intel Macs) and drag
+- **Mac:** open `OpenDisco-1.5.0-macos-universal.dmg` (Apple silicon and Intel Macs) and drag
   the app to Applications.
-- **Windows:** run `OpenDisco-1.4.2-windows-x64-setup.exe` (64-bit; Windows on ARM runs it
+- **Windows:** run `OpenDisco-1.5.0-windows-x64-setup.exe` (64-bit; Windows on ARM runs it
   too). It installs for the current user without administrator rights, with Start menu and
   desktop shortcuts and an uninstaller in Apps.
   - **SmartScreen:** the installer isn't code-signed, so the first time Windows shows
@@ -72,19 +78,19 @@ Installers are on the [Releases](https://github.com/Nekobyte-Coding/opendisco/re
     (`%LOCALAPPDATA%\Programs\OpenDisco`), for example `opendisco.cmd --quick`.
 - **Linux:**
   - **Ubuntu 24.04 LTS, Linux Mint 22, Pop!_OS 24.04:**
-    `sudo apt install ./OpenDisco-1.4.2-ubuntu-24.04-amd64.deb`
-  - **Fedora 44:** `sudo dnf install ./OpenDisco-1.4.2-fedora-44-x86_64.rpm`
+    `sudo apt install ./OpenDisco-1.5.0-ubuntu-24.04-amd64.deb`
+  - **Fedora 44:** `sudo dnf install ./OpenDisco-1.5.0-fedora-44-x86_64.rpm`
   - **Any other distribution** (Debian 13, Arch, newer Ubuntu or Fedora...): the portable
-    `OpenDisco-1.4.2-linux.tar.gz`. Extract it and run `./opendisco`; its `README-LINUX.md`
+    `OpenDisco-1.5.0-linux.tar.gz`. Extract it and run `./opendisco`; its `README-LINUX.md`
     lists the packages to install first.
 
   The `.deb` and `.rpm` install the app's own copy of Toga and PyGObject, built for that
   release, and pull in GTK, WebKitGTK, tcpdump, ip, iw and the ssh client. The app is in the
   desktop's app menu, and `opendisco` in a terminal runs it (with options, it's the
   command-line tool).
-- **Android:** `OpenDisco-1.4.2-android.apk`: sideload it with "Install unknown apps"
-  allowed. Phones can run Quick and Full scans only. The list shows each device's IP,
-  model and name; tapping one shows the rest in Details. From 1.4.1 the app
+- **Android:** `OpenDisco-1.5.0-android.apk`: sideload it with "Install unknown apps"
+  allowed. It installs over 1.4.1 and later, keeping its data. See
+  [On phones](#on-phones). From 1.4.1 the app
   is signed with OpenDisco's own release key, so later versions install over it. 1.4.0 was
   signed with Android's debug key, which Android won't replace: uninstall 1.4.0 first. Nothing
   is lost: the phone app can't hide devices or edit the networks file, so it saves nothing.
@@ -100,7 +106,12 @@ new version installs as a separate app.
 **The window:**
 - Pick a mode and a port, then press Start.
 - Devices fill the table as they're found. Selecting one shows everything it reported and
-  what to check.
+  what to check. A device found through another device (Scan from device) is listed under it,
+  indented.
+- **Status** names what's wrong in a word or two ("CVE risk", "Factory default", "TFTP
+  recovery mode"), or "Multiple issues (3)". Hovering over a device lists its issues;
+  double-clicking it (or **Show issues…**) opens the list, with each CVE's NVD page a click
+  away. A device with known CVEs starts with a red ❗.
 - **Right-click a device** (or use the **Device** menu) to open its web UI, SSH to it, ping
   it, rescan it, copy its IP or MAC, forget its saved SSH key, or hide it. See
   [Right-click menu and the Terminal tab](#right-click-menu-and-the-terminal-tab).
@@ -128,13 +139,13 @@ fingerprint prompt is cancelled.
 The first time, macOS also asks to let the app reach devices on the local network. Allow it,
 or discovery and the ARP table are blocked.
 
-**HTTPS and SSH ports.** The **HTTPS** and **SSH** columns show the ports each device says it
+**HTTP, HTTPS and SSH ports.** The **HTTP**, **HTTPS** and **SSH** columns show the ports each device says it
 uses, so a mistyped port shows up as whatever the device really has. Nothing needs to be
 entered first. A device can say so in four places, and Details lists each one it used:
 - its discovery reply (UniFi gear reports both ports);
 - where its plain-HTTP page redirects, which shows the HTTPS port (airOS, EdgeOS and UniFi OS
   send `http://ip/` to `https://ip:<port>/`);
-- its mDNS service records (`_ssh._tcp`, `_https._tcp`);
+- its mDNS service records (`_ssh._tcp`, `_https._tcp`, `_http._tcp`);
 - its UPnP description.
 
 To catch a typo without a list to check against, each device is compared with the rest of
@@ -145,9 +156,9 @@ gets a warning too.
 
 **Deep checks** connect to those ports and confirm what answers: `✓` means the right service
 answered there, and `✗` means nothing did. They also try the common ports and every port the
-rest of the gear uses, so a device that says nothing is still found on the usual ports. They
-don't search every port: a port that no device mentions and that isn't one of those can't be
-found. The command line also takes standard ports, `--https-port 8443 --ssh-port 2222`, and
+rest of the gear uses, so a device that says nothing is still found on the usual ports. When
+the port is somewhere else, the right-click menu's **Find … port** chases it (see
+[Finding a port](#finding-a-port)). The command line also takes standard ports, `--https-port 8443 --ssh-port 2222`, and
 warns about any device that isn't on one of them.
 
 **What each platform can do.** Phones don't allow apps to capture traffic, add addresses or
@@ -157,8 +168,8 @@ tag VLANs, so the app only offers the modes the platform supports:
 |---|---|---|---|---|
 | macOS, Linux | yes | yes | yes | yes |
 | Windows | yes | yes, with Npcap | yes, as administrator (Windows 10 2004 or later) | listens for VLANs; probes untagged only |
-| Android | yes, broadcast and subnet sweep | no | no | no |
-| iPhone (not released yet) | subnet sweep; broadcast needs Apple's multicast entitlement | no | no | no |
+| Android | yes: broadcast, multicast, subnet sweep, mDNS, SSDP | no | no | no |
+| iPhone, iPad (not released yet) | yes, the same as Android (Apple's multicast entitlement) | no | no | no |
 
 **Windows details:**
 - **Npcap** captures packets for Sniff, Trunk VLANs and Direct. Its license doesn't allow
@@ -181,6 +192,59 @@ tag VLANs, so the app only offers the modes the platform supports:
   before Npcap sees them: if no tagged VLANs show up on a trunk, look for a "Packet Priority
   & VLAN" setting on the adapter (Device Manager > Advanced) and turn VLAN off there.
 
+### Finding a port
+
+**Find HTTP port**, **Find HTTPS port** and **Find SSH port** (right-click, the Device menu,
+or Tools on a phone) chase one device's service when it isn't where it should be:
+1. The deep check first: the ports the device reports, the common ones, the ones the rest of
+   the gear here uses, and where its HTTP page redirects.
+2. If the service isn't there, every one of the 65,535 TCP ports, likeliest first: the usual
+   ports for it, the ports the rest of the gear uses, and typos of those (a fat-fingered
+   config). It stops as soon as the service answers. **Stop** ends it early.
+
+**Scan all ports** checks every port and lists what answers on each, the way a port scanner's
+version detection does: the SSH banner, the web page's status, server and title, the TLS
+certificate's name. Details lists them under Open TCP ports. A full sweep takes about 20–60
+seconds a device. Only the device chosen is checked, never the whole list.
+
+Intrusion prevention (UniFi's IPS / Threat Management, a firewall's port-scan detection) can
+take a port search for a port scan from this computer: it may raise an alert, a false alarm
+here, or block the computer for a while. The app says so first, until "Don't warn again" is
+ticked. The command line's `--all-ports 192.168.1.20` does the same for the addresses given.
+
+### On phones
+
+The Android app and the iPhone/iPad app (not released yet) share one layout. Quick Scan, Full
+Scan and Stop sit above the device list, with Export, Notes, Log and Settings in the title bar.
+Tapping a device opens its page, titled with its name and address, with tabs along the
+bottom: **Details**, **Packets**, **Tools**, **Notes** and **Log**. **Tools** has:
+- **Ping**, the app's own, and an **SSH** session through the app's own SSH client (phones
+  can't run other programs);
+- **Find** a port and **Web UI**, **Rescan**, **Scan from device**;
+- **Firmware** (check and update), **Config** (airMAX) and **Login**, as on the desktop;
+- **Copy IP** and **Copy MAC**.
+
+What they find, and the SSH session, show in a console underneath. Phones can't capture
+traffic, add addresses or tag VLANs, so they offer Quick and Full scans.
+
+### Settings and updates
+
+**Settings** (the app menu's Settings… on a Mac; on phones, the title bar) has two switches,
+both on until turned off:
+- **Check for OpenDisco updates when opening:** asks GitHub for the latest release. When
+  there's a newer one, the app says what's in it and offers to update: it downloads the file
+  for this platform, checks it against the SHA-256 GitHub lists, installs it the way this copy
+  was installed (the .app on a Mac, the setup.exe on Windows, the .deb, .rpm or portable
+  folder on Linux, the APK on Android, which asks once to allow installs from OpenDisco) and
+  reopens. "Check for OpenDisco updates…" checks by hand. Copies run from the source update
+  their own way. The iPhone/iPad app has no self-update: Apple allows installs only through
+  its own channels.
+- **Check for new CVEs when opening:** about once a day, downloads current data from the NVD
+  and Ubiquiti's security advisories, so newly published CVEs are flagged without a new
+  release (see [Known vulnerabilities](#known-vulnerabilities-cves)).
+
+This product uses the NVD API but is not endorsed or certified by the NVD.
+
 ### Right-click menu and the Terminal tab
 
 Right-click a device in the table (or select it and use the **Device** menu):
@@ -194,6 +258,8 @@ Right-click a device in the table (or select it and use the **Device** menu):
   the terminal instead, or an SSH key is used. The username is remembered.
 - **Ping** pings it continuously in the Terminal tab. Ctrl+C stops it and prints the summary,
   and Enter starts it again.
+- **Find HTTP / HTTPS / SSH port** and **Scan all ports:** see [Finding a port](#finding-a-port).
+- **Show issues…** lists the device's issues, with links to each CVE's NVD page.
 - **Rescan device** probes just that device again (discovery sent straight to it from both
   source ports, then its ports, web redirect and console API), and updates its row, Details
   and Packets.
@@ -630,6 +696,7 @@ opened.
 | `REBOOTED` | Uptime under 5 minutes | If it keeps happening: PoE budget, cabling, firmware |
 | `LOCATING` | Locate LED is flashing | |
 | `NO-DISCOVERY` | Seen via ARP/mDNS/SSDP but silent on UDP 10001 | Discovery turned off, firewall, or Wi-Fi client isolation |
+| `TFTP-RECOVERY` | Silent to discovery, but a TFTP server answers on it | It's in TFTP recovery mode, waiting for firmware: upload an image for its model with a TFTP client in binary mode and leave it powered until it reboots |
 | `NO-PORTS` | `--ports`/`--deep` found no open management ports | Firewall, still booting, or no layer-3 path |
 | `NOT-SET-UP` | Console API says the console hasn't been set up | |
 | `DAMAGED` | Some of its discovery packets arrived damaged | Cable, connectors, switch port, speed/duplex. See [Damaged packets and loss](#damaged-packets-and-loss) |
