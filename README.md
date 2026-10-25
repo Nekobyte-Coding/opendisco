@@ -251,6 +251,16 @@ Each action is offered only for the device families whose steps Ubiquiti documen
 | UniFi access points and switches | `/tmp/fwupdate.bin`, `syswrapper.sh upgrade2` | Set by the UniFi controller | Set by the UniFi controller |
 | UniFi OS consoles (2.x and later) | `/tmp/fwupdate.bin`, `ubnt-systool fwupdate /tmp/fwupdate.bin` | In the console's settings | In the console's settings |
 
+**A connection that breaks while saving or applying a config** can't leave the device half
+changed, and the app says what happened. The config is copied to a file of its own and checked
+first; then one command on the device moves it into place and saves or applies it, carrying on
+by itself if the connection drops, and logs how it went. So a break says either "config not
+saved" (or "not applied": it never reached the device, which keeps its earlier config), or,
+once the app has reconnected and read the log, that it was saved or applied after all. Only
+when the device can't be reached again does it say just that the connection was lost, and to
+reload the config once the device answers. Editing itself happens in the app: a break while
+editing loses nothing.
+
 Other gear (EdgeRouters, airFiber, LTU, UISP) gets the firmware check only. Ubiquiti's help
 center describes the UniFi steps as a last resort, for when the UniFi app can't update a
 device. The installer runs on the device detached from the SSH session, so a dropped
