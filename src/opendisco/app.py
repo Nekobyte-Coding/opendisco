@@ -39,11 +39,13 @@ PHONE_COLUMNS = ["IP", "Model", "Name"]
 ANY_PORT = "Any port"
 # What a device's right-click menu (and the Device menu) offers; None separates groups.
 DEVICE_ACTIONS = [("web", "Open Web UI"), ("ssh", "Open SSH…"), ("ping", "Ping"), ("rescan", "Rescan device"),
-                  ("issues", "Show issues…"), None,
+                  ("scan_from", "Scan from device…"), ("issues", "Show issues…"), None,
                   ("find_http", "Find HTTP port"), ("find_https", "Find HTTPS port"), ("find_ssh", "Find SSH port"),
                   ("all_ports", "Scan all ports"), None,
+                  ("fw_check", "Check for firmware update"), ("fw_update", "Update firmware…"),
+                  ("config", "Edit config…"), ("login", "Change login…"), None,
                   ("copy_ip", "Copy IP address"), ("copy_mac", "Copy MAC address"), None,
-                  ("forget", "Forget SSH key"), ("hide", "Hide device")]
+                  ("forget", "Forget SSH key"), ("forget_login", "Forget saved login"), ("hide", "Hide device")]
 FINDS = {"find_http": "http", "find_https": "https", "find_ssh": "ssh", "all_ports": "all"}
 # Said before a port search, until switched off: to intrusion prevention it looks like a port scan.
 PORT_SEARCH_WARNING = ("A port search connects to {ip}'s TCP ports: all 65,535 of them when the service isn't on a "
@@ -55,7 +57,7 @@ NO_SESSION = "Right-click a device to get started: Open SSH or Ping."
 SETTINGS = {"check_app_updates": "Check for OpenDisco updates when opening",
             "check_cve_updates": "Check for new CVEs when opening"}
 # What settings.json keeps; "update" remembers an update while the app restarts into it.
-SAVED_SETTINGS = ("hidden", "ssh_user", "skip_port_warning", *SETTINGS, "update")
+SAVED_SETTINGS = ("hidden", "ssh_user", "skip_port_warning", "device_logins", *SETTINGS, "update")
 # Where earlier versions kept their data, by the parts of the data folder's path that changed:
 # folder name now -> patterns for its earlier names. macOS names the folder after the app ID
 # (earlier IDs ended .opendisco or .ubnt-discover); Windows after the publisher (until 1.4.1,
@@ -832,7 +834,15 @@ class OpenDiscoApp(toga.App):
             "copy_mac": (f"Copy MAC address  ({d.mac})" if d.mac else titles["copy_mac"], bool(d.mac)),
             "forget": (titles["forget"], ip),
             "hide": (titles["hide"], True),
+            **self._device_tools_state(d, titles),
         }
+
+    def _device_tools_state(self, d, titles) -> dict:
+        """The SSH device tools, and devices behind others (desktop only: phones have no ssh)."""
+        if self.caps["mobile"]:
+            return {}
+        from opendisco import devicegui
+        return devicegui.menu_state(self, d, titles)
 
     def _device_action(self, name):
         d = self._selected_device()
@@ -840,8 +850,14 @@ class OpenDiscoApp(toga.App):
             self.status.text = "Select a device first."
             return
         title, enabled = self._menu_state(d)[name]
+        if enabled and not self.caps["mobile"]:
+            from opendisco import devicegui
+            if devicegui.handles(self, d, name):  # the device tools, and devices behind others
+                devicegui.act(self, d, name)
+                return
         if not enabled:
-            self.status.text = ("Works once a scan has finished, one device at a time." if name == "rescan" or name in FINDS
+            waits = name == "rescan" or name in FINDS or (name == "scan_from" and "(" not in title)
+            self.status.text = ("Works once a scan has finished, one device at a time." if waits
                                 else f"{title}: not available for this device.")
             return
         if name == "web":
