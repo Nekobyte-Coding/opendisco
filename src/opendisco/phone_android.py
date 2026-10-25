@@ -490,17 +490,23 @@ def monospaced(text, size: float):
 
 
 # -- typing ------------------------------------------------------------------------------
-def plain_entry(widget, send=False):
-    """A field for logins and commands: no capitals, corrections or suggestions (a password field
-    stays hidden); send: the keyboard's action key reads Send and confirms the field."""
+def plain_entry(widget, send=False, new_password=False):
+    """A field for logins, commands and config: no capitals, corrections or suggestions (a password
+    field stays hidden, a many-line one many-line); send: the keyboard's action key reads Send and
+    confirms the field; new_password: no autofill or password manager offering one of its own."""
     try:
         from java import dynamic_proxy, jclass
         InputType, EditorInfo = jclass("android.text.InputType"), jclass("android.view.inputmethod.EditorInfo")
         native = widget._impl.native
-        hidden = native.getInputType() & InputType.TYPE_MASK_VARIATION == InputType.TYPE_TEXT_VARIATION_PASSWORD
+        kind = native.getInputType()
+        hidden = kind & InputType.TYPE_MASK_VARIATION == InputType.TYPE_TEXT_VARIATION_PASSWORD
         variation = InputType.TYPE_TEXT_VARIATION_PASSWORD if hidden else InputType.TYPE_TEXT_VARIATION_VISIBLE_PASSWORD
-        native.setInputType(InputType.TYPE_CLASS_TEXT | variation | InputType.TYPE_TEXT_FLAG_NO_SUGGESTIONS)
-        native.setTypeface(jclass("android.graphics.Typeface").DEFAULT)  # (the variation would make it monospace)
+        face = native.getTypeface()  # (the variation would make it monospace)
+        native.setInputType(InputType.TYPE_CLASS_TEXT | variation | InputType.TYPE_TEXT_FLAG_NO_SUGGESTIONS
+                            | (kind & InputType.TYPE_TEXT_FLAG_MULTI_LINE))
+        native.setTypeface(face)
+        if new_password and jclass("android.os.Build$VERSION").SDK_INT >= 26:
+            native.setImportantForAutofill(jclass("android.view.View").IMPORTANT_FOR_AUTOFILL_NO)
         if send:
             native.setImeOptions(EditorInfo.IME_ACTION_SEND)
             impl = widget._impl
@@ -532,11 +538,12 @@ def end_editing(app):
         traceback.print_exc()
 
 
-def watch_keyboard(app, widget):
-    """Keep the text view's last lines in sight above the keyboard: _keep_above_keyboard shrinks
-    the content to the space above it, and this scrolls the view to its end when it does."""
-    watched = app.__dict__.setdefault("_keyboard_watched", [])
-    watched.append(widget)
+def watch_keyboard(app, widget, follow: bool = True):
+    """Keep a text view in sight with the keyboard up: _keep_above_keyboard shrinks the content to
+    the space above it. follow: then show its last lines (the SSH session's console); otherwise
+    Android keeps the line being edited in view itself (the config editor)."""
+    if follow:
+        app.__dict__.setdefault("_keyboard_watched", []).append(widget)
 
 
 def _keep_above_keyboard(app):
