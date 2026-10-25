@@ -28,6 +28,10 @@ IS_WINDOWS = terminal.IS_WINDOWS
 PASSPHRASE_PROMPT = re.compile(rb"(?i)passphrase for key[^\r\n]{0,200}:\s*$")
 PROGRESS = re.compile(rb"(\d{1,3})%")
 ANSI = re.compile(r"\x1b\[[0-9;?]*[ -/]*[@-~]|\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)|\x1b[()][0-9A-Za-z]|\x1b[=>]")
+# Windows' console (ConPTY) paints what it shows: a line can start with a cursor move to its row
+# instead of a line break, and spaces can be cursor moves to the right.
+ROW_MOVE = re.compile(r"\x1b\[\d*(?:;\d*)?[Hf]")
+RIGHT_MOVE = re.compile(r"\x1b\[(\d*)C")
 
 if not IS_WINDOWS:
     import pty
@@ -386,7 +390,10 @@ class _Watcher:
             self.write(b"\r")
 
     def text(self) -> str:
-        return ANSI.sub("", self.seen.decode("utf-8", "replace")).replace("\r\n", "\n").replace("\r", "\n")
+        shown = self.seen.decode("utf-8", "replace")
+        if IS_WINDOWS:
+            shown = ROW_MOVE.sub("\n", RIGHT_MOVE.sub(lambda m: " " * int(m.group(1) or 1), shown))
+        return ANSI.sub("", shown).replace("\r\n", "\n").replace("\r", "\n")
 
 
 def _check_limits(proc, stop, start, last, timeout, idle, watcher) -> None:

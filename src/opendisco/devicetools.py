@@ -509,9 +509,8 @@ def install_firmware(d, login: sshrun.Login, path: Path, report, stop=None) -> f
     sshrun.upload(login, path, target, progress=lambda p: report(None, p), stop=stop)
 
     report("Checking the copy on the device…", None)
-    result = sshrun.run(login, f"md5sum {target} 2>/dev/null", stop=stop)
-    copied = (result.out.split() or [""])[0].lower()
-    if re.fullmatch(r"[0-9a-f]{32}", copied) and copied != _md5(path):
+    copied = _said_md5(sshrun.run(login, _ARRIVED.format(path=target), stop=stop).out)
+    if copied and copied != _md5(path):
         sshrun.run(login, f"rm -f {target}", stop=stop)
         raise ToolError("The copy on the device doesn't match the download: it was damaged on the way.")
     if steps["check"]:
@@ -705,7 +704,7 @@ def _stage(login: sshrun.Login, files: list, what: str, untouched: str, stop=Non
             local = folder / f"file{n}"
             local.write_bytes(text.encode("utf-8"))
             sshrun.upload(login, local, path, stop=stop)
-            arrived = sshrun.run(login, f"md5sum {path} 2>/dev/null; wc -c < {path}", stop=stop).out
+            arrived = sshrun.run(login, _ARRIVED.format(path=path), stop=stop).out
             if not _arrived_whole(arrived, local):
                 sshrun.run(login, "rm -f " + " ".join(p for _t, p in files), stop=stop)
                 raise ToolError(f"The config arrived damaged, so it wasn't {what}; the device still has its earlier one.")
@@ -750,15 +749,23 @@ def _run_staged(login: sshrun.Login, command: str, staged: str, what: str, apply
                                          if apply else ""), "unknown")
 
 
+# A file's MD5 and size as the device sees it, each after a marker: on Windows the output comes
+# through the console, mixed with ssh's password prompt, and its lines can run together.
+_ARRIVED = "echo md5=$(md5sum < {path} 2>/dev/null); echo size=$(wc -c < {path})"
+
+
+def _said_md5(said: str) -> str:
+    m = re.search(r"md5=([0-9a-f]{32})", said)
+    return m.group(1) if m else ""
+
+
 def _arrived_whole(said: str, local: Path) -> bool:
-    """md5sum's line and the size, as the device reports them, match the file sent (no md5sum:
+    """The MD5 and size the device reports (_ARRIVED) match the file sent (no md5sum there:
     the size alone)."""
-    words = said.split()
-    sums = [w for w in words if re.fullmatch(r"[0-9a-f]{32}", w)]
-    sizes = [w for w in words if w.isdigit()]
-    if sums and sums[0] != _md5(local):
+    copied, size = _said_md5(said), re.search(r"size=\s*(\d+)", said)
+    if copied and copied != _md5(local):
         return False
-    return bool(sizes) and int(sizes[-1]) == local.stat().st_size
+    return bool(size) and int(size.group(1)) == local.stat().st_size
 
 
 def _confirm(logins, run: str, within: float, stop, say, staged: str = STAGED_CONFIG) -> tuple:
