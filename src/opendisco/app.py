@@ -2225,9 +2225,14 @@ class OpenDiscoApp(toga.App):
         finish = toga.Box(style=Pack(direction=ROW), children=[toga.Box(style=Pack(flex=1)),
                                                               toga.Button("Done", on_press=done)])
         if self.caps["mobile"]:  # (desktops: beside About)
-            options.append(toga.Box(style=Pack(direction=ROW, gap=8), children=[
-                toga.Button("Terms of Use", on_press=self.show_terms),
-                toga.Button("Open-source licenses", on_press=self.show_licenses)]))
+            reading = [toga.Button("Terms of Use", on_press=self.show_terms),
+                       toga.Button("Open-source licenses", on_press=self.show_licenses)]
+            if getattr(self, "wide", False):  # an Android tablet: beside Done, or in landscape Done is off the page
+                finish.style.gap = 8
+                for button in reversed(reading):
+                    finish.insert(0, button)
+            else:
+                options.append(toga.Box(style=Pack(direction=ROW, gap=8), children=reading))
         size = (760, 740) if self.caps["aliases"] else (560, 480)
         room = self._screen_height()
         scrolls = bool(room) and room < size[1] + 40
