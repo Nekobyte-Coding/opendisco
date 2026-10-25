@@ -112,13 +112,30 @@ def summary(raw: str | None = None) -> str:
     return found.group(1).strip() if found else ""
 
 
+def _typed() -> bool:
+    """Whether stdin is a terminal someone can type the answer in. Windows counts NUL as one (a
+    script's `< NUL`), so there it must also be a console."""
+    try:
+        if not sys.stdin.isatty():
+            return False
+        if sys.platform == "win32":
+            import ctypes
+            import msvcrt
+            mode = ctypes.c_ulong()
+            handle = msvcrt.get_osfhandle(sys.stdin.fileno())
+            return bool(ctypes.windll.kernel32.GetConsoleMode(ctypes.c_void_p(handle), ctypes.byref(mode)))
+    except (AttributeError, OSError, ValueError):
+        return False
+    return True
+
+
 def cli_gate(folder, accept: bool) -> bool:
     """The command line: go ahead once these terms are accepted, here or in the app. Asked in a
     terminal ("I agree" typed); otherwise --accept-terms accepts them. Says why it stops."""
     if agreed(folder):
         return True
     if not accept:
-        if not (sys.stdin.isatty() and sys.stderr.isatty()):  # (the Mac app's output goes to the system log)
+        if not (_typed() and sys.stderr.isatty()):  # (the Mac app's output goes to the system log)
             print(CLI_UNATTENDED, file=sys.stderr)
             return False
         print(f"{CLI_INTRO}\n\n{summary()}\n\n"
