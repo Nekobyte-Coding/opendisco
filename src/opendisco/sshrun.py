@@ -209,10 +209,16 @@ def run(login: Login, command: str, timeout: float = 60, stop: threading.Event |
     device that refuses to forward, the command runs on the last hop's own SSH client."""
     if login.nested:
         return _run_nested(login, command, timeout, stop)
-    # -n on Windows: with its input a console, Windows' ssh can hang after the command has ended (about
-    # one run in five); the password is read from the console either way.
-    code, out, err = _spawn(ssh_command(login, command, "-T", *(["-n"] if IS_WINDOWS else [])), login.passwords,
-                            timeout, timeout, stop=stop, capture=True)
+    extra = []
+    if IS_WINDOWS:
+        # Windows' console draws what arrives a moment later, and can report the end before it has
+        # drawn the last line: the device stays on half a second, keeping the command's exit code.
+        command += (" " if command.rstrip().endswith("&") else "; ") + "rc=$?; sleep 0.5; exit $rc"
+        # -n: with its input a console, Windows' ssh can hang after the command has ended (about one
+        # run in five); the password is read from the console either way.
+        extra = ["-n"]
+    code, out, err = _spawn(ssh_command(login, command, "-T", *extra), login.passwords, timeout, timeout, stop=stop,
+                            capture=True)
     failure = _failure(err, code, login)
     if failure and failure.kind == "forwarding" and login.via:
         login.nested = True
