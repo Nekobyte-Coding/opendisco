@@ -166,7 +166,7 @@ warns about any device that isn't on one of them.
 tag VLANs, so the app only offers the modes the platform supports:
 
 | | Quick / Full scan | Sniff the wire | Temporary addresses | Trunk VLANs, Direct |
-|---|---|---|---|
+|---|---|---|---|---|
 | macOS, Linux | yes | yes | yes | yes |
 | Windows | yes | yes, with Npcap | yes, as administrator (Windows 10 2004 or later) | listens for VLANs; probes untagged only |
 | Android | yes: broadcast, multicast, subnet sweep, mDNS, SSDP | no | no | no |
