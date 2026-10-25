@@ -4,7 +4,8 @@ phone_ios.py draws the phone layout with UIKit; this draws the same with Android
 under the names phone.py's docstring lists: the ActionBar is the title bar (Export, Notes and
 Log, Settings; on a page, the Up arrow with the page's title and subtitle), the system Back
 button and gesture go back like Up (app._android_back), and the tabs are Material's bottom
-navigation bar. Colours and button shapes follow the iPhone's.
+navigation bar. Colours and button shapes follow the iPhone's. A tablet (wide) shows the
+device page beside the list, and the list marks the device showing there.
 
 Everything here runs on the UI thread, and all of it is cosmetic except Page, Up and Back: when
 a native call fails the plain Toga widget is left as it was.
@@ -20,6 +21,7 @@ BAR = 0xFFF9F9F9  # the title bar, status bar and tab bar
 FILL = 0xFFE9E9EB  # a gray button
 DISABLED_FILL, DISABLED_TEXT = 0xFFF0F0F2, 0xFFB4B4B9
 SEPARATOR = 0xFFD8D8DC
+SELECTED = 0x24007AFF  # a tablet's list: the row of the device beside it
 COLORS = {"systemBlueColor": BLUE, "systemRedColor": RED, "systemGreenColor": GREEN}
 BAR_ICONS = {"Export": "ios_share", "Notes and Log": "list_alt", "Settings": "settings"}
 TAB_ICONS = {"Details": "info", "Packets": "manage_search", "Tools": "build", "Notes": "chat_bubble", "Log": "list_alt"}
@@ -284,8 +286,8 @@ def fit(app, export, notes, settings):
     export_command.enabled = False
     app.main_window.toolbar.add(export_command, command("Notes and Log", notes, 2), command("Settings", settings, 3))
     app.export_button = CommandButton(export_command)
-    for fitting in (_take_up_and_menu, _fit_system_bars, _fit_tabs, _fit_list, lambda app: _plain_widgets(),
-                    _sized_already, _keep_above_keyboard):
+    for fitting in (_take_up_and_menu, _fit_system_bars, _fit_tabs, _fit_list, _fit_wide,
+                    lambda app: _plain_widgets(), _sized_already, _keep_above_keyboard):
         try:
             fitting(app)
         except Exception:
@@ -362,10 +364,14 @@ def _fit_tabs(app):
     """The tabs as the iPhone shows them: a rounded bar floating over the bottom edge, as wide as
     its tabs need, with an icon for each; a tab that's turned off is hidden (the scan's Notes and
     Log page has no Details, Packets or Tools)."""
-    from java import jclass
+    from java import dynamic_proxy, jclass
     impl = app.tabs._impl
     view = impl.native_navigationview
     toga_enabled = impl.set_option_enabled
+
+    class NoInsets(dynamic_proxy(jclass("androidx.core.view.OnApplyWindowInsetsListener"))):
+        def onApplyWindowInsets(self, view, insets):  # (the content ends above the system bars already)
+            return insets
 
     def set_enabled(index, enabled):
         toga_enabled(index, enabled)
@@ -408,15 +414,29 @@ def _fit_tabs(app):
     params.gravity = jclass("android.view.Gravity").CENTER_HORIZONTAL
     view.setLayoutParams(params)
     view.setClipToOutline(True)
+    app._tab_insets = NoInsets()  # kept alive; a tablet's bar would grow by the navigation bar's height
+    jclass("androidx.core.view.ViewCompat").setOnApplyWindowInsetsListener(view, app._tab_insets)
+    view.setPadding(view.getPaddingLeft(), view.getPaddingTop(), view.getPaddingRight(), 0)
     fit_width()
+
+
+def wide(app) -> bool:
+    """A tablet: 600 dp and more across its narrow side, so the list and the device page fit side
+    by side turned either way (a phone turned sideways doesn't count)."""
+    try:
+        return _activity().getResources().getConfiguration().smallestScreenWidthDp >= 600
+    except Exception:
+        traceback.print_exc()
+        return False
 
 
 def _fit_list(app):
     """The device list as the iPhone shows it: the address over the model and name, a line
     between devices, no space for an icon, a ripple where it's tapped rather than a row that
     stays grey; a changed row is redrawn in place (Toga would redraw the whole list, losing the
-    selection, every second of a scan)."""
-    from java import jclass
+    selection, every second of a scan). On a tablet the device beside the list keeps its row
+    tinted."""
+    from java import jarray, jclass, jint
     View, RelativeLayout = jclass("android.view.View"), jclass("android.widget.RelativeLayout")
     TypedValue, ripple = jclass("android.util.TypedValue"), jclass("android.R$attr").selectableItemBackground
     impl = app.table._impl
@@ -429,7 +449,14 @@ def _fit_list(app):
             view = container.getChildAt(container.getChildCount() - 1)
             value = TypedValue()
             view.getContext().getTheme().resolveAttribute(ripple, value, True)
-            view.setBackground(view.getContext().getDrawable(value.resourceId))
+            if app.wide:  # the ripple over a tint while it's the device showing
+                tint = jclass("android.graphics.drawable.StateListDrawable")()
+                tint.addState(jarray(jint)([jclass("android.R$attr").state_activated]),
+                              jclass("android.graphics.drawable.ColorDrawable")(_int(SELECTED)))
+                view.setBackground(tint)
+                view.setForeground(view.getContext().getDrawable(value.resourceId))
+            else:
+                view.setBackground(view.getContext().getDrawable(value.resourceId))
             icon, texts = view.getChildAt(0), view.getChildAt(1)
             icon.setVisibility(View.GONE)
             params = texts.getLayoutParams()
@@ -439,6 +466,9 @@ def _fit_list(app):
             texts.getChildAt(0).setTextColor(_int(LABEL))
             texts.getChildAt(1).setTextSize(15.0)
             texts.getChildAt(1).setTextColor(_int(SECONDARY))
+            for line_number in (0, 1):  # one line each, cut short with … (the row's height is fixed)
+                texts.getChildAt(line_number).setMaxLines(1)
+                texts.getChildAt(line_number).setEllipsize(jclass("android.text.TextUtils$TruncateAt").END)
             line = View(view.getContext())
             line.setBackgroundColor(_int(SEPARATOR))
             line_params = RelativeLayout.LayoutParams(RelativeLayout.LayoutParams.MATCH_PARENT, max(1, _dp(0.5)))
@@ -459,11 +489,56 @@ def _fit_list(app):
         except Exception:
             impl._load_data()
 
+    def mark(index, marked):
+        if app.wide and index is not None and 0 <= index < impl._linear_layout.getChildCount():
+            impl._get_row(index).setActivated(marked)
+
+    def set_selection(index):
+        clear_selection()
+        impl._selection = index
+        mark(index, True)
+
+    def clear_selection():
+        mark(impl._selection, False)
+        impl._selection = None
+
     impl._make_row = make_row
     impl.source_change = source_change
-    impl._set_selection = lambda index: setattr(impl, "_selection", index)  # no grey row
-    impl._clear_selection = lambda: setattr(impl, "_selection", None)
+    impl._set_selection = set_selection  # no grey row (a tablet's is tinted)
+    impl._clear_selection = clear_selection
     impl._load_data()
+
+
+def _fit_wide(app):
+    """A tablet: the status line under the list wraps at the list's edge, and the device page's
+    title and subtitle end in … at the screen's, rather than run on (Toga makes a label as wide
+    as its text on one line, and the layout with it)."""
+    if not app.wide:
+        return
+    from decimal import ROUND_UP
+
+    from java import jclass
+    from travertino.size import at_least
+    MeasureSpec = jclass("android.view.View$MeasureSpec")
+
+    def narrow(label, one_line):
+        impl, native = label._impl, label._impl.native
+        if one_line:
+            native.setMaxLines(1)
+            native.setEllipsize(jclass("android.text.TextUtils$TruncateAt").END)
+
+        def rehint():
+            width = native.getWidth() or _dp(260)  # what it was given last (none yet: about that)
+            native.measure(MeasureSpec.makeMeasureSpec(width, MeasureSpec.AT_MOST), MeasureSpec.UNSPECIFIED)
+            impl.interface.intrinsic.height = impl.scale_out(native.getMeasuredHeight(), ROUND_UP)
+            impl.interface.intrinsic.width = at_least(0)
+
+        impl.rehint = rehint
+        label.refresh()
+
+    narrow(app.status.widgets[0], False)
+    narrow(app.page.title, True)
+    narrow(app.page.subtitle, True)
 
 
 def keep_selection(app, key):
@@ -473,7 +548,12 @@ def keep_selection(app, key):
         return
     index = next((i for i, row in enumerate(app.table.data) if getattr(row, "key", None) == key), None)
     if index is not None:
-        app.table._impl._selection = index
+        app.table._impl._set_selection(index)
+
+
+def clear_selection(app):
+    """A tablet: no row tinted (the scan's Notes and Log are beside the list)."""
+    app.table._impl._clear_selection()
 
 
 def fit_safe_area(app):
