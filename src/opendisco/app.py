@@ -565,10 +565,8 @@ class OpenDiscoApp(toga.App):
         port = self.port_names.get(self.port.value)
         if port:
             args += ["-i", port]
-        if self.caps["platform"] == "android":  # phones can't do these, so don't waste the time
-            args += ["--no-mdns", "--no-ssdp", "--no-arp"]
-        elif self.caps["platform"] == "ios":  # no ARP table to read; the multicast entitlement covers mDNS, SSDP
-            args.append("--no-arp")
+        if self.caps["mobile"]:  # a phone app can't read the ARP table; mDNS and SSDP work (iOS: the
+            args.append("--no-arp")  # multicast entitlement; Android: the multicast lock, and unicast replies)
         return args
 
     async def _windows_ready(self) -> bool:

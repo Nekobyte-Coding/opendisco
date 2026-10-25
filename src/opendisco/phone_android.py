@@ -136,6 +136,90 @@ def style_button(button, kind="filled", color=None):
         traceback.print_exc()  # cosmetic: a plain button still works
 
 
+def _plain_widgets():
+    """Toga's buttons that aren't styled (Settings' Done, an update's answers) as the iPhone's
+    plain ones: blue text, no box, a ripple where tapped (style_button restyles the others); no
+    underline under text that's only read (an update's notes); labels and switches in the
+    iPhone's text size, not Android's smaller one."""
+    from toga_android.colors import native_color
+    from toga_android.widgets.button import Button
+    from toga_android.widgets.label import Label
+    from toga_android.widgets.switch import Switch
+    from toga_android.widgets.textinput import TextInput
+    toga_create, toga_readonly = Button.create, TextInput.set_readonly
+
+    def sized(cls):
+        toga_create = cls.create
+
+        def create(self):
+            toga_create(self)
+            try:
+                _text_size(self)
+            except Exception:
+                traceback.print_exc()
+
+        cls.create = create
+
+    def create(self):
+        toga_create(self)
+        try:
+            from java import jclass
+            native = self.native
+            ripple = jclass("android.content.res.ColorStateList").valueOf(_int(0x22000000))
+            mask = jclass("android.graphics.drawable.ColorDrawable")(_int(0xFFFFFFFF))
+            native.setBackground(jclass("android.graphics.drawable.RippleDrawable")(ripple, None, mask))
+            native.setAllCaps(False)
+            native.setStateListAnimator(None)
+            native.setTextSize(jclass("android.util.TypedValue").COMPLEX_UNIT_SP, 17)
+            self._default_text_size = native.getTextSize()  # what Toga sets back when no size is given
+            plain = _states("enabled", BLUE, DISABLED_TEXT)
+            native.setTextColor(plain)
+            self.set_color = lambda value: native.setTextColor(plain if value is None else native_color(value))
+        except Exception:
+            traceback.print_exc()
+
+    def set_readonly(self, readonly):
+        toga_readonly(self, readonly)
+        if readonly:
+            _no_underline(self.native)
+
+    Button.create, TextInput.set_readonly = create, set_readonly
+    sized(Label)
+    sized(Switch)
+
+
+def _text_size(impl):
+    """The iPhone's text size for a label or switch whose style doesn't give one."""
+    from java import jclass
+    from toga.fonts import SYSTEM_DEFAULT_FONT_SIZE
+    if impl.interface.style.font_size == SYSTEM_DEFAULT_FONT_SIZE:
+        impl.native.setTextSize(jclass("android.util.TypedValue").COMPLEX_UNIT_SP, 16)
+        impl._default_text_size = impl.native.getTextSize()  # what Toga sets when no size is given
+
+
+def _sized_already(app):
+    """Labels and switches made before this module was loaded (the status line, Tools')."""
+    shown = [app.main_content, app.tabs]
+    while shown:
+        widget = shown.pop()
+        if isinstance(widget, (toga.Label, toga.Switch)):
+            _text_size(widget._impl)
+        shown += list(getattr(widget, "children", None) or [])
+        if isinstance(widget, toga.OptionContainer):
+            shown += [item.content for item in widget.content]
+
+
+def _no_underline(native):
+    """A text view without the underline Android draws under what's typed (the console keeps
+    its colour)."""
+    from java import jclass
+    if not isinstance(native.getBackground(), jclass("android.graphics.drawable.ColorDrawable")):
+        native.setBackground(None)
+        native.setPadding(_dp(4), _dp(4), _dp(4), _dp(4))
+    else:
+        native.setHintTextColor(_int(SECONDARY))  # readable on the console's dark grey
+
+
 def retitle(button, text: str):
     """Change a button's text (the styling stays)."""
     if button.text != text:
@@ -201,7 +285,8 @@ def fit(app, export, notes, settings):
     export_command.enabled = False
     app.main_window.toolbar.add(export_command, command("Notes and Log", notes, 2), command("Settings", settings, 3))
     app.export_button = CommandButton(export_command)
-    for fitting in (_take_up_and_menu, _fit_system_bars, _fit_tabs, _fit_list):
+    for fitting in (_take_up_and_menu, _fit_system_bars, _fit_tabs, _fit_list, lambda app: _plain_widgets(),
+                    _sized_already):
         try:
             fitting(app)
         except Exception:
@@ -275,9 +360,12 @@ def _fit_system_bars(app):
 
 
 def _fit_tabs(app):
-    """Icons for the tabs in place of Toga's star, and a tab that's turned off is hidden, as on
-    the iPhone (the scan's Notes and Log page has no Details, Packets or Tools)."""
+    """The tabs as the iPhone shows them: a rounded bar floating over the bottom edge, as wide as
+    its tabs need, with an icon for each; a tab that's turned off is hidden (the scan's Notes and
+    Log page has no Details, Packets or Tools)."""
+    from java import jclass
     impl = app.tabs._impl
+    view = impl.native_navigationview
     toga_enabled = impl.set_option_enabled
 
     def set_enabled(index, enabled):
@@ -285,19 +373,41 @@ def _fit_tabs(app):
         item = impl.options[index].menu_item
         if item is not None:
             item.setVisible(bool(enabled))
+        fit_width()
+
+    def fit_width():
+        shown = sum(1 for option in impl.options if option.menu_item is not None and option.menu_item.isVisible())
+        params = view.getLayoutParams()
+        params.width = _dp(16 + 76 * max(1, shown))
+        view.setLayoutParams(params)
+
+    def resize_tab_content():  # Toga leaves out the bar's margins
+        params, bar = impl.native.getLayoutParams(), view.getLayoutParams()
+        impl.resize_content(params.width, params.height - view.getHeight() - bar.topMargin - bar.bottomMargin)
 
     impl.set_option_enabled = set_enabled
+    impl.resize_tab_content = resize_tab_content
     for option in impl.options:
         if option.menu_item is not None:
             name = TAB_ICONS.get(option.text)
             if name:
                 option.menu_item.setIcon(_icon(name))
             option.menu_item.setVisible(option.enabled)
-    view = impl.native_navigationview
     tints = _states("checked", BLUE, SECONDARY)  # the tab that's showing, the others
     view.setItemIconTintList(tints)
     view.setItemTextColor(tints)
-    view.setBackgroundColor(_int(BAR))
+    shape = jclass("android.graphics.drawable.GradientDrawable")()
+    shape.setCornerRadius(_dp(28))
+    shape.setColor(_int(0xFFFFFFFF))
+    shape.setStroke(max(1, _dp(0.5)), _int(SEPARATOR))
+    view.setBackground(shape)
+    view.setElevation(_dp(6))
+    params = view.getLayoutParams()
+    params.setMargins(_dp(16), _dp(4), _dp(16), _dp(10))
+    params.gravity = jclass("android.view.Gravity").CENTER_HORIZONTAL
+    view.setLayoutParams(params)
+    view.setClipToOutline(True)
+    fit_width()
 
 
 def _fit_list(app):
@@ -373,11 +483,7 @@ def monospaced(text, size: float):
     """Android's monospaced font, and no underline under the text (it's read, not typed)."""
     text.style.update(font_family="monospace", font_size=size)
     try:
-        from java import jclass
-        native = text._impl.native
-        if not isinstance(native.getBackground(), jclass("android.graphics.drawable.ColorDrawable")):
-            native.setBackground(None)  # (the console keeps its colour)
-            native.setPadding(_dp(4), _dp(4), _dp(4), _dp(4))
+        _no_underline(text._impl.native)
     except Exception:
         traceback.print_exc()
 
