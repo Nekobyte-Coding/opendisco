@@ -707,7 +707,7 @@ class OpenDiscoApp(toga.App):
         else:
             self.table.data = [dict(values, key=key) for key, values in rows]
         if self.phone_ui:  # iOS forgets the tapped row whenever a row changes
-            phone.native(self).keep_selection(self, selected)
+            phone.keep_selection(self, selected)
 
     def on_search(self, widget, **kwargs):
         self._show_devices(self._all_devices())

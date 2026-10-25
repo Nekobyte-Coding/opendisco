@@ -76,6 +76,7 @@ FIND_KINDS = {"HTTP": "find_http", "HTTPS": "find_https", "SSH": "find_ssh", "Al
 CONSOLE_KEEP = 200_000  # characters of console output kept
 SHELL_COLUMNS = 64  # what the console shows in a line on an iPhone
 LIST_WIDTH = 320  # a tablet's device list, beside the device page
+PANEL_WIDTH = 560  # a tablet's small pages (Settings, Export, a note, a login), in the middle
 
 
 def supported(platform: str) -> bool:
@@ -139,8 +140,8 @@ class Mirror:
 
 # -- the device list ---------------------------------------------------------------
 def main_screen(app) -> toga.Box:
-    """Quick Scan, Full Scan and Stop across the top, the devices under them, the status line at
-    the bottom; on a tablet, the device page (Detail) to their right."""
+    """Quick Scan, Full Scan and Stop across the top, the search and the devices under them, the
+    status line at the bottom; on a tablet, the device page (Detail) to their right."""
     quick = toga.Button("Quick Scan", on_press=lambda w, **kw: _scan(app, "Quick"), style=Pack(flex=1))
     full = toga.Button("Full Scan", on_press=lambda w, **kw: _scan(app, "Full scan"), style=Pack(flex=1))
     status_here = app.status
@@ -177,6 +178,7 @@ class Detail:
 
     def __init__(self, app):
         self.app = app
+        self.key = None  # the device showing (None: the scan)
         self.title = toga.Label("", style=Pack(font_size=20, font_weight="bold", color="#1c1c1e"))
         self.subtitle = toga.Label("", style=Pack(font_size=14, color="#8a8a8e"))
         self.box = toga.Box(style=Pack(direction=COLUMN, flex=1), children=[
@@ -228,10 +230,15 @@ def fit(app):
 def push_panel(app, title: str, content, on_back=None, fit=False):
     """A small page (Settings, a login) over what's showing; returns what closes it. Back closes
     it too, then calls on_back. fit: app.py's panels, made for every platform, get this one's looks
-    (fit_panel)."""
+    (fit_panel). (A tablet's is a phone's width, in the middle of the screen.)"""
     if fit:
         fit_panel(app, content)
-    page = native(app).Page(app, toga.Box(style=Pack(direction=COLUMN, flex=1), children=[content]), on_back)
+    column = toga.Box(style=Pack(direction=COLUMN, flex=1), children=[content])
+    if app.wide:
+        column.style.update(flex=0, width=PANEL_WIDTH)
+        column = toga.Box(style=Pack(direction=ROW, flex=1), children=[
+            toga.Box(style=Pack(flex=1)), column, toga.Box(style=Pack(flex=1))])
+    page = native(app).Page(app, column, on_back)
     page.show(title, "")
     return page.close
 
@@ -325,6 +332,8 @@ def show_device(app, d):
     _device_tabs(app, True)
     title = d.name or d.model or d.ip or d.mac or "Device"
     subtitle = " · ".join(x for x in (d.ip, d.model if d.name else "") if x)
+    if app.wide:
+        app.page.key = d.key
     app.page.show(title, subtitle)
     update_tools(app)
 
@@ -345,9 +354,24 @@ def show_scan(app):
     """Open the page on the scan's Notes and Log, with no device (a tablet: beside the list,
     with no device's row marked)."""
     _device_tabs(app, False)
+    if app.wide:
+        app.page.key = None
     if beside(app):
         hook(app, "clear_selection")(app)
     app.page.show("Scan", _scan_summary(app))
+
+
+def keep_selection(app, key):
+    """After the list was filled again: select the device's row again (Tools works on the
+    selected device). Beside a tablet's list, the page follows it: its device is selected again,
+    and when the search leaves it out the scan's Notes and Log take its place."""
+    if app.wide and app.page.key is not None:
+        key = app.page.key
+        if not any(getattr(row, "key", None) == key for row in app.table.data):
+            show_scan(app)
+            update_tools(app)
+            return
+    native(app).keep_selection(app, key)
 
 
 # -- Tools -------------------------------------------------------------------------------
