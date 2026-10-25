@@ -500,6 +500,10 @@ class OpenDiscoApp(toga.App):
                           "Firmware": "8.7.11 (latest: 8.7.25)", "Latency": "12 ms, 25%", "HTTP": "8080 ✓",
                           "HTTPS": "8443 ✓", "SSH": "2222 ✓", "Uptime": "100d23h", "Status": "Multiple issues (3)"}
     GTK_FLEXIBLE = {"Name": 1.4, "Model": 1.0, "Via": 0.6}
+    # Kept whole while the headings fit. GTK's tables use DejaVu Sans whatever the desktop's font
+    # (Toga asks for the font "system"), wide enough that at the first size on a 1400-px screen the
+    # widest columns' common width fell below a MAC's.
+    GTK_WHOLE = ("IP", "MAC")
 
     def _first_frame(self) -> dict:
         """The main window's size, 1250×780: on Windows and Linux wider when the screen has room
@@ -581,10 +585,10 @@ class OpenDiscoApp(toga.App):
         the last columns (Status among them) ended past the window's edge. Each column gets the
         width its heading or longest text takes in the table's font (typical texts while the list
         is empty) and the free-text ones share what's left; when the table is too narrow for that,
-        the widest columns give up width first (fit_columns), and longer text ends in "…". Measures
-        only when the table's width or a column's longest texts have changed. Toga makes the
-        columns again whenever the rows change (keeping only their widths), so _show_devices
-        forgets the last sizing then."""
+        the widest columns give up width first (fit_columns), IP and MAC last, and longer text ends
+        in "…". Measures only when the table's width or a column's longest texts have changed.
+        Toga makes the columns again whenever the rows change (keeping only their widths), so
+        _show_devices forgets the last sizing then."""
         if self.caps["platform"] != "linux":
             return
         try:
@@ -607,6 +611,7 @@ class OpenDiscoApp(toga.App):
             least = [measure(t) + 16 for t in titles]
             need = [max(head, max((measure(t) for t in column if t), default=0) + 14)
                     for head, column in zip(least, texts)]
+            least = [n if t in self.GTK_WHOLE else head for t, n, head in zip(titles, need, least)]
             shares = [self.GTK_FLEXIBLE.get(t, 0) for t in titles]
             if sum(need) <= width and sum(shares):  # the free-text ones share what's left
                 spare = width - sum(need)
