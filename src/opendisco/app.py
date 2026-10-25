@@ -1014,11 +1014,12 @@ class OpenDiscoApp(toga.App):
                                        style=Pack(flex=1))
 
         def finish(keep):
+            typed = text.value  # before closing: Windows empties a window's text boxes as it closes it
             close()
             if keep is None:
                 return
             try:
-                self.device_notes.set(d, text.value if keep else "")
+                self.device_notes.set(d, typed if keep else "")
             except OSError as e:
                 self.status.text = f"Couldn't save the note: {e.strerror or e}"
                 return
@@ -1294,9 +1295,11 @@ class OpenDiscoApp(toga.App):
             return bool(ok)
         answer = self.loop.create_future()
         quiet = toga.Switch("Don't warn again")
+        ticked = []  # read before the window closes (Windows empties its widgets as it goes)
 
         def finish(ok):
             if not answer.done():
+                ticked.append(quiet.value)
                 answer.set_result(ok)
                 window.close()
 
@@ -1320,7 +1323,7 @@ class OpenDiscoApp(toga.App):
             ok = await answer
         finally:
             self.cancel_port_warning = None
-        if ok and quiet.value:
+        if ok and ticked and ticked[0]:
             self.settings["skip_port_warning"] = True
             self._save_settings()
         return ok
