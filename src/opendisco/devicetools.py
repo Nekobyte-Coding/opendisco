@@ -62,7 +62,8 @@ AIROS_RUNNING = "/tmp/running.cfg"
 AIROS_SAVE = "cfgmtd -w -p /etc/"
 AIROS_APPLY = "/usr/etc/rc.d/rc.softrestart save"
 UPDATE_LOG = "/tmp/opendisco-update.log"
-APPLY_LOG = "/tmp/opendisco-apply.log"
+CONFIG_LOG = "/tmp/opendisco-config.log"
+STAGED_CONFIG = "/tmp/system.cfg.opendisco"  # the new config arrives here first, then replaces it at once
 
 # Why an action isn't offered for a family, as the menu shows it.
 NOT_OFFERED = {
@@ -84,6 +85,15 @@ FROM_DEVICE = "from-device"
 
 class ToolError(Exception):
     """Something the action can't do, said in terms of the device."""
+
+
+class LostConnection(ToolError):
+    """The connection broke while writing the config. outcome: "not done" (the device still has
+    its earlier config) or "unknown" (the app couldn't reach it again to find out)."""
+
+    def __init__(self, message: str, outcome: str):
+        super().__init__(message)
+        self.outcome = outcome
 
 
 # ---------------------------------------------------------------------------
@@ -375,11 +385,15 @@ def _md5(path: Path) -> str:
 # Installing
 # ---------------------------------------------------------------------------
 
-def detached(command: str, log: str) -> str:
+def detached(command: str, log: str, run: str = "") -> str:
     """Run a command on the device so it carries on when the SSH session ends (it ignores the
-    hang-up), its output and exit code going to a log file there."""
-    return (f"rm -f {log}; sh -c 'trap \"\" HUP; {command}; echo \"opendisco-exit=$?\"' "
-            f"</dev/null >{log} 2>&1 &")
+    hang-up), its output and exit code going to a log file there. With run, the log first
+    names that run, before the command starts: a log without it means the command never
+    arrived."""
+    body = f"sh -c 'trap \"\" HUP; {command}; echo \"opendisco-exit=$?\"' </dev/null"
+    if run:
+        return f"echo opendisco-run={run} >{log}; {body} >>{log} 2>&1 &"
+    return f"rm -f {log}; {body} >{log} 2>&1 &"
 
 
 def install_firmware(d, login: sshrun.Login, path: Path, report, stop=None) -> float:
@@ -498,63 +512,129 @@ def config_problems(text: str) -> list:
 
 
 def write_config(login: sshrun.Login, text: str, apply: bool, report=None, stop=None,
-                 new_login: sshrun.Login | None = None) -> str:
-    """Write the config to /tmp/system.cfg and save it to flash; with apply, apply it in place
-    too (rc.softrestart save, which saves it as well). new_login: the login the config sets,
-    which replaces `login` once it's applied. Returns what happened."""
+                 new_login: sshrun.Login | None = None, confirm_within: float = 240) -> str:
+    """Write the config and save it to flash; with apply, apply it in place too (rc.softrestart
+    save, which saves it as well). new_login: the login the config sets, which replaces `login`
+    once it's applied. Returns what happened.
+
+    It's done so a broken connection can't leave the device half-changed, and the app can say
+    exactly what happened: the config goes to a file of its own and is checked there (a break
+    here: nothing changed); then one command on the device moves it into place and saves or
+    applies it, detached from the session, logging the outcome (a break here: the device
+    finishes on its own, and the app reconnects to read how it went). LostConnection when it
+    can't tell, or when the config never got there."""
     text = text.replace("\r\n", "\n").replace("\r", "\n")
     if not text.endswith("\n"):
         text += "\n"
+    what = "applied" if apply else "saved"
+    say = report or (lambda message: None)
+    untouched = f"Connection lost: config not {what}. It didn't reach the device, which still has its earlier config."
     if apply:
         try:
             running = _fetch(login, AIROS_RUNNING, stop)
         except sshrun.SSHError as e:
-            if e.kind in ("auth", "key", "cancelled", "refused", "timeout", "unreachable"):
+            if e.kind in ("auth", "key", "cancelled"):
                 raise
-            running = None
-        if running is not None and _lines(running) == _lines(text):
+            raise LostConnection(f"{untouched} ({e})", "not done") from None
+        if _lines(running) == _lines(text):
             return "Nothing to apply: the device already runs this config."
+
+    say("Copying the config to the device…")
     folder = Path(tempfile.mkdtemp(prefix="opendisco-"))
     try:
         local = folder / "system.cfg"
         local.write_bytes(text.encode("utf-8"))
-        if report:
-            report("Copying the config to the device…")
-        sshrun.upload(login, local, AIROS_CONFIG, stop=stop)
+        sshrun.upload(login, local, STAGED_CONFIG, stop=stop)
+        arrived = sshrun.run(login, f"md5sum {STAGED_CONFIG} 2>/dev/null; wc -c < {STAGED_CONFIG}", stop=stop).out
+        if not _arrived_whole(arrived, local):
+            sshrun.run(login, f"rm -f {STAGED_CONFIG}", stop=stop)
+            raise ToolError(f"The config arrived damaged, so it wasn't {what}; the device still has its earlier one.")
+    except sshrun.SSHError as e:
+        if e.kind in ("auth", "key", "cancelled"):
+            raise
+        raise LostConnection(f"{untouched} ({e})", "not done") from None
     finally:
         shutil.rmtree(folder, ignore_errors=True)
-    if not apply:
-        if report:
-            report("Saving it to flash…")
-        result = sshrun.run(login, AIROS_SAVE, timeout=120, stop=stop)
-        if result.code:
-            raise ToolError("Saving to flash failed" + (f": {_said(result)}" if _said(result) else "."))
-        return "Saved to flash. It takes effect at the next reboot."
-    if report:
-        report("Applying it: the device restarts the services the change affects…")
-    # Detached: applying can restart SSH itself, which would end a command run in the session.
-    sshrun.run(login, detached(AIROS_APPLY, APPLY_LOG), timeout=60, stop=stop)
-    logins = [new_login, login] if new_login else [login]
-    start = time.monotonic()
-    while time.monotonic() - start < 240:
-        time.sleep(4)
-        log = None
-        for attempt in logins:  # the new login works once it's applied, the old one until then
+
+    run = secrets.token_hex(6)
+    say("Applying it: the device restarts the services the change affects…" if apply else "Saving it to flash…")
+    sent = True
+    try:
+        # Detached: applying can restart SSH itself, which would end a command run in the session.
+        sshrun.run(login, detached(f"mv -f {STAGED_CONFIG} {AIROS_CONFIG} && " + (AIROS_APPLY if apply else AIROS_SAVE),
+                                   CONFIG_LOG, run), timeout=60, stop=stop)
+    except sshrun.SSHError as e:
+        if e.kind in ("auth", "key"):
+            raise
+        sent = False  # it may or may not have got there
+        say(f"Connection lost while starting it ({e}). Reconnecting to find out what the device did…")
+    state, code, said, dropped = _confirm([new_login, login] if new_login else [login], run, confirm_within,
+                                          stop, say)
+    if state == "done":
+        if code:
+            raise ToolError(("Applying" if apply else "Saving") + " failed" + (f": {said[-300:]}" if said else "."))
+        done = "Applied and saved to flash." if apply else "Saved to flash. It takes effect at the next reboot."
+        if not sent or (dropped and not apply):  # applying restarts SSH: drops then are expected
+            done += " The connection dropped meanwhile: the device finished on its own, checked after reconnecting."
+        return done
+    if state == "not started":
+        try:
+            sshrun.run(login, f"rm -f {STAGED_CONFIG}", stop=stop)
+        except sshrun.SSHError:
+            pass
+        raise LostConnection(f"Connection lost before the device got the command: config not {what}. It still has "
+                             "its earlier config.", "not done")
+    if not sent:
+        raise LostConnection(f"Connection lost: the app can't tell whether the config was {what}, as it couldn't "
+                             "reach the device again. Reload the config once the device answers to see.", "unknown")
+    raise LostConnection(f"Connection lost after the device started {'applying' if apply else 'saving'} it. It "
+                         "finishes on its own, but the app couldn't reach it again to confirm. Reload the config once "
+                         "it answers." + (" If the change moved its address, VLAN or SSH port, that's expected."
+                                         if apply else ""), "unknown")
+
+
+def _arrived_whole(said: str, local: Path) -> bool:
+    """md5sum's line and the size, as the device reports them, match the file sent (no md5sum:
+    the size alone)."""
+    words = said.split()
+    sums = [w for w in words if re.fullmatch(r"[0-9a-f]{32}", w)]
+    sizes = [w for w in words if w.isdigit()]
+    if sums and sums[0] != _md5(local):
+        return False
+    return bool(sizes) and int(sizes[-1]) == local.stat().st_size
+
+
+def _confirm(logins, run: str, within: float, stop, say) -> tuple:
+    """Read the outcome of a detached config command from its log, reconnecting as needed (the
+    new login works once it's applied, the old one until then). Returns (state, exit code, what
+    it said, whether a reconnect was needed): "done", "not started" (the log doesn't name the
+    run, or names it but the config was never moved into place), or "unknown"."""
+    start, dropped, first = time.monotonic(), False, True
+    while time.monotonic() - start < within:
+        time.sleep(1 if first else 3)
+        first = False
+        out = None
+        for attempt in logins:
             try:
-                log = sshrun.run(attempt, f"cat {APPLY_LOG}", timeout=30, stop=stop).out
+                out = sshrun.run(attempt, f"cat {CONFIG_LOG} 2>/dev/null; test -e {STAGED_CONFIG} && echo "
+                                          "opendisco-staged", timeout=30, stop=stop).out
                 break
             except sshrun.SSHError as e:
                 if e.kind in ("key", "cancelled") or (e.kind == "auth" and len(logins) == 1):
                     raise
-        if log is None:
-            continue  # SSH restarting, or the address changed
-        m = re.search(r"opendisco-exit=(\d+)", log)
+        if out is None:
+            dropped = True
+            say(f"Reconnecting to find out what the device did… {time.monotonic() - start:.0f}s")
+            continue
+        if f"opendisco-run={run}" not in out:
+            return "not started", None, "", dropped
+        m = re.search(r"opendisco-exit=(\d+)", out)
         if m:
-            said = re.sub(r"opendisco-exit=\d+\s*", "", log).strip()
-            if m.group(1) != "0":
-                raise ToolError("Applying failed" + (f": {said[-300:]}" if said else "."))
-            return "Applied and saved to flash."
-    raise ToolError("The device hasn't said whether applying worked (4 minutes). Check it in its web UI.")
+            said = re.sub(r"opendisco-(run|exit)=\w+\s*|opendisco-staged\s*", "", out).strip()
+            return "done", int(m.group(1)), said, dropped
+        if "opendisco-staged" in out and time.monotonic() - start > 15:
+            return "not started", None, "", dropped  # it never got as far as moving the config into place
+    return "unknown", None, "", dropped
 
 
 # ---------------------------------------------------------------------------
