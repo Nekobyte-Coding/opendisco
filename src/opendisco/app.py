@@ -1873,6 +1873,18 @@ class OpenDiscoApp(toga.App):
         except Exception:
             pass  # cosmetic
 
+    def _screen_height(self) -> int:
+        """Windows: the height the main window's screen leaves free for windows (the taskbar
+        taken off), in the units window sizes are in; 0 elsewhere, or when it can't be told."""
+        if self.caps["platform"] != "windows":
+            return 0
+        try:
+            from System.Windows.Forms import Screen
+            window = self.main_window._impl
+            return int(Screen.FromControl(window.native).WorkingArea.Height / window.dpi_scale)  # pixels to units
+        except Exception:
+            return 0
+
     def _wrap(self, text: str) -> str:
         """Labels don't wrap by themselves: a long line would run past the window's edge."""
         width = 40 if self.caps["mobile"] else 68
@@ -1965,13 +1977,22 @@ class OpenDiscoApp(toga.App):
                       toga.Box(style=Pack(direction=ROW, align_items="center", gap=8), children=[
                           networks_said, toga.Button("Restore defaults", on_press=self.on_reset_networks),
                           toga.Button("Save", on_press=save_networks)])]
-        content = toga.Box(style=Pack(direction=COLUMN, flex=1, margin=14, gap=8), children=[
-            *switches,
-            toga.Label(textwrap.fill(vulns.NVD_NOTICE, 60), style=Pack(font_size=10)),
-            *lists,
-            toga.Box(style=Pack(direction=ROW), children=[toga.Box(style=Pack(flex=1)),
-                                                          toga.Button("Done", on_press=done)])])
+        options = [*switches, toga.Label(textwrap.fill(vulns.NVD_NOTICE, 60), style=Pack(font_size=10)), *lists]
+        finish = toga.Box(style=Pack(direction=ROW), children=[toga.Box(style=Pack(flex=1)),
+                                                              toga.Button("Done", on_press=done)])
         size = (760, 740) if self.caps["aliases"] else (560, 480)
+        room = self._screen_height()
+        scrolls = bool(room) and room < size[1] + 40
+        if scrolls:
+            # A short screen (or one at 150%) can't show it all: the options scroll, Done stays in view.
+            size = (size[0], room - 40)
+            finish.style.margin = (8, 14, 14, 14)
+            content = toga.Box(style=Pack(direction=COLUMN, flex=1), children=[
+                toga.ScrollContainer(horizontal=False, style=Pack(flex=1), content=toga.Box(
+                    style=Pack(direction=COLUMN, margin=(14, 14, 0, 14), gap=8), children=options)),
+                finish])
+        else:
+            content = toga.Box(style=Pack(direction=COLUMN, flex=1, margin=14, gap=8), children=[*options, finish])
         self.close_settings = self._show_panel("Settings", content, size, on_close=closed, resizable=True)
 
     def _launch_checks(self):
