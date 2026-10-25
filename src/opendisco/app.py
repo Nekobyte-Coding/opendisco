@@ -170,6 +170,8 @@ class OpenDiscoApp(toga.App):
         self.caps = core.capabilities()
         if self.caps["platform"] == "linux":
             _fix_gtk_text_flush()
+        elif self.caps["platform"] == "ios":  # before any text box is made
+            phone.native(self).fix_text_scrolling()
         self.caps["vlans"] = self.caps["aliases"] and self.caps["listen"]
         self.caps["updates"] = self.caps["platform"] != "ios"  # OpenDisco updates itself
         offered = dict(self.caps)
