@@ -75,7 +75,7 @@ DEVICE_TABS = ("Details", "Packets", "Tools")  # hidden while the page shows the
 FIND_KINDS = {"HTTP": "find_http", "HTTPS": "find_https", "SSH": "find_ssh", "All ports": "all_ports"}
 CONSOLE_KEEP = 200_000  # characters of console output kept
 SHELL_COLUMNS = 64  # what the console shows in a line on an iPhone
-LIST_WIDTH = 320  # a tablet's device list, beside the device page
+LIST_WIDTH = 360  # a tablet's device list, beside the device page: room for "· ↑ 8.7.25" after most names
 PANEL_WIDTH = 560  # a tablet's small pages (Settings, Export, a note, a login), in the middle
 
 
