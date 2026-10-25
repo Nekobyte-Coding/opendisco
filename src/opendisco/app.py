@@ -1005,16 +1005,22 @@ class OpenDiscoApp(toga.App):
                    toga.Button("Save", on_press=lambda w, **kw: finish(True))]
         if d.note:
             buttons.insert(0, toga.Button("Delete note", on_press=lambda w, **kw: finish(False)))
-        if not self.caps["mobile"] or self.phone_ui:  # (phones: at the right, Save filled, as their other pages)
+        if not self.caps["mobile"]:
             buttons.insert(1 if d.note else 0, toga.Box(style=Pack(flex=1)))
-        if self.phone_ui:
-            phone.native(self).style_button(buttons[-1])
         content = toga.Box(style=Pack(direction=COLUMN, flex=1, margin=14, gap=8), children=[
-            toga.Label(self._wrap(f"Kept with {d.mac} in this computer's OpenDisco data, through rescans, restarts "
-                                  "and updates; Details, the search and the exports include it.")),
+            toga.Label(self._wrap(f"Kept with {d.mac} in OpenDisco's data on {self._here()}, through rescans, "
+                                  "restarts and updates; Details, the search and the exports include it.")),
             text, toga.Box(style=Pack(direction=ROW, gap=8), children=buttons)])
         close = self._show_panel(f"Note: {who}", content, (560, 300), resizable=True)
         text.focus()
+
+    def _here(self) -> str:
+        """What the app's text calls the device it runs on: this computer, or on phones the platform's
+        own word where phone_<platform> has here() ("this iPhone", "this iPad"), else "this phone"."""
+        if not self.caps["mobile"]:
+            return "this computer"
+        here = getattr(phone.native(self), "here", None) if self.phone_ui else None
+        return here(self) if here else "this phone"
 
     def _notes_changed(self, d):
         """After a note changed: its ✎ in the list, and Details if it's the device shown."""
@@ -1478,14 +1484,11 @@ class OpenDiscoApp(toga.App):
         state = {"backups": (bool(backups), f"{sum(len(p) for _, p in backups)} file(s) from {len(backups)} device(s)"
                              if backups else "none saved yet"),
                  "notes": (bool(notes), f"{notes} note(s)" if notes else "none written yet")}
-        choices = [("scan", "Scan report…", "Every device as the table lists it, with diagnostics: HTML (opens on any "
-                                            "phone), CSV or JSON.", True)]
-        for kind, button, text, _types in records.SITE_EXPORTS:
+        choices = []
+        for kind, button, text, types in [records.SCAN_EXPORT, *records.SITE_EXPORTS]:
             enabled, extra = state.get(kind, (True, ""))
-            choices.append((kind, button, f"{text} ({extra})." if extra else f"{text}.", enabled))
-        if self.phone_ui:  # a page of its own, a narrow screen's layout
-            phone.export_chooser(self, choices)
-            return
+            saved = types[:1] if self.caps["mobile"] else types  # phones save the first type only
+            choices.append((kind, button, records.choice_text(text, saved, extra), enabled))
 
         def pick(kind):
             close()
@@ -1514,7 +1517,7 @@ class OpenDiscoApp(toga.App):
                     self.status.text = f"Couldn't save the export: {getattr(e, 'strerror', None) or e}"
                 return
             await self._save_export(f"opendisco-scan-{stamp}.html",
-                                    "Export results (.html opens on any phone; .csv, .json)", ["html", "csv", "json"],
+                                    "Export results (.html opens on any phone; .csv, .json)", records.SCAN_EXPORT[3],
                                     lambda path: core.write_export(res, path))
             return
         _kind, button, _text, types = next(e for e in records.SITE_EXPORTS if e[0] == kind)
@@ -1829,7 +1832,8 @@ class OpenDiscoApp(toga.App):
                  toga.Label(self._wrap("Routed or VPN subnets that every scan also probes with UBNT discovery, so "
                                        "gear there turns up from here: a subnet or an address a line, # starts a "
                                        f"comment. Up to {records.SWEEP_LIMIT:,} addresses in all, about "
-                                       f"{records.sweep_seconds(records.SWEEP_LIMIT):.0f} s more per scan.")),
+                                       f"{records.sweep_seconds(records.SWEEP_LIMIT):.0f}{records.SECONDS} more per "
+                                       "scan.")),
                  sweep,
                  toga.Box(style=Pack(direction=ROW, align_items="center", gap=8), children=[
                      sweep_said, toga.Button("Save", on_press=save_sweep)])]

@@ -35,15 +35,27 @@ SWEEP_KEY = "sweep_subnets"  # settings.json: the list's lines, comments and all
 # worth adds about half a minute to every scan.
 SWEEP_LIMIT = 8192
 SWEEP_RATE = 500  # core.parse_args' --rate default
+SECONDS = "\u00a0s"  # after a number: a no-break space, so a wrapped label never ends a line on it
 
-# Export's choices after the scan report: (kind, button, what it saves, file types, the first the default)
+# Export's choices: (kind, button, what it saves, file types, the first the default and on phones
+# the only one). The scan report comes first, then the site-wide extras.
+SCAN_EXPORT = ("scan", "Scan report…", "Every device as the table lists it, with diagnostics", ["html", "csv", "json"])
 SITE_EXPORTS = [
-    ("security", "Security report…", "Known CVEs and outdated firmware, device by device: HTML or CSV",
-     ["html", "csv"]),
-    ("backups", "Config backups…", "Every saved config backup, in a .zip with an index", ["zip"]),
-    ("notes", "Notes…", "Every device's note, seen in this scan or not: HTML, CSV or JSON", ["html", "csv", "json"]),
-    ("log", "Log…", "The Log, as a text file", ["txt"]),
+    ("security", "Security report…", "Known CVEs and outdated firmware, device by device", ["html", "csv"]),
+    ("backups", "Config backups…", "Every saved config backup, with an index", ["zip"]),
+    ("notes", "Notes…", "Every device's note, seen in this scan or not", ["html", "csv", "json"]),
+    ("log", "Log…", "The Log", ["txt"]),
 ]
+FORMAT_NAMES = {"html": "HTML", "csv": "CSV", "json": "JSON", "zip": "a .zip", "txt": "a text file"}
+
+
+def choice_text(text: str, types, extra: str = "") -> str:
+    """An export choice's line: what it saves, how many (extra), and the formats it's saved in
+    ("Known CVEs ...: HTML or CSV.")."""
+    names = [FORMAT_NAMES.get(t, t.upper()) for t in types]
+    formats = names[0] if len(names) == 1 else f"{', '.join(names[:-1])} or {names[-1]}"
+    return f"{text}{f' ({extra})' if extra else ''}: {formats}."
+
 
 
 # -- search ----------------------------------------------------------------------------
@@ -238,46 +250,40 @@ def all_backups() -> list:
     return sorted((mac, paths) for mac, paths in items if paths)
 
 
-def latency_text(d) -> str:
-    """What the latency check measured for d, in a line; "" when it wasn't measured."""
+def _health():
     try:
         from opendisco import health
-    except Exception:
-        health = None
-    if health is not None and hasattr(health, "latency_text"):
-        try:
-            return health.latency_text(d) or ""
-        except Exception:
-            return ""
-    value = getattr(d, "latency", None)
-    if not value:
+        return health
+    except Exception:  # not in this build
+        return None
+
+
+def latency_text(d) -> str:
+    """What the latency check during the scan measured for d (health.py): its Details row
+    (min/avg/max and loss), else its table cell; "" when it wasn't measured."""
+    health = _health()
+    if health is None or not (getattr(d, "health", None) or {}).get("latency"):
         return ""
-    if isinstance(value, dict):
-        return ", ".join(f"{k} {v}" for k, v in value.items() if v is not None)
-    return str(value)
+    try:
+        rows = dict(health.detail_rows(d)) if hasattr(health, "detail_rows") else {}
+        return rows.get("Latency") or health.latency_cell(d) or ""
+    except Exception:
+        return ""
 
 
 def latest_firmware(d) -> tuple:
-    """(the latest firmware for d as text, whether d runs older firmware than that), from what
-    the firmware check during the scan put on the device; ("", None) when it isn't known."""
+    """(the latest firmware for d, whether a newer one than d runs is out), from the firmware
+    check during the scan (health.py, d.health["firmware"]); ("", None) when it wasn't looked up
+    or Ubiquiti's list has none for it."""
+    found = (getattr(d, "health", None) or {}).get("firmware") or {}
+    health = _health()
     try:
-        from opendisco import health
+        latest = health.latest_version(d) if health is not None else found.get("latest") or ""
     except Exception:
-        health = None
-    if health is not None and hasattr(health, "latest_firmware"):
-        try:
-            found = health.latest_firmware(d)
-            if found:
-                return found
-        except Exception:
-            pass
-    value = getattr(d, "latest_firmware", None)
-    if isinstance(value, dict):
-        value = value.get("version") or ""
-    latest = str(value or "")
-    if not latest or not d.firmware:
-        return latest, None
-    return latest, vulns.version_key(d.firmware) < vulns.version_key(latest)
+        latest = found.get("latest") or ""
+    if not latest:
+        return "", None
+    return str(latest), bool(found.get("newer"))
 
 
 def cve_fix(d) -> str:
@@ -383,8 +389,8 @@ def device_report(d, res=None, backups=(), noted: str = "") -> str:
     firmware = [["Running", escape(d.info.get("firmware") or d.firmware or "not reported")]]
     latest, outdated = latest_firmware(d)
     if latest:
-        firmware.append(["Latest", escape(latest) + (' <b class="warn">(newer than this one)</b>' if outdated else
-                                                     " (this one)" if outdated is False else "")])
+        firmware.append(["Latest", escape(latest) + (' <b class="warn">(newer than this one)</b>' if outdated
+                                                     else " (up to date)")])
     fix = cve_fix(d)
     if fix:
         firmware.append(["Fixes its known CVEs", escape(fix) + " or later"])
@@ -699,7 +705,7 @@ def parse_sweep_list(text: str) -> tuple:
             total += _addresses(net)
             targets.append(str(net.network_address) if net.prefixlen == 32 else str(net))
     if total > SWEEP_LIMIT:
-        problems.append(f"These add up to {total:,} addresses, about {sweep_seconds(total):.0f} s more on every "
+        problems.append(f"These add up to {total:,} addresses, about {sweep_seconds(total):.0f}{SECONDS} more on every "
                         f"scan; the limit is {SWEEP_LIMIT:,} (a /19's worth). List the subnets the gear is on.")
     return targets, problems
 
@@ -722,4 +728,4 @@ def sweep_targets(saved) -> list:
 def describe_targets(targets) -> str:
     total = sum(_addresses(ipaddress.IPv4Network(t)) for t in targets)
     return (f"{', '.join(targets[:4])}{f' and {len(targets) - 4} more' if len(targets) > 4 else ''} "
-            f"({total:,} address{'es' if total != 1 else ''}, about {max(1, round(sweep_seconds(total)))} s)")
+            f"({total:,} address{'es' if total != 1 else ''}, about {max(1, round(sweep_seconds(total)))}{SECONDS})")
