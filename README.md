@@ -617,11 +617,13 @@ Each device's firmware is checked against a built-in list of known CVEs for the 
 discovery identifies:
 
 - airMAX (airOS 8 on XC, WA, 2XC and 2WA boards; airOS 6 and earlier on XM, XW and TI),
-  airFiber 60 and 60 LR, 60 XG and HD, GigaBeam, the older airFiber radios, airCube
-- EdgeRouters (EdgeOS, hotfixes included), EdgeSwitch, EdgePower, UniFi Security Gateways
-- UniFi access points, switches, LTE Backup and Building Bridges
-- UniFi OS consoles (Dream Machines, Dream Routers, Cloud Gateways, the Dream Wall, UniFi
-  Express and Express 7, Cloud Keys, NVRs), and the UniFi Network version they report
+  airFiber 60 and 60 LR, 60 XG and HD, GigaBeam, the older airFiber radios, airCube, airGateway
+- EdgeRouters (EdgeOS, hotfixes included), EdgeSwitch, EdgeSwitch X and XP, EdgePower, UniFi
+  Security Gateways
+- UniFi access points, switches, LTE Backup, Building Bridges and UniFi Gateways (UXG)
+- UniFi OS consoles (Dream Machines, the UDM-Beast, Dream Routers, Cloud Gateways, the Dream
+  Wall, Enterprise Fortress Gateway and EF-Core, UniFi Express and Express 7, Cloud Keys, NVRs,
+  UNAS), and the UniFi Network version they report
 
 A device with a match gets a `CVE` diagnostic naming each CVE and the version that fixes them,
 and its Status starts with a red ❗. Details lists every match with its CVSS severity, what
@@ -629,7 +631,8 @@ fixes it and a short summary; the JSON export has them too, with links to the NV
 
 The list comes from the NVD and Ubiquiti's Security Advisory Bulletins, and every range was
 checked against the bulletin. Where the two disagree, only the versions both call affected are
-flagged. A device is only checked when its model and firmware version are certain, so **no
+flagged. Models are recognised by the platform names in Ubiquiti's own device list and firmware
+server. A device is only checked when its model and firmware version are certain, so **no
 match isn't proof a device is safe**. Notes says how old the list is.
 `opendisco.py --update-cves` downloads current NVD data (a few seconds, within the NVD's limit
 for use without an API key) into the app's data folder, and the newer of that and the built-in
@@ -703,10 +706,8 @@ a packet for decoding.
 - The OUI list is a snapshot from Wireshark's vendor database (October 2026). `--oui` adds
   new prefixes.
 - The CVE check doesn't cover cameras and other UniFi Protect, Access, Talk and Connect gear,
-  server software (UISP, self-hosted UniFi Network or UniFi OS Server), the EdgeSwitch X, UXG
-  gateways, or consoles whose platform name isn't certain yet (UCG-Industrial, UDM-Beast,
-  Enterprise Fortress Gateway, UNVR-G2, UNAS). Firmware 4.x on legacy access points isn't
-  checked against advisories written for 5.x and later. A refresh adds new CVEs only when the
+  or server software (UISP, self-hosted UniFi Network or UniFi OS Server). Firmware 4.x on
+  legacy access points isn't checked against advisories written for 5.x and later. A refresh adds new CVEs only when the
   NVD has product data for them; the newest UniFi advisories often lack it for weeks, until a
   new release adds them by hand.
 

@@ -25,7 +25,7 @@ import time
 import urllib.request
 from pathlib import Path
 
-from opendisco import __version__
+from opendisco import __version__, tls
 
 FORMAT = 1  # of cves.json; a saved list in another format is ignored
 BUNDLED = Path(__file__).resolve().parent / "resources" / "cves.json"
@@ -110,24 +110,35 @@ FIRMWARE_FAMILIES = {
     "ACB": "aircube",
     **dict.fromkeys(("e50", "e100", "e200", "e300", "e1000"), "edgeos"),  # EdgeRouter, by chip
     **dict.fromkeys(("eswh", "esgh"), "edgeswitch"),  # EdgeSwitch 1G and 10G
+    "esx": "edgeswitch-x",  # ES-10X, ES-10XP, ES-18X
+    "esxp": "edgeswitch-xp",  # ES-5XP, ES-16XP and the TOUGHSwitches it replaced
+    **dict.fromkeys(("AirGW", "AirGWP"), "airgateway"),
     **dict.fromkeys(("EP", "EPX"), "edgepower"),
     **dict.fromkeys(("UGW3", "UGW4", "UGWXG"), "usg"),  # USG, USG-Pro-4, USG-XG-8
 }
-# UniFi OS consoles by the platform they report. NVRs don't run UniFi Network.
+# UniFi OS consoles by the platform they report, as Ubiquiti's device list (static.ui.com/fingerprint)
+# and firmware server name them, in the groups the advisories use
 CONSOLE_GROUPS = {
-    # Dream Machines, Dream Routers, Cloud Gateways and the Dream Wall
-    "@gateways": ("UDM", "UDMPRO", "UDMPROSE", "UDMPROMAX", "UDR", "UDR7", "UDR5G", "UDW", "UDRULT", "UCGMAX", "UCGF"),
-    "@cloudkeys": ("UCKG2", "UCKP", "UCKENT"),
-    "@nvrs": ("UNVR", "UNVRPRO", "UNVRINS", "ENVR", "ENVRCORE"),
+    "@dm": ("UDM", "UDMPRO", "UDMPROSE", "UDMPROMAX", "UDMEA4C"),  # Dream Machines: UDMEA4C is the UDM-Beast
+    "@dr": ("UDR", "UDR7", "UDR5G"),  # Dream Routers: UDR5G is the UDR-5G-Max
+    "@cg": ("UDRULT", "UCGMAX", "UCGF", "UCGA6AD"),  # Cloud Gateways: Ultra, Max, Fiber, Industrial
+    "@efg": ("UDMENT", "EFGCORE"),  # Enterprise Fortress Gateway (EFG), Enterprise Firewall Core
+    "@ck": ("UCKG2", "UCKP", "UCKENT"),  # Cloud Keys: Gen2, Gen2 Plus, Enterprise
+    "@nvr": ("UNVR", "UNVRPRO", "UNVRINS", "UNVRAI4", "UNVRAI8", "ENVR", "ENVRCORE"),  # UNVRAI4/8: UNVR-G2 (Pro)
+    "@nas": ("UNAS2", "UNAS2B", "UNAS2W", "UNAS4", "UNAS4B", "UNAS4W", "UNASPRO", "UNASPRO4", "UNASPRO8"),
 }
-CONSOLES = {"UX", "UXMAX", *(code for group in CONSOLE_GROUPS.values() for code in group)}  # UniFi Express, Express 7
-NETWORK_CONSOLES = CONSOLES - set(CONSOLE_GROUPS["@nvrs"])
+# UDW: Dream Wall; UX: UniFi Express; UXMAX: Express 7; ENAS: Enterprise NAS
+CONSOLES = {"UDW", "UX", "UXMAX", "ENAS", *(code for group in CONSOLE_GROUPS.values() for code in group)}
+# The ones running UniFi Network: not the NVRs or NAS, nor the EF-Core, which isn't certain to
+NETWORK_CONSOLES = CONSOLES - set(CONSOLE_GROUPS["@nvr"]) - set(CONSOLE_GROUPS["@nas"]) - {"ENAS", "EFGCORE"}
+# UniFi Gateways: Lite, Max, Fiber, Enterprise, Pro (UXGPROV2: the Pro's current firmware)
+UXG_GATEWAYS = {"UXG", "UXGB", "UXGA6AA", "UXGENT", "UXGPRO", "UXGPROV2"}
 # Firmware-string prefixes that differ from the platform the console reports
 CONSOLE_ALIASES = {"UEX": "UX", "UNVR4": "UNVR"}
 UNIFI_APS = {"BZ2", "BZ2LR", "U2HSR", "U2IW", "U2Lv2", "U2O", "U2Sv2", "U5O", "U6ENT", "U6ENTIW", "U6EXT", "U6IW",
              "U6M", "U6MP", "U7EDU", "U7HD", "U7IW", "U7IWP", "U7LR", "U7LT", "U7MP", "U7MSH", "U7NHD", "U7P", "U7PG2",
              "U7PIW", "U7PRO", "U7PROMAX", "U7SHD", "U7UKU", "UAE6", "UAIW6", "UAL6", "UALR6", "UALR6v2", "UALRPL6",
-             "UAM6", "UAP6MP", "UAPL6", "UCXG", "UFLHD", "UHDIW", "UXBSDM", "UXSDM"}  # and UAP<hex>: U7 models
+             "UAM6", "UAP6MP", "UAPL6", "UCXG", "UFLHD", "UHDIW", "UXBSDM", "UXSDM"}  # and UAP<hex>; UAPL6 is the U6+
 # Switches on the main UniFi switch firmware. The Flex Mini, USW-Ultra and other models with their
 # own version numbers aren't here: an advisory's "Version 6.5.32 and earlier" means nothing for them.
 UNIFI_SWITCHES = {"S216150", "S224250", "S224500", "S248500", "S248750", "S28150", "US16P150", "US24", "US24P250",
@@ -139,16 +150,18 @@ UNIFI_SWITCHES = {"S216150", "S224250", "S224500", "S248500", "S248750", "S28150
                   "USWED44", "USWED45", "USWED72", "USWED73", "USWED74", "USWED75", "USWED76", "USWED77", "USWF001",
                   "USWF002", "USWF003", "USWF004", "USWF005", "USWF006", "USWF007", "USWF067", "USWF069"}
 UNIFI_FAMILIES = {**dict.fromkeys(CONSOLES, "unifi-os"), **dict.fromkeys(UNIFI_APS, "unifi-ap"),
-                  **dict.fromkeys(UNIFI_SWITCHES, "unifi-switch"),
+                  **dict.fromkeys(UNIFI_SWITCHES, "unifi-switch"), **dict.fromkeys(UXG_GATEWAYS, "uxg"),
                   **dict.fromkeys(("ULTE", "ULTEPEU", "ULTEPUS"), "unifi-lte"), "UBB": "ubb", "UBBXG": "ubb"}
 _FAMILY_OF = {name.casefold(): (family, name) for table in (FIRMWARE_FAMILIES, UNIFI_FAMILIES)
               for name, family in table.items()}
 # The models a rule covers when it names none
 DEFAULT_MODELS = {"unifi-network": NETWORK_CONSOLES - {"UX"}}  # the UniFi Express's Network lags behind
-# Versions below these aren't checked: legacy APs stay on 4.x, which later advisories don't cover.
-FAMILY_FLOORS = {"unifi-ap": "5.0.0"}
+# Versions below these aren't checked: legacy APs stay on 4.x, which later advisories don't cover,
+# and the first UXG-Pro firmware (1.x) never moved to the line the gateway advisories are about.
+FAMILY_FLOORS = {"unifi-ap": "5.0.0", "uxg": "2.0.0"}
 FAMILY_SOFTWARE = {"airmax-ac": "airOS", "airmax-m": "airOS", "edgeos": "EdgeOS", "edgeswitch": "EdgeSwitch",
-                   "unifi-os": "UniFi OS", "unifi-network": "UniFi Network"}
+                   "edgeswitch-x": "EdgeSwitch", "edgeswitch-xp": "EdgeSwitch", "unifi-os": "UniFi OS",
+                   "uxg": "UniFi OS", "unifi-network": "UniFi Network"}
 
 
 def _family_of(name):
@@ -332,7 +345,8 @@ def to_dict(matches) -> list:
 # Building the list
 # ---------------------------------------------------------------------------
 
-# NVD CPE product -> (family, model or None for all of the family). Products not here aren't checked.
+# NVD CPE product -> (family, model, models or None for all of the family). Products not here aren't
+# checked: airgateway_firmware, for one, gives its fix as 1.15 where the CVE's text says 1.1.5.
 CPE_PRODUCTS = {
     "airmax_ac_firmware": ("airmax-ac", None), "airmax_m_firmware": ("airmax-m", None),
     "airmax_m_xm_firmware": ("airmax-m", "XM"), "airmax_m_xw_firmware": ("airmax-m", "XW"),
@@ -346,6 +360,7 @@ CPE_PRODUCTS = {
     "aircube_firmware": ("aircube", None),
     "edgeos": ("edgeos", None), "edgemax_edgerouter_firmware": ("edgeos", None),
     "edgeswitch": ("edgeswitch", None), "edgeswitch_firmware": ("edgeswitch", None),
+    "edgeswitch_x": ("edgeswitch-x", None), "edgeswitch_xp_firmware": ("edgeswitch-xp", None),
     "edgemax_edgepower_24v_firmware": ("edgepower", None), "edgemax_edgepower_54v_firmware": ("edgepower", None),
     "usg_firmware": ("usg", "UGW3"), "usg-pro-4_firmware": ("usg", "UGW4"),
     "unifi_uap_firmware": ("unifi-ap", None), "unifi_access_point_firmware": ("unifi-ap", None),
@@ -355,6 +370,16 @@ CPE_PRODUCTS = {
     "unifi_dream_machine_firmware": ("unifi-os", "UDM"), "unifi_dream_machine_pro_firmware": ("unifi-os", "UDMPRO"),
     "unifi_dream_machine_special_edition_firmware": ("unifi-os", "UDMPROSE"),
     "unifi_dream_machine_pro_max_firmware": ("unifi-os", "UDMPROMAX"),
+    "unifi_dream_machine_beast_firmware": ("unifi-os", "UDMEA4C"),
+    "enterprise_fortress_gateway_firmware": ("unifi-os", "UDMENT"),
+    "enterprise_firewall_core_firmware": ("unifi-os", "EFGCORE"),
+    "unifi_cloud_gateway_industrial_firmware": ("unifi-os", "UCGA6AD"),
+    "unifi_network_video_recorder_g2_firmware": ("unifi-os", "UNVRAI4"),
+    "unifi_network_video_recorder_g2_pro_firmware": ("unifi-os", "UNVRAI8"),
+    "unas_2_firmware": ("unifi-os", ("UNAS2", "UNAS2B", "UNAS2W")),
+    "unas_4_firmware": ("unifi-os", ("UNAS4", "UNAS4B", "UNAS4W")),
+    "unas_pro_firmware": ("unifi-os", "UNASPRO"), "unas_pro_4_firmware": ("unifi-os", "UNASPRO4"),
+    "unas_pro_8_firmware": ("unifi-os", "UNASPRO8"),
     "unifi_dream_router_firmware": ("unifi-os", "UDR"), "unifi_dream_router_7_firmware": ("unifi-os", "UDR7"),
     "unifi_dream_router_5g_max_firmware": ("unifi-os", "UDR5G"), "unifi_dream_wall_firmware": ("unifi-os", "UDW"),
     "unifi_cloud_gateway_ultra_firmware": ("unifi-os", "UDRULT"),
@@ -387,7 +412,8 @@ CURATED = {
     "CVE-2010-5330": ("2019-06-11", 9.8, "airmax-m >=4.0.2 <5.3.5",
                       "Command injection through the ifname parameter of the web UI's AP-info page (stainfo.cgi)."),
     "CVE-2015-9266": ("2018-09-05", 9.8, "airmax-m <5.5.10 fix 5.6.2; airmax-m >=5.6.0 <5.6.2; "
-                                         "airfiber:AF24,AF24HD,AF5 <2.2.1; airfiber:AF5X <3.0.2.1",
+                                         "airfiber:AF24,AF24HD,AF5 <2.2.1; airfiber:AF5X <3.0.2.1; airgateway <1.1.5; "
+                                         "edgeswitch-xp <1.3.2",
                       "The web UI lets an unauthenticated attacker write files anywhere (directory traversal) "
                       "and gain root."),
     "CVE-2017-0938": ("2019-02-12", 7.5, "airmax-ac <8.3.2; airmax-m <6.0.7; edgeos <1.9.7",
@@ -461,6 +487,13 @@ CURATED = {
     "CVE-2026-77532": ("2026-08-26", 8.8, "edgeswitch <=1.12.1 fix 1.12.2",
                        "A buffer overflow in DHCPv6 lets an attacker on an adjacent network execute code (when "
                        "DHCPv6 is on)."),
+    "CVE-2019-5424": ("2019-04-10", 8.8, "edgeswitch-x <=1.1.0 fix 1.1.1",
+                      "A privileged user can run shell commands as root through the SSH CLI."),
+    "CVE-2019-5425": ("2019-04-10", 8.8, "edgeswitch-x <=1.1.0 fix 1.1.1",
+                      "A logged-in user can run shell commands over SSH, bypassing the CLI, and escalate to root."),
+    "CVE-2019-5426": ("2019-04-10", 4.8, "edgeswitch-x <=1.1.0 fix 1.1.1",
+                      "With SSH on, its port forwarding works without credentials: an attacker can reach local "
+                      "services or relay traffic through the switch."),
     "CVE-2020-8282": ("2020-12-14", 8.8, "edgepower <=1.7.0 fix 1.8.0",
                       "Missing CSRF protection in the web UI allows remote code execution."),
     # UniFi access points, switches, LTE Backup
@@ -474,6 +507,8 @@ CURATED = {
                                           "unifi-os:UX <3.2.5",
                        "A malformed discovery packet can stop device management and discovery (on the UniFi "
                        "Express, in mesh mode only)."),
+    "CVE-2024-37380": ("2024-07-22", 5.3, "unifi-ap:UAPL6 <=6.6.65 fix 6.6.74",
+                       "Traffic from access points meshed to a U6+ can be forwarded to the wrong VLAN."),
     # UniFi OS consoles
     "CVE-2020-8148": ("2020-04-13", 5.3, "unifi-os:UCKG2,UCKP <1.1.6 fix ?",
                       "Unauthenticated API requests can change the Cloud Key's hostname."),
@@ -486,7 +521,8 @@ CURATED = {
                        "Cloud Keys hosting UniFi Network expose its MongoDB database to the local network."),
     "CVE-2025-23091": ("2025-02-01", 5.9, "unifi-os:UDM,UDMPRO,UDMPROSE,UDMPROMAX <=4.0.21 fix 4.1.13; "
                                           "unifi-os:UDW,UCGMAX <=4.0.20 fix 4.1.13; unifi-os:UNVR,UNVRPRO <=4.0.18 "
-                                          "fix 4.1.11; unifi-os:UCKG2,UCKP,UCKENT <=4.0.20 fix 4.1.11",
+                                          "fix 4.1.11; unifi-os:UCKG2,UCKP,UCKENT <=4.0.20 fix 4.1.11; "
+                                          "unifi-os:UDMENT <=4.0.21 fix 4.1.13",
                        "With Identity Enterprise configured, application updates can be intercepted by a "
                        "man-in-the-middle."),
     "CVE-2026-34908": ("2026-05-22", 10.0, "@064",
@@ -499,7 +535,8 @@ CURATED = {
     "CVE-2026-47368": ("2026-06-12", 8.6, "@065", "Path traversal lets anyone on the network obtain data."),
     "CVE-2026-47369": ("2026-06-12", 9.9, "@065", "A low-privileged user can escalate privileges."),
     "CVE-2026-47370": ("2026-06-12", 9.9, "@065", "Command injection by a low-privileged user."),
-    "CVE-2026-48610": ("2026-06-12", 8.1, "unifi-os:@gateways,UXMAX <=5.1.12 fix 5.1.15",
+    "CVE-2026-48610": ("2026-06-12", 8.1, "unifi-os:UDM,UDMPRO,UDMPROSE,UDMPROMAX,UDMENT,UDW,@dr,UXMAX,@cg <=5.1.12 "
+                                          "fix 5.1.15; unifi-os:UDMEA4C <=5.1.11 fix 5.1.15",
                        "Under some network configurations, anyone on the network can make unauthorized changes."),
     "CVE-2026-54401": ("2026-07-02", 8.8, "@066",
                        "Server-side request forgery lets a low-privileged user escalate privileges."),
@@ -508,11 +545,12 @@ CURATED = {
     "CVE-2026-54404": ("2026-07-02", 8.8, "@066", "SQL injection lets a low-privileged user escalate privileges."),
     "CVE-2026-55110": ("2026-07-02", 6.1, "@066",
                        "A CORS misconfiguration lets a malicious page act with a logged-in user's session."),
-    "CVE-2026-55112": ("2026-07-02", 8.8, "unifi-os:UDMPRO,UDMPROSE,UDMPROMAX,UDW,UDR,UDR7,UDR5G,UCKP,@nvrs,UCGMAX,"
-                                          "UCGF <=5.1.15 fix 5.1.19",
+    "CVE-2026-55112": ("2026-07-02", 8.8, "unifi-os:UDMPRO,UDMPROSE,UDMPROMAX,UDMEA4C,UDW,@dr,UCKP,@nvr,UCGMAX,"
+                                          "UCGA6AD,UCGF <=5.1.15 fix 5.1.19",
                        "With UniFi Protect installed, a low-privileged user can escalate privileges on the host "
                        "under certain conditions."),
-    "CVE-2026-55116": ("2026-07-02", 9.8, "unifi-os:@gateways,UXMAX <=5.1.15 fix 5.1.19",
+    "CVE-2026-55116": ("2026-07-02", 9.8, "unifi-os:@dm,UDMENT,UDW,@dr,UXMAX,@cg <=5.1.15 fix 5.1.19; "
+                                          "unifi-os:EFGCORE <=5.1.18 fix 5.1.19",
                        "Under some network configurations, anyone on the network can make unauthorized changes."),
     "CVE-2026-77534": ("2026-08-26", 9.9, "@067", "Improper access control lets a low-privileged user escalate "
                                                   "privileges."),
@@ -570,13 +608,17 @@ CURATED = {
 BULLETINS = {
     "@062": "unifi-network <=10.1.85 fix 10.1.89; unifi-network >=10.2.0 <=10.2.93 fix 10.2.97; "
             "unifi-network:UX <=9.0.114 fix 9.0.118",
-    "@064": "unifi-os:UDM,UDMPRO,UDMPROSE,UDMPROMAX,UDW,UDR,UDR7,UXMAX,UNVR,UNVRPRO,UNVRINS,ENVR,UDRULT,UCGMAX,UCGF "
-            "<=5.0.16 fix 5.1.12; unifi-os:UDR5G,ENVRCORE,UCKP,UCKG2,UCKENT <=5.0.17 fix 5.1.12",
-    "@065": "unifi-os:@gateways,UXMAX,@cloudkeys,@nvrs <=5.1.12 fix 5.1.15; unifi-os:UX <=4.0.14 fix 4.0.15",
-    "@066": "unifi-os:@gateways,UXMAX,@cloudkeys,@nvrs <=5.1.15 fix 5.1.19",
-    "@067": "unifi-os:@gateways,UXMAX,@cloudkeys,@nvrs <=5.1.26 fix 5.1.31",
-    "@069": "unifi-os:@gateways <=5.1.26 fix 5.1.31; unifi-os:UX <=4.0.20 fix 4.0.21; "
-            "unifi-os:UXMAX <=5.1.19 fix 5.1.31",
+    "@064": "unifi-os:UCGA6AD <=5.0.13 fix 5.1.12; unifi-os:UDM,UDMPRO,UDMPROSE,UDMPROMAX,UDMENT,UDW,UDR,UDR7,UXMAX,"
+            "UNVR,UNVRPRO,UNVRINS,ENVR,UDRULT,UCGMAX,UCGF <=5.0.16 fix 5.1.12; unifi-os:UDR5G,ENVRCORE,@ck <=5.0.17 "
+            "fix 5.1.12; unifi-os:UNVRAI4,UNVRAI8 <=5.1.11 fix 5.1.12; unifi-os:UDMEA4C <=5.1.8 fix 5.1.11; "
+            "unifi-os:@nas <=5.1.8 fix 5.1.10",
+    "@065": "unifi-os:UDM,UDMPRO,UDMPROSE,UDMPROMAX,UDMENT,UDW,@dr,UXMAX,@ck,@nvr,@cg <=5.1.12 fix 5.1.15; "
+            "unifi-os:UDMEA4C <=5.1.11 fix 5.1.15; unifi-os:@nas <=5.1.10 fix 5.1.16; unifi-os:UX <=4.0.14 fix 4.0.15",
+    "@066": "unifi-os:@dm,UDMENT,UDW,@dr,UXMAX,@ck,@nvr,@cg <=5.1.15 fix 5.1.19; unifi-os:@nas <=5.1.16 fix 5.1.19; "
+            "unifi-os:EFGCORE <=5.1.18 fix 5.1.19",
+    "@067": "unifi-os:@ck,@nvr,ENAS,@dm,@efg,@dr,@cg,UDW,UXMAX <=5.1.26 fix 5.1.31; unifi-os:@nas <=5.1.26 fix 5.1.32",
+    "@069": "unifi-os:@dm,@efg,@dr,@cg,UDW <=5.1.26 fix 5.1.31; unifi-os:UX <=4.0.20 fix 4.0.21; "
+            "unifi-os:UXMAX <=5.1.19 fix 5.1.31; uxg <=5.0.16 fix 5.1.26",
 }
 # CVEs whose CPE data would give a rule, left out on purpose
 SKIPPED = {
@@ -623,9 +665,9 @@ def _expand(spec: str) -> list:
 
 
 def _severity(score) -> str | None:
-    if score is None:
+    if not score:
         return None
-    return "critical" if score >= 9 else "high" if score >= 7 else "medium" if score >= 4 else "low" if score > 0 else None
+    return "critical" if score >= 9 else "high" if score >= 7 else "medium" if score >= 4 else "low"
 
 
 def _nvd_score(cve: dict):
@@ -659,7 +701,8 @@ def _rules_from_cpe(cve: dict) -> list:
             if not family or "versionStartExcluding" in m:
                 continue
             a = {"family": family}
-            models = [model] if model else routers if family == "edgeos" else []
+            models = list(model) if isinstance(model, tuple) else [model] if model else \
+                routers if family == "edgeos" else []
             if models:
                 a["models"] = models
             version = parts[5]
@@ -766,7 +809,7 @@ def fetch_nvd(log=None, timeout: float = 60.0, request_timeout: float = 15.0) ->
                 raise TimeoutError("ran out of time")
             req = urllib.request.Request(f"{NVD_API}?{query}&resultsPerPage=2000&startIndex={start}",
                                          headers={"User-Agent": f"OpenDisco/{__version__}"})
-            with urllib.request.urlopen(req, timeout=min(request_timeout, left)) as resp:
+            with tls.urlopen(req, timeout=min(request_timeout, left)) as resp:
                 page = json.load(resp)
             for item in page.get("vulnerabilities", []):
                 cve = item.get("cve") or {}
