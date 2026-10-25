@@ -19,7 +19,7 @@ import toga
 from toga.style import Pack
 from toga.style.pack import COLUMN, ROW
 
-from opendisco import FULL_NAME, __version__, core, phone, records, vulns
+from opendisco import FULL_NAME, __version__, core, health, phone, records, vulns
 
 if core.platform_name() != "ios":  # left out of the iOS app (packaging/ios/build_ios.py)
     from opendisco import update
@@ -42,7 +42,8 @@ ACCESSORS = [c.lower() for c in COLUMNS]
 PHONE_COLUMNS = ["IP", "Model", "Name"]
 ANY_PORT = "Any port"
 # What a device's right-click menu (and the Device menu) offers; None separates groups.
-DEVICE_ACTIONS = [("web", "Open Web UI"), ("ssh", "Open SSH…"), ("ping", "Ping"), ("rescan", "Rescan device"),
+DEVICE_ACTIONS = [("web", "Open Web UI"), ("ssh", "Open SSH…"), ("ping", "Ping"), ("latency", "Measure latency"),
+                  ("rescan", "Rescan device"),
                   ("scan_from", "Scan from device…"), ("issues", "Show issues…"), None,
                   ("find_http", "Find HTTP port"), ("find_https", "Find HTTPS port"), ("find_ssh", "Find SSH port"),
                   ("all_ports", "Scan all ports"), None,
@@ -58,9 +59,10 @@ PORT_SEARCH_WARNING = ("A port search connects to {ip}'s TCP ports: all 65,535 o
                        "firewall's port-scan detection) can take that for a port scan from this computer: it may "
                        "raise an alert, a false alarm here, or block this computer for a while.")
 NO_SESSION = "Right-click a device to get started: Open SSH or Ping."
-# The Settings window's checkboxes: settings.json key -> text. Both are on until turned off.
+# The Settings window's checkboxes: settings.json key -> text. All are on until turned off.
 SETTINGS = {"check_app_updates": "Check for OpenDisco updates when opening",
-            "check_cve_updates": "Check for new CVEs when opening"}
+            "check_cve_updates": "Check for new CVEs when opening",
+            "check_firmware": "Check firmware versions during scans"}
 # What settings.json keeps; "update" remembers an update while the app restarts into it,
 # "deep_checks" is iOS's Deep checks switch (in Settings there) and "sweep_subnets" Settings' list
 # of subnets every scan also sweeps (records.SWEEP_KEY).
@@ -365,7 +367,7 @@ class OpenDiscoApp(toga.App):
         except Exception:
             pass  # purely cosmetic
 
-    COLUMN_WEIGHTS = (1.1, 0.5, 0.9, 1.3, 1.0, 1.4, 0.9, 0.6, 0.7, 0.6, 0.7, 1.1, 1.3)  # IP ... Status
+    COLUMN_WEIGHTS = (1.1, 0.5, 0.9, 1.3, 1.0, 1.4, 1.3, 0.8, 0.6, 0.7, 0.6, 0.7, 1.1, 1.3)  # IP ... Status
 
     def _size_columns(self, *args, **kwargs):
         """Windows: toga sizes the table's columns once, before the window has its width, which left
@@ -673,6 +675,7 @@ class OpenDiscoApp(toga.App):
         """Fill the table, minus hidden devices and those the search leaves out. Rows change in
         place when the same devices are listed, so the selection stays put while a scan or a rescan
         updates them."""
+        self._check_firmware(devices)
         row = self._phone_row if self.caps["mobile"] else (lambda d: dict(zip(ACCESSORS, core.device_row(d))))
         self.device_notes.apply(devices)
         listed = [d for d in devices if d.key not in self.hidden]
@@ -742,6 +745,7 @@ class OpenDiscoApp(toga.App):
             self._show_packets(self.shown_packets[0], force=True)
         if result.trunks:
             self.tabs.current_tab = "On the wire"
+        self._measure_latency()
 
     def _device(self, key):
         return next((d for d in self._all_devices() if d.key == key), None)
@@ -774,6 +778,8 @@ class OpenDiscoApp(toga.App):
             name, title = entry
             self.commands.add(toga.Command(lambda command, name=name, **kwargs: self._device_action(name),
                                            text=title, group=group, section=section, order=order))
+        self.commands.add(toga.Command(lambda command, **kwargs: self._measure_latency(),
+                                       text="Measure latency to all devices", group=group, section=section + 1))
 
     def _install_context_menu(self):
         try:
@@ -909,6 +915,7 @@ class OpenDiscoApp(toga.App):
             "web": (f"Open Web UI  ({core.web_url(d, fallback=True)})" if ip else titles["web"], ip),
             "ssh": ("Show SSH session" if ssh else f"Open SSH…  (port {d.port('ssh')})", ip),
             "ping": ("Show ping" if ping and ping.alive else titles["ping"], ip),
+            "latency": (titles["latency"] + (f"  ({health.latency_cell(d)})" if health.latency_cell(d) else ""), ip),
             "rescan": (titles["rescan"], idle),
             "issues": (f"Show issues ({len(d.issues)})…" if d.issues else titles["issues"], bool(d.issues)),
             **finds,
@@ -953,6 +960,8 @@ class OpenDiscoApp(toga.App):
             asyncio.create_task(self._open_ssh(d))
         elif name == "ping":
             self._open_ping(d)
+        elif name == "latency":
+            self._measure_latency([d])
         elif name == "rescan":
             self._rescan(d)
         elif name in FINDS:
@@ -1186,6 +1195,73 @@ class OpenDiscoApp(toga.App):
         ports = ", ".join(f"{p} {k}" for p, k in sorted(d.services.items())) or "no management ports open"
         self._tool_said(f"Rescanned {d.ip}: " + ("answered discovery" if answered else "no discovery reply")
                         + f"; {ports}.")
+
+    # -- health: the latest firmware and latency (health.py) ---------------------------
+    firmware = None  # health.Firmware: the latest releases for the platforms found
+    measuring = None  # the scan whose devices' latency is being measured
+
+    def _check_firmware(self, devices):
+        """Give each device the latest firmware for its platform, as far as it's known, and look up
+        the rest in the background (Settings: "Check firmware versions during scans")."""
+        if not self.settings.get("check_firmware", True):
+            return
+        if self.firmware is None:
+            self.firmware = health.Firmware(self.paths.data, on_found=lambda: self._from_worker(self._health_changed),
+                                            log=lambda m: self._from_worker(self._append_log, m, False))
+        self.firmware.add(devices)
+
+    def _health_changed(self):
+        """New firmware answers or latency: shown in the list and in Details."""
+        self._show_devices(self._all_devices())
+        d = self._selected_device()
+        if d is not None:
+            self.details.value = core.render_details(d)
+
+    def _measure_latency(self, devices=None):
+        """Ping devices a few times each, in the background: all of them after a scan (or from
+        Device > Measure latency to all devices), or the ones given."""
+        res = self.result
+        if res is None:
+            self.status.text = "Latency is measured once a scan has finished."
+            return
+        if self.measuring is res:
+            self.status.text = "Measuring latency already…"
+            return
+        asked = devices is not None
+        devices = [d for d in (devices if asked else res.devices)
+                   if d.ip and (asked or (d.key not in self.hidden and health.pingable(d, self.holding)))]
+        if not devices:
+            return
+        self.measuring = res
+        what = devices[0].ip if len(devices) == 1 else f"{len(devices)} devices"
+        self._append_log(f"Measuring latency to {what}…", status=asked)
+
+        def work():
+            error = None
+            try:
+                health.measure(devices)
+            except OSError as e:
+                error = str(e)
+            except Exception as e:
+                error = f"{type(e).__name__}: {e}"
+                self._from_worker(self._append_log, traceback.format_exc(), False)
+            self._from_worker(self._measured, res, devices, asked, error)
+
+        threading.Thread(target=work, daemon=True).start()
+
+    def _measured(self, res, devices, asked, error):
+        if self.measuring is res:
+            self.measuring = None
+        if res is not self.result:  # a new scan started meanwhile
+            return
+        if error:
+            self._append_log(f"Latency not measured: {error}", status=asked)
+            return
+        if res.diag_args:  # flags high latency and loss
+            core.diagnose(res.inv, *res.diag_args)
+            res.devices = core.sorted_devices(res.inv)
+        self._health_changed()
+        self._append_log(health.summary(devices), status=asked)
 
     # -- chasing one device's ports ---------------------------------------------------
     async def _find_after_warning(self, d, kind):
