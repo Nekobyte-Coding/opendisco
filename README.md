@@ -225,9 +225,9 @@ python3 opendisco.py
 
 ```
 IP           VLAN  VENDOR    MAC                MODEL         NAME                 FIRMWARE      UPTIME  VIA         STATUS
-10.60.12.10  1     Ubiquiti  f4:92:bf:3c:41:10  R5AC-PRISM    Tower1-Sector-North  8.7.11.46972  63d01h  ubnt,mcast  ok
-10.60.12.42  1     Ubiquiti  68:d7:9a:30:c4:e2  NBE-5AC-Gen2  CPE-Grain-Elevator   8.7.10.46972  3m04s   ubnt,mcast  REBOOTED
-10.60.12.99  1     Ubiquiti  fc:ec:da:09:b3:55  NS-5AC        Bench-Spare-NS5AC    8.7.4.45112   2h15m   ubnt,mcast  DEFAULT
+10.60.12.10  1     Ubiquiti  f4:92:bf:3c:41:10  R5AC-PRISM    Tower1-Sector-North  8.7.11.46972  63d01h  ubnt,mcast  ❗ CVE
+10.60.12.42  1     Ubiquiti  68:d7:9a:30:c4:e2  NBE-5AC-Gen2  CPE-Grain-Elevator   8.7.10.46972  3m04s   ubnt,mcast  ❗ REBOOTED CVE
+10.60.12.99  1     Ubiquiti  fc:ec:da:09:b3:55  NS-5AC        Bench-Spare-NS5AC    8.7.4.45112   2h15m   ubnt,mcast  ❗ DEFAULT CVE
 
 3 device(s), 3 heard via UBNT discovery, 6.0s
 ```
@@ -251,6 +251,7 @@ Every problem found is listed below the table. `-v` shows every field each devic
 | `opendisco.py -v --raw` | Also lists each device's packets at the end, checked for damage and loss |
 | `opendisco.py --json > scan.json` | Machine-readable output |
 | `opendisco.py --export report.html` | Also saves a report: `.html` opens on any phone; `.csv` and `.json` work too |
+| `opendisco.py --update-cves` | Downloads the current list of known firmware CVEs from the NVD. See [Known vulnerabilities](#known-vulnerabilities-cves) |
 | `opendisco.py --interfaces` | Shows the active Ethernet/Wi-Fi interfaces it found, including ones with link but no address |
 | `opendisco.py -a` | Also probes the networks in `networks.txt` through temporary IP aliases. See below |
 | `opendisco.py -a --hold` | The same, then keeps the aliases that reached gear, so it can be managed, until Ctrl+C |
@@ -559,6 +560,7 @@ opened.
 | `NOT-SET-UP` | Console API says the console hasn't been set up | |
 | `DAMAGED` | Some of its discovery packets arrived damaged | Cable, connectors, switch port, speed/duplex. See [Damaged packets and loss](#damaged-packets-and-loss) |
 | `LOSS` | Missed 10% or more of the rounds of probes (at least 2) while in view | Wi-Fi interference, a bad cable or port, a busy link or device |
+| `CVE` | Its firmware has known vulnerabilities; Status starts with a red ❗ | Upgrade to the version the message names. See [Known vulnerabilities](#known-vulnerabilities-cves) |
 
 **Notes** at the bottom cover the scan itself: UDP 10001 already in use, broadcasts blocked,
 or other hosts sending discovery probes. More than one controller probing the same network
@@ -608,6 +610,33 @@ kept by sender and listed in the notes.
 `Answered 28 of 30 rounds` means 2 rounds got no reply. Rounds are only counted while the
 device was in view: from its first answer to its last, and only rounds sent to a network it's
 on. Loss of 10% or more, and at least 2 rounds, gets a `LOSS` warning.
+
+## Known vulnerabilities (CVEs)
+
+Each device's firmware is checked against a built-in list of known CVEs for the gear
+discovery identifies:
+
+- airMAX (airOS 8 on XC, WA, 2XC and 2WA boards; airOS 6 and earlier on XM, XW and TI),
+  airFiber 60 and 60 LR, 60 XG and HD, GigaBeam, the older airFiber radios, airCube, airGateway
+- EdgeRouters (EdgeOS, hotfixes included), EdgeSwitch, EdgeSwitch X and XP, EdgePower, UniFi
+  Security Gateways
+- UniFi access points, switches, LTE Backup, Building Bridges and UniFi Gateways (UXG)
+- UniFi OS consoles (Dream Machines, the UDM-Beast, Dream Routers, Cloud Gateways, the Dream
+  Wall, Enterprise Fortress Gateway and EF-Core, UniFi Express and Express 7, Cloud Keys, NVRs,
+  UNAS), and the UniFi Network version they report
+
+A device with a match gets a `CVE` diagnostic naming each CVE and the version that fixes them,
+and its Status starts with a red ❗. Details lists every match with its CVSS severity, what
+fixes it and a short summary; the JSON export has them too, with links to the NVD.
+
+The list comes from the NVD and Ubiquiti's Security Advisory Bulletins, and every range was
+checked against the bulletin. Where the two disagree, only the versions both call affected are
+flagged. Models are recognised by the platform names in Ubiquiti's own device list and firmware
+server. A device is only checked when its model and firmware version are certain, so **no
+match isn't proof a device is safe**. Notes says how old the list is.
+`opendisco.py --update-cves` downloads current NVD data (a few seconds, within the NVD's limit
+for use without an API key) into the app's data folder, and the newer of that and the built-in
+list is used. `packaging/update_cves.py` regenerates the built-in list.
 
 ## Platform notes
 
@@ -676,6 +705,11 @@ a packet for decoding.
   `0x1B`, `0x20`, `0x33`.
 - The OUI list is a snapshot from Wireshark's vendor database (October 2026). `--oui` adds
   new prefixes.
+- The CVE check doesn't cover cameras and other UniFi Protect, Access, Talk and Connect gear,
+  or server software (UISP, self-hosted UniFi Network or UniFi OS Server). Firmware 4.x on
+  legacy access points isn't checked against advisories written for 5.x and later. A refresh adds new CVEs only when the
+  NVD has product data for them; the newest UniFi advisories often lack it for weeks, until a
+  new release adds them by hand.
 
 ## Building from source
 
