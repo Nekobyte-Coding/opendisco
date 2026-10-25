@@ -44,6 +44,10 @@ NVD_LIMIT = (5, 30.0)
 SOURCES = ["NVD (https://nvd.nist.gov)", "Ubiquiti Security Advisory Bulletins (https://community.ui.com/releases)"]
 
 
+# The NVD's terms of use ask apps that use its API to say this, prominently.
+NVD_NOTICE = "This product uses the NVD API but is not endorsed or certified by the NVD."
+
+
 def nvd_url(cve_id: str) -> str:
     """The NVD's page for a CVE."""
     return f"https://nvd.nist.gov/vuln/detail/{cve_id}"

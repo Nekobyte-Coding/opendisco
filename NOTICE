@@ -7,5 +7,8 @@ OpenDisco is an independent project. It isn't made, endorsed or supported by Ubi
 Ubiquiti, UniFi, airMAX, EdgeMAX, UISP, AmpliFi and WiFiman are trademarks of Ubiquiti Inc.,
 and other product names belong to their owners; they're used only to say what the tool works with.
 
+The CVE check uses data from the National Vulnerability Database (NVD) at NIST. This product
+uses the NVD API but is not endorsed or certified by the NVD.
+
 This product includes xterm.js, used under the MIT License; its copyright notices and license
 are in opendisco/resources/xterm/LICENSE.

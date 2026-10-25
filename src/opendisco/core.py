@@ -4666,7 +4666,8 @@ def render_notes(inv: Inventory, sc: Scanner, opts) -> list:
         notes.append(("note", f"The firmware of {len(checked)} device(s) was checked against {info['cves']} known CVEs "
                               f"({vulns.list_label()}, from the NVD and Ubiquiti's security advisories). No match "
                               "isn't proof a device is safe: only models and firmware versions discovery identifies "
-                              "for certain are checked, and the newest CVEs may be missing from the list."))
+                              "for certain are checked, and the newest CVEs may be missing from the list. "
+                              + vulns.NVD_NOTICE))
     if not inv.devices and not opts.listen and not opts.direct:
         notes.append(("note", "Nothing answered. Check that this computer is on the same VLAN as the devices, "
                               "that Wi-Fi client isolation isn't on, and that the firewall allows inbound UDP. "

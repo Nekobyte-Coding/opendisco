@@ -1498,9 +1498,10 @@ class OpenDiscoApp(toga.App):
                     for key, text in SETTINGS.items()]
         content = toga.Box(style=Pack(direction=COLUMN, margin=14, gap=10), children=[
             *switches,
+            toga.Label(textwrap.fill(vulns.NVD_NOTICE, 60), style=Pack(font_size=10)),
             toga.Box(style=Pack(direction=ROW), children=[toga.Box(style=Pack(flex=1)),
                                                           toga.Button("Done", on_press=done)])])
-        self.close_settings = self._show_panel("Settings", content, (460, 170),
+        self.close_settings = self._show_panel("Settings", content, (460, 200),
                                                on_close=lambda: setattr(self, "close_settings", None))
 
     def _launch_checks(self):
