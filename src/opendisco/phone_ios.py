@@ -43,7 +43,7 @@ class Page:
     """A page pushed over the device list, holding Toga content, with the title bar's back
     button (and the swipe from the left edge) to return."""
 
-    def __init__(self, app, content):
+    def __init__(self, app, content, on_back=None):  # (leaving needn't stop anything on iOS)
         from toga_iOS.container import ControlledContainer
         self.app, self.content, self.laid_out = app, content, None
         self.container = ControlledContainer(on_refresh=lambda container: None, on_native_layout=self._layout)

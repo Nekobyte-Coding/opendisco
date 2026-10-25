@@ -10,8 +10,9 @@ underneath.
 
 This module is what both phones share. What each does natively is in phone_<platform>.py
 (phone_ios.py: UIKit through rubicon-objc; phone_android.py), which provides:
-    Page(app, content)          a page over the device list, holding Toga content: .show(title,
-                                subtitle) opens it, .close() closes it; Back returns to the list
+    Page(app, content, on_back=None)   a page over the device list, holding Toga content:
+                                .show(title, subtitle) opens it, .close() closes it; Back returns
+                                to the list (Android: then calls on_back, as closing a window would)
     fit(app, export, notes, settings)   once the window exists: title-bar buttons calling those
                                 (app.export_button: anything with .enabled), the list's and the
                                 tabs' looks
@@ -110,9 +111,10 @@ def fit(app):
     update_tools(app)
 
 
-def push_panel(app, title: str, content):
-    """A small page (Settings) over the device list; returns what closes it."""
-    page = native(app).Page(app, toga.Box(style=Pack(direction=COLUMN, flex=1), children=[content]))
+def push_panel(app, title: str, content, on_back=None):
+    """A small page (Settings, an update) over the device list; returns what closes it. on_back
+    runs when it's left with Back (Android), the way closing a window does elsewhere."""
+    page = native(app).Page(app, toga.Box(style=Pack(direction=COLUMN, flex=1), children=[content]), on_back)
     page.show(title, "")
     return page.close
 
