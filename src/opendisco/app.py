@@ -801,7 +801,6 @@ class OpenDiscoApp(toga.App):
                 item.title, item.enabled = title, enabled
 
     def _menu_state(self, d) -> dict:
-        from opendisco import devicegui
         titles = dict(entry for entry in DEVICE_ACTIONS if entry)
         if d is None:
             return {name: (title, False) for name, title in titles.items()}
@@ -824,8 +823,15 @@ class OpenDiscoApp(toga.App):
             "copy_mac": (f"Copy MAC address  ({d.mac})" if d.mac else titles["copy_mac"], bool(d.mac)),
             "forget": (titles["forget"], ip),
             "hide": (titles["hide"], True),
-            **devicegui.menu_state(self, d, titles),  # firmware, config and login over SSH
+            **self._device_tools_state(d, titles),
         }
+
+    def _device_tools_state(self, d, titles) -> dict:
+        """The SSH device tools, and devices behind others (desktop only: phones have no ssh)."""
+        if self.caps["mobile"]:
+            return {}
+        from opendisco import devicegui
+        return devicegui.menu_state(self, d, titles)
 
     def _device_action(self, name):
         d = self._selected_device()
@@ -833,10 +839,11 @@ class OpenDiscoApp(toga.App):
             self.status.text = "Select a device first."
             return
         title, enabled = self._menu_state(d)[name]
-        from opendisco import devicegui
-        if enabled and devicegui.handles(self, d, name):  # the device tools, and devices behind others
-            devicegui.act(self, d, name)
-            return
+        if enabled and not self.caps["mobile"]:
+            from opendisco import devicegui
+            if devicegui.handles(self, d, name):  # the device tools, and devices behind others
+                devicegui.act(self, d, name)
+                return
         if not enabled:
             waits = name == "rescan" or name in FINDS or (name == "scan_from" and "(" not in title)
             self.status.text = ("Works once a scan has finished, one device at a time." if waits
