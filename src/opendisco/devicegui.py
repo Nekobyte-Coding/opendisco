@@ -765,6 +765,10 @@ class ConfigEditor:
         try:
             message = await _work(lambda: devicetools.write_config(
                 self.login, text, apply, report=lambda m: self.app._from_worker(setattr, self.state, "text", m)))
+        except devicetools.LostConnection as e:  # what it means for the device, as far as it's known
+            self.state.text = str(e)
+            self.app.status.text = f"{self.d.ip}: {e}"
+            await self.window.dialog(toga.ErrorDialog("Connection lost", str(e)))
         except (devicetools.ToolError, sshrun.SSHError) as e:
             self.state.text = str(e)
         else:
