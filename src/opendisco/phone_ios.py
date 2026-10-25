@@ -640,6 +640,37 @@ def fit_safe_area(app):
         pass  # cosmetic
 
 
+def present(app, content):
+    """A page over everything, which can't be swiped away (the terms of use, until they're agreed
+    to), laid out inside the safe area. Returns what takes it away."""
+    from toga_iOS.container import ControlledContainer
+    laid_out = []
+
+    def layout(container):
+        insets = container.native.safeAreaInsets
+        size = (container.native.bounds.size.width, container.native.bounds.size.height,
+                insets.top, insets.left, insets.right, insets.bottom)
+        if [size] != laid_out:
+            laid_out[:] = [size]
+            container.top_inset, container.left_inset = insets.top, insets.left
+            container.right_inset, container.bottom_inset = insets.right, insets.bottom
+            content.refresh()
+
+    container = ControlledContainer(on_refresh=lambda container: None, on_native_layout=layout)
+    content.app = app
+    container.content = content._impl
+    controller = container.controller
+    controller.view.backgroundColor = _class_value(_objc("UIColor"), "systemBackgroundColor")
+    controller.modalPresentationStyle = 0  # full screen
+    controller.modalInPresentation = True  # no swiping it away
+    shown = app.main_window._impl.native.rootViewController
+    while shown.presentedViewController:
+        shown = shown.presentedViewController
+    shown.presentViewController(controller, animated=False, completion=None)
+    app._presented = container  # kept alive while it's up
+    return lambda: controller.dismissViewControllerAnimated(True, completion=None)
+
+
 def export(app, name: str):
     """Save the report in the app's own folder and offer it to the share sheet."""
     share(app, phone.export_file(app, name))

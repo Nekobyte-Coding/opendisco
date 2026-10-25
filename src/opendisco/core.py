@@ -4612,7 +4612,8 @@ def render_details(d: Device) -> str:
         row("Reached via alias", f"{a['alias']}/{a['prefix']} on {a['interface']}"
                                  + ("  (also answered without it)" if d.direct else ""))
     if d.protocols:
-        row("UBNT protocol", ", ".join(sorted(d.protocols)) + f"  ({d.ubnt_packets} packets)")
+        n = d.ubnt_packets
+        row("UBNT protocol", ", ".join(sorted(d.protocols)) + f"  ({n} packet{'' if n == 1 else 's'})")
     if d.mac:
         row("Vendor (MAC)", vendor_of(d.mac) or "not in the built-in lists")
     if d.mdns:

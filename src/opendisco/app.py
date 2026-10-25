@@ -7,6 +7,7 @@ Windows can't capture traffic, add addresses or tag VLANs. The iOS app doesn't u
 """
 import asyncio
 import json
+import re
 import shutil
 import textwrap
 import threading
@@ -68,8 +69,15 @@ SETTINGS = {"check_app_updates": "Check for OpenDisco updates when opening",
 # What settings.json keeps; "update" remembers an update while the app restarts into it,
 # "deep_checks" is iOS's Deep checks switch (in Settings there) and "sweep_subnets" Settings' list
 # of subnets every scan also sweeps (records.SWEEP_KEY).
+# The terms of use, agreed to the first time each version opens: the version and when.
+TERMS_KEY = "terms_accepted"
+TERMS_FILE = Path(__file__).parent / "resources" / "TERMS.md"
+TERMS_TITLE = "Terms of Use"
+TERMS_PROMPT = "OpenDisco opens once these terms are agreed to. They're shown again after each update."
+TERMS_IOS = "To decline, close OpenDisco and delete it."
+TERMS_AGREE, TERMS_QUIT = "I agree", "Quit"
 SAVED_SETTINGS = ("hidden", "ssh_user", "skip_port_warning", "device_logins", *SETTINGS, "update", "deep_checks",
-                  records.SWEEP_KEY)
+                  records.SWEEP_KEY, TERMS_KEY)
 # Where earlier versions kept their data, by the parts of the data folder's path that changed:
 # folder name now -> patterns for its earlier names. macOS names the folder after the app ID
 # (earlier IDs ended .opendisco or .ubnt-discover); Windows after the publisher (until 1.4.1,
@@ -108,6 +116,29 @@ def _menu_target_class():
     return _MENU_TARGET
 
 
+def terms_text() -> str:
+    """The terms of use as plain text, for this version: TERMS.md without its Markdown headings' #."""
+    text = TERMS_FILE.read_text(encoding="utf-8").replace("{version}", __version__)
+    return re.sub(r"^#+\s*", "", text, flags=re.MULTILINE)
+
+
+def fit_columns(need: list, least: list, width: float) -> list:
+    """Column widths for a table `width` wide, too narrow for what its columns hold (`need`): the
+    widest columns give up width first, down to a common width, so addresses, MACs and the narrow
+    columns stay whole as long as they can. None goes below its heading (`least`) unless even
+    the headings don't fit, when they all shrink alike."""
+    if sum(least) >= width:
+        return [w * width / sum(least) for w in least]
+    low, high = 0.0, float(max(need))
+    for _ in range(40):  # the common width, found by halving
+        cap = (low + high) / 2
+        if sum(max(head, min(n, cap)) for n, head in zip(need, least)) > width:
+            high = cap
+        else:
+            low = cap
+    return [max(head, min(n, low)) for n, head in zip(need, least)]
+
+
 class OpenDiscoApp(toga.App):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
@@ -118,6 +149,8 @@ class OpenDiscoApp(toga.App):
             paths.__dict__.pop("_dirs", None)  # in case the folders were looked up already
 
     def startup(self):
+        self._toga_commands = {c.id for c in self.commands if isinstance(c, toga.Command)}  # Quit, About...
+        self.terms_waiting = False
         self.caps = core.capabilities()
         self.caps["vlans"] = self.caps["aliases"] and self.caps["listen"]
         self.caps["updates"] = self.caps["platform"] != "ios"  # OpenDisco updates itself
@@ -236,7 +269,7 @@ class OpenDiscoApp(toga.App):
 
         # Phones' title bars have room for the short name only.
         title = f"{self.formal_name if mobile else FULL_NAME} {__version__}"
-        self.main_window = toga.MainWindow(title=title, size=(1250, 780))
+        self.main_window = toga.MainWindow(title=title, **self._first_frame())
         if phone_ui:  # the device list; each device gets a page of its own
             self.main_window.content = phone.main_screen(self)
         else:
@@ -297,8 +330,71 @@ class OpenDiscoApp(toga.App):
         self._watch_tab_labels()
         self.loop.call_later(0.3, self._align_tab_labels)
         self.loop.call_later(0.3, self._fit_safe_area)
+        if (self.settings.get(TERMS_KEY) or {}).get("version") == __version__:
+            self._opened()
+        else:
+            self._ask_terms()
+
+    def _opened(self):
+        """Once this version's terms of use are agreed to: the columns' first sizes, and the
+        checks made when opening."""
         self.loop.call_later(0.5, lambda: self._size_columns(first=True))
         self.loop.call_later(1.0, self._launch_checks)
+
+    # -- terms of use -------------------------------------------------------
+    def _ask_terms(self):
+        """The first time each version opens, its terms of use, to be agreed to before anything
+        else: in place of the main window's content, the app's own menu items and title-bar
+        buttons off meanwhile (closing the window, Quit or Android's Back leaves); on iOS over
+        everything, with I agree only, as an iOS app can't quit itself."""
+        ios = self.caps["platform"] == "ios"
+        self.terms_waiting = True
+        own = [c for c in [*self.commands, *self.main_window.toolbar]
+               if isinstance(c, toga.Command) and c.id not in self._toga_commands]
+        held = {command: command.enabled for command in own}
+        for command in own:
+            command.enabled = False
+        close = []
+
+        def agreed(widget, **kwargs):
+            self.settings[TERMS_KEY] = {"version": __version__, "agreed": time.strftime("%Y-%m-%d %H:%M:%S %z")}
+            self._save_settings()
+            self.terms_waiting = False
+            for command, enabled in held.items():
+                command.enabled = enabled
+            if close:
+                close[0]()
+            else:
+                self.main_window.content = self.main_content
+            self._opened()
+            self.loop.call_later(0.3, self._align_tab_labels)
+            self.loop.call_later(0.3, self._fit_safe_area)
+
+        agree = toga.Button(TERMS_AGREE, on_press=agreed)
+        buttons = [toga.Box(style=Pack(flex=1)), agree]
+        if not ios:
+            buttons.insert(1, toga.Button(TERMS_QUIT, on_press=lambda widget, **kwargs: self.request_exit()))
+        width = 46 if self.caps["mobile"] else 110
+        page = toga.Box(style=Pack(direction=COLUMN, flex=1, margin=14, gap=10), children=[
+            toga.Label(TERMS_TITLE, style=Pack(font_weight="bold", font_size=18)),
+            toga.MultilineTextInput(value=terms_text(), readonly=True, style=Pack(flex=1)),
+            toga.Label(textwrap.fill(TERMS_PROMPT + (f" {TERMS_IOS}" if ios else ""), width)),
+            toga.Box(style=Pack(direction=ROW, gap=8), children=buttons)])
+        if self.phone_ui:
+            phone.fit_panel(self, page)
+            phone.native(self).style_button(agree)
+        if ios:  # once the window is on screen
+            self.loop.call_later(0.1, lambda: close.append(phone.hook(self, "present")(self, page)))
+        else:
+            self.main_window.content = page
+
+    def terms(self, *args, **kwargs):
+        """Help > Terms of use… (phones: in Settings): the terms agreed to, to read again."""
+        text = toga.MultilineTextInput(value=terms_text(), readonly=True, style=Pack(flex=1))
+        done = toga.Button("Done", on_press=lambda widget, **kwargs: closing())
+        content = toga.Box(style=Pack(direction=COLUMN, flex=1, margin=14, gap=10), children=[
+            text, toga.Box(style=Pack(direction=ROW), children=[toga.Box(style=Pack(flex=1)), done])])
+        closing = self._show_panel(TERMS_TITLE, content, (760, 640), resizable=True)
 
     # -- set-up helpers -----------------------------------------------------
     def _load_settings(self) -> dict:
@@ -384,12 +480,33 @@ class OpenDiscoApp(toga.App):
                           "HTTPS": "8443 ✓", "SSH": "2222 ✓", "Uptime": "100d23h", "Status": "Multiple issues (3)"}
     GTK_FLEXIBLE = {"Name": 1.4, "Model": 1.0, "Via": 0.6}
 
+    def _first_frame(self) -> dict:
+        """The main window's size, 1250×780: on Windows and Linux wider when the screen has room
+        (up to 1500, centred), since 1250 cut a scan's names, firmware and statuses short there."""
+        frame = {"size": (1250, 780)}
+        if self.caps["platform"] not in ("windows", "linux"):
+            return frame
+        try:
+            screen = self.screens[0].size  # the primary screen, in CSS pixels
+        except Exception:
+            return frame
+        width = min(1500, screen.width - 80)
+        if width > 1250:
+            frame = {"size": (width, 780),
+                     "position": ((screen.width - width) // 2, max(40, (screen.height - 780) // 3))}
+        return frame
+
+    def _column_texts(self, titles) -> list:
+        """Each column's few longest texts in the list (they stand for the rest), by heading."""
+        rows = list(self.table.data)[:300]
+        return [sorted({str(getattr(r, title.lower(), "") or "") for r in rows}, key=len)[-5:] for title in titles]
+
     def _size_columns(self, *args, first: bool = False, **kwargs):
         """Windows: toga sizes the table's columns once, before the window has its width, which left
         them as slivers with no headings. Each column gets the width its heading and longest text
         need, and what's left of the table's width is shared by weight; when the table is too narrow
-        for that, the columns with long texts give up width first. Runs as the rows change, but
-        measures only when the table's width or a column's longest text has changed. macOS: the
+        for that, the widest columns give up width first (fit_columns). Runs as the rows change, but
+        measures only when the table's width or a column's longest texts have changed. macOS: the
         columns start out equal, which cut the firmware short; weighted once at the start (macOS
         then resizes them evenly with the window, and keeps the widths dragged by hand). Linux:
         _size_columns_gtk."""
@@ -416,26 +533,23 @@ class OpenDiscoApp(toga.App):
             width = view.ClientSize.Width
             if width < 200:
                 return
-            rows = list(self.table.data)[:300]
-            texts = [[str(getattr(r, accessor, "") or "") for r in rows] for accessor in ACCESSORS]
-            longest = [max(column, key=len, default="") for column in texts]
-            if getattr(self, "_columns_sized", None) == (width, longest):
+            texts = self._column_texts(COLUMNS)
+            if getattr(self, "_columns_sized", None) == (width, texts):
                 return
-            self._columns_sized = (width, longest)
+            self._columns_sized = (width, texts)
             from System.Windows.Forms import TextRenderer
             font, pad = view.Font, 16
             least = [TextRenderer.MeasureText(column.Text, font).Width + pad for column in view.Columns]
-            need = [max(head, max((TextRenderer.MeasureText(t, font).Width  # the few longest stand for all
-                                   for t in sorted(set(column), key=len)[-5:] if t), default=0) + pad)
+            need = [max(head, max((TextRenderer.MeasureText(t, font).Width for t in column if t), default=0) + pad)
                     for head, column in zip(least, texts)]
             need[0] += 20  # the first column leaves room for an icon
+            least[0] += 20
             weights = self.COLUMN_WEIGHTS[:view.Columns.Count]
             if sum(need) <= width:
                 spare = width - sum(need)
                 sizes = [n + spare * w / sum(weights) for n, w in zip(need, weights)]
             else:
-                spare, extra = max(0, width - sum(least)), [n - h for n, h in zip(need, least)]
-                sizes = [h + (spare * e / sum(extra) if sum(extra) else 0) for h, e in zip(least, extra)]
+                sizes = fit_columns(need, least, width)
             for column, size in zip(view.Columns, sizes):
                 column.Width = int(size)
         except Exception:
@@ -444,10 +558,12 @@ class OpenDiscoApp(toga.App):
     def _size_columns_gtk(self):
         """Linux: GTK sizes each column to what it holds and the table doesn't scroll sideways, so
         the last columns (Status among them) ended past the window's edge. Each column gets the
-        width its heading or typical contents take in the table's font, scaled to the table's
-        width (the free-text ones share what's left), and longer text ends in "…". Toga makes the
-        columns again whenever the rows change (keeping only their widths), so _show_devices calls
-        this again then."""
+        width its heading or longest text takes in the table's font (typical texts while the list
+        is empty) and the free-text ones share what's left; when the table is too narrow for that,
+        the widest columns give up width first (fit_columns), and longer text ends in "…". Measures
+        only when the table's width or a column's longest texts have changed. Toga makes the
+        columns again whenever the rows change (keeping only their widths), so _show_devices
+        forgets the last sizing then."""
         if self.caps["platform"] != "linux":
             return
         try:
@@ -457,18 +573,25 @@ class OpenDiscoApp(toga.App):
             if width < 200:
                 return
             columns = view.get_columns()
+            titles = [c.get_title() for c in columns]
+            texts = (self._column_texts(titles) if len(self.table.data)
+                     else [[self.GTK_COLUMN_SAMPLES.get(t, "")] for t in titles])
+            if getattr(self, "_columns_sized", None) == (width, texts):
+                return
+            self._columns_sized = (width, texts)
 
             def measure(text):
                 return view.create_pango_layout(text).get_pixel_size()[0]
 
-            titles = [c.get_title() for c in columns]
-            wanted = [max(measure(t) + 16, measure(self.GTK_COLUMN_SAMPLES.get(t, "")) + 14) for t in titles]
+            least = [measure(t) + 16 for t in titles]
+            need = [max(head, max((measure(t) for t in column if t), default=0) + 14)
+                    for head, column in zip(least, texts)]
             shares = [self.GTK_FLEXIBLE.get(t, 0) for t in titles]
-            left = width - sum(w for w, share in zip(wanted, shares) if not share)
-            if sum(shares) and left >= 50 * sum(1 for share in shares if share):  # the free-text ones share it
-                widths = [left * share / sum(shares) if share else w for w, share in zip(wanted, shares)]
-            else:  # too narrow even for that: everything shrinks alike
-                widths = [w * width / sum(wanted) for w in wanted]
+            if sum(need) <= width and sum(shares):  # the free-text ones share what's left
+                spare = width - sum(need)
+                widths = [n + spare * share / sum(shares) for n, share in zip(need, shares)]
+            else:
+                widths = fit_columns(need, least, width)
             for column, w in zip(columns, widths):
                 column.set_expand(False)
                 column.set_sizing(Gtk.TreeViewColumnSizing.FIXED)
@@ -568,7 +691,7 @@ class OpenDiscoApp(toga.App):
 
     def _fit_safe_area(self, *args, **kwargs):
         """Phones: keep the content clear of the screen's rounded corners, home bar and cutouts."""
-        if self.phone_ui:
+        if self.phone_ui and not self.terms_waiting:  # (an iPad's layout changes after the terms)
             phone.native(self).fit_safe_area(self)
 
     def _over_main(self, size):
@@ -795,8 +918,8 @@ class OpenDiscoApp(toga.App):
                         setattr(row, attr, value)
         else:
             self.table.data = [dict(values, key=key) for key, values in rows]
-            self._size_columns_gtk()  # Linux: new columns, sized again
-        if self.caps["platform"] == "windows":
+            self._columns_sized = None  # Linux: new columns, to be sized again
+        if self.caps["platform"] in ("windows", "linux"):
             self._size_columns()  # to what the rows hold now
         if self.phone_ui:  # iOS forgets the tapped row whenever a row changes
             phone.keep_selection(self, selected)
@@ -1857,6 +1980,8 @@ class OpenDiscoApp(toga.App):
                              text="Check for OpenDisco updates…", group=group, section=-1 if platform == "macos" else 0,
                              order=1)
         self.commands.add(check)
+        if not self.caps["mobile"]:
+            self.commands.add(toga.Command(self.terms, text="Terms of Use…", group=toga.Group.HELP, order=2))
         if not self.phone_ui:
             settings = toga.Command.standard(self, toga.Command.PREFERENCES, text="Settings…")
             self.commands.add(settings or toga.Command(lambda command, **kwargs: self.preferences(), text="Settings…"))
@@ -2048,6 +2173,8 @@ class OpenDiscoApp(toga.App):
         options = [*switches, toga.Label(textwrap.fill(vulns.NVD_NOTICE, 60), style=Pack(font_size=10)), *lists]
         finish = toga.Box(style=Pack(direction=ROW), children=[toga.Box(style=Pack(flex=1)),
                                                               toga.Button("Done", on_press=done)])
+        if self.caps["mobile"]:  # (desktops: Help > Terms of Use…)
+            finish.insert(0, toga.Button(TERMS_TITLE, on_press=self.terms))
         size = (760, 740) if self.caps["aliases"] else (560, 480)
         room = self._screen_height()
         scrolls = bool(room) and room < size[1] + 40
