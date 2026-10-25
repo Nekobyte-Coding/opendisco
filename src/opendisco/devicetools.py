@@ -33,7 +33,7 @@ from pathlib import Path
 
 from opendisco import core
 
-if core.platform_name() in ("ios", "android"):  # no ssh program there: the app's own SSH, same calls
+if core.platform_name() in ("ios", "android"):  # no ssh program there: asyncssh, with the same calls
     from opendisco import phonessh as sshrun
 else:
     from opendisco import sshrun
