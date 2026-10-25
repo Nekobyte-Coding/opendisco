@@ -1,47 +1,50 @@
-"""Commands, file copies and shells on one device for the phones' device tools, through asyncssh.
+"""SSH on the phones, in the app itself (asyncssh): iOS and Android run no ssh program.
 
-A phone has no ssh program to run, so this gives devicetools and the phone screens what sshrun
-gives them on a computer, from Python: the same Login, Result and SSHError and the same calls.
-asyncssh (and the cryptography package it stands on) is part of the iOS and Android apps, and
-imported only when a call needs it.
+The calls devicetools makes of sshrun (the desktop's, through the system's ssh) are here under the
+same names: Login, Result, SSHError, run, upload, download and check_login, so firmware checks and
+Scan from device work the same. Shell is the interactive session in the phone's Tools.
 
-Host keys are trusted on first use and filed under each device's alias (terminal.host_key_alias:
-its MAC) in the app's known_hosts, as the desktop's ssh does; a changed one is refused. A device
-behind others is reached through their forwarding, each with its own login and host key, or,
-when one refuses to forward, through the last one's own SSH client (Dropbear's dbclient). Old
-firmware's key exchanges, host keys and ciphers are allowed after the strong ones.
+Connections run on one asyncio loop in a thread of their own; the calls block until they're done,
+for worker threads, the way sshrun's do. A device found through others (Login.via) is reached
+through SSH tunnels from one to the next; when one on the way refuses to forward, commands and
+shells run through its own SSH client (Dropbear's dbclient) instead, as sshrun's do.
 
-Every call blocks, like sshrun's: call them from a worker thread. They run on an asyncio loop of
-their own, on a thread of their own, never on the UI's. Every failure is an SSHError whose text
-says what went wrong in terms of the device.
+Host keys: the first key a device shows is kept in the app's known_hosts under its MAC
+(host_key_alias), as the desktop's ssh does with accept-new; a different one later is refused
+(SSHError kind "key") until Forget SSH key. The key is checked before the password is sent. Old
+gear (airOS, EdgeOS) may offer only SHA-1 key exchange and ssh-rsa host keys: those are allowed
+after the modern ones.
 """
 import asyncio
 import concurrent.futures
 import errno
+import os
 import re
 import threading
 import time
 from dataclasses import dataclass
 from pathlib import Path
 
-PASSWORD_PROMPT = re.compile(r"(?i)pass(word|code)[^\r\n]{0,60}:\s*$")
+try:
+    import asyncssh
+except ImportError:  # the desktop: sshrun instead
+    asyncssh = None
+
+# asyncssh asks getpass for this device's own user name, which a phone app doesn't have.
+os.environ.setdefault("LOGNAME", "opendisco")
+
 ANSI = re.compile(r"\x1b\[[0-9;?]*[ -/]*[@-~]|\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)|\x1b[()][0-9A-Za-z]|\x1b[=>]")
-# Allowed after asyncssh's own choices, for airOS 5/6, old EdgeOS and other old firmware.
-LEGACY = {"kex_algs": ["diffie-hellman-group14-sha1", "diffie-hellman-group-exchange-sha1",
-                       "diffie-hellman-group1-sha1"],
-          "server_host_key_algs": ["ssh-rsa", "ssh-dss"],
-          "encryption_algs": ["aes128-cbc", "aes256-cbc", "3des-cbc"],
-          "mac_algs": ["hmac-sha1", "hmac-md5"]}
-CONNECT_TIMEOUT = 10
+PASSWORD_PROMPT = re.compile(r"(?i)pass(word|code)[^\r\n]{0,60}:\s*$")
 # What a hop's own SSH client says about the connection, not the command's output: "Host '…' key
 # accepted unconditionally." and the fingerprint under it (Dropbear), "Warning: Permanently added…"
 CLIENT_NOISE = re.compile(r"dbclient:\s*$|(dbclient: )?Host '|\(\S+ fingerprint |Warning: Permanently added"
                           r"|Connection to ")
+CONNECT_TIMEOUT = 15
 
 
 class SSHError(Exception):
     """kind: "key" (host key changed), "auth", "refused", "timeout", "unreachable",
-    "algorithms", "space", "cancelled", "forwarding" or "other"."""
+    "algorithms", "forwarding", "space", "cancelled" or "other" (sshrun's kinds)."""
 
     def __init__(self, message: str, kind: str = "other"):
         super().__init__(message)
@@ -56,7 +59,7 @@ class Login:
     password: str
     alias: str  # the name its host key is filed under (host_key_alias)
     known_hosts: Path
-    via: tuple = ()  # the logins of the devices on the way to it, the nearest to this phone first
+    via: tuple = ()  # the logins of the devices on the way to it, the nearest first
     nested: bool = False  # a device on the way refused to forward: run commands on the last hop instead
 
     @property
@@ -74,14 +77,8 @@ class Login:
 @dataclass
 class Result:
     code: int
-    out: str  # what the command printed
-    err: str  # what it printed to stderr
-
-
-def available() -> bool:
-    """asyncssh is here to use (the phone apps bring it)."""
-    import importlib.util
-    return importlib.util.find_spec("asyncssh") is not None
+    out: str
+    err: str
 
 
 def route_text(login: Login) -> str:
@@ -107,158 +104,158 @@ def nested_command(login: Login, command: str | None) -> str:
             f"else ssh -o StrictHostKeyChecking=accept-new {target}; fi")
 
 
-def plain(text: str) -> str:
-    """Terminal output without its escape sequences, for a plain console."""
-    return ANSI.sub("", text).replace("\r\n", "\n").replace("\r", "\n")
-
-
-# ---------------------------------------------------------------------------
-# Host keys: known_hosts lines "alias type base64", trusted on first use
-# ---------------------------------------------------------------------------
-
 def host_key_alias(mac: str | None, ip: str) -> str:
-    """The name a device's host key is filed under: its MAC, so a different radio at the same
-    factory address isn't mistaken for the last one, while a changed key on the same device is
-    still caught. (The same as terminal.host_key_alias, which phones don't have.)"""
+    """The name a device's host key is kept under: its MAC, as on the desktop (terminal.py)."""
     return "ubnt-" + mac.replace(":", "") if mac else ip
 
 
-def _names(line: str) -> list:
-    return line.split()[0].split(",") if line.strip() and not line.startswith(("#", "@")) else []
+def available() -> bool:
+    return asyncssh is not None
 
 
-def _stored_keys(login: Login) -> list:
-    import asyncssh
-    try:
-        lines = login.known_hosts.read_text(encoding="utf-8").splitlines()
-    except OSError:
-        return []
-    keys = []
-    for line in lines:
-        names = _names(line)
-        if login.alias in names or any(n.startswith(f"[{login.alias}]:") for n in names):
-            try:
-                keys.append(asyncssh.import_public_key(" ".join(line.split()[1:3])))
-            except (asyncssh.KeyImportError, ValueError):
-                pass
-    return keys
+# -- the loop the connections run on ------------------------------------------------
+_loop = None
+_lock = threading.Lock()
 
 
-def forget_host_key(alias: str, known_hosts: Path) -> bool:
-    """Remove a device's saved SSH host key, so the next connection trusts its new one."""
-    try:
-        lines = known_hosts.read_text(encoding="utf-8").splitlines(keepends=True)
-    except OSError:
-        return False
-    kept = [line for line in lines
-            if not any(n == alias or n.startswith(f"[{alias}]:") for n in _names(line))]
-    if len(kept) == len(lines):
-        return False
-    known_hosts.write_text("".join(kept), encoding="utf-8")
-    return True
+def _ssh_loop() -> asyncio.AbstractEventLoop:
+    global _loop
+    with _lock:
+        if _loop is None:
+            _loop = asyncio.new_event_loop()
+            threading.Thread(target=_loop.run_forever, name="opendisco-ssh", daemon=True).start()
+        return _loop
 
 
-def _client_class():
-    import asyncssh
-
-    class Client(asyncssh.SSHClient):
-        """Trusts a device's first host key and files it; refuses one that differs from what's on file."""
-
-        def __init__(self, login: Login, stored: list):
-            self.login, self.stored, self.changed = login, stored, False
-
-        def validate_host_public_key(self, host, addr, port, key) -> bool:
-            if self.stored:  # on file, and this isn't it
-                self.changed = True
-                return False
-            line = " ".join(key.export_public_key("openssh").decode("ascii").split()[:2])
-            try:
-                path = self.login.known_hosts
-                path.parent.mkdir(parents=True, exist_ok=True)
-                with path.open("a", encoding="utf-8") as f:
-                    f.write(f"{self.login.alias} {line}\n")
-            except OSError:
-                pass  # trusted for this connection; asked about again next time
-            return True
-
-    return Client
-
-
-# ---------------------------------------------------------------------------
-# The loop the connections run on
-# ---------------------------------------------------------------------------
-
-_LOOP = None
-_LOOP_LOCK = threading.Lock()
-
-
-def _loop() -> asyncio.AbstractEventLoop:
-    global _LOOP
-    with _LOOP_LOCK:
-        if _LOOP is None:
-            _LOOP = asyncio.new_event_loop()
-            threading.Thread(target=_LOOP.run_forever, name="phonessh", daemon=True).start()
-        return _LOOP
-
-
-def _call(make, limit: float, stop: threading.Event | None = None):
-    """Run the coroutine make() on phonessh's loop and wait for it, up to limit seconds; stop
-    cancels it."""
-    future = asyncio.run_coroutine_threadsafe(make(), _loop())
-    deadline = time.monotonic() + limit
+def _call(coro, stop: threading.Event | None = None):
+    """Run a coroutine on the SSH loop and wait for it; stop cancels it."""
+    future = asyncio.run_coroutine_threadsafe(coro, _ssh_loop())
     while True:
         try:
             return future.result(0.2)
         except concurrent.futures.TimeoutError:
             if stop is not None and stop.is_set():
                 future.cancel()
-                raise SSHError("Cancelled.", "cancelled") from None
-            if time.monotonic() > deadline:
-                future.cancel()
-                raise SSHError("The device stopped answering (timed out).", "timeout") from None
+                raise SSHError("Stopped.", "cancelled") from None
         except concurrent.futures.CancelledError:
-            raise SSHError("Cancelled.", "cancelled") from None
+            raise SSHError("Stopped.", "cancelled") from None
 
 
-def _algorithms() -> dict:
-    """asyncssh's own algorithms, then the old ones it has but doesn't offer by default."""
-    from asyncssh.encryption import get_encryption_algs
-    from asyncssh.kex import get_kex_algs
-    from asyncssh.mac import get_mac_algs
-    from asyncssh.public_key import get_public_key_algs
-    have = {"kex_algs": get_kex_algs(), "server_host_key_algs": get_public_key_algs(),
-            "encryption_algs": get_encryption_algs(), "mac_algs": get_mac_algs()}
-    extra = {option: ",".join(n for n in names if n.encode() in have[option]) for option, names in LEGACY.items()}
-    return {option: "+" + names for option, names in extra.items() if names}
+# -- connecting ------------------------------------------------------------------------
+def _algorithms(default, every) -> list:
+    """The modern ones first, then the rest asyncssh has (SHA-1, ssh-rsa...) for old gear."""
+    default = [a.decode() for a in default()]
+    return default + [a.decode() for a in every() if a.decode() not in default]
 
 
-# ---------------------------------------------------------------------------
-# Connecting, through the devices on the way
-# ---------------------------------------------------------------------------
+def _options() -> dict:
+    from asyncssh import encryption, kex, mac, public_key
+    return {"kex_algs": _algorithms(kex.get_default_kex_algs, kex.get_kex_algs),
+            "server_host_key_algs": _algorithms(public_key.get_default_public_key_algs,
+                                                public_key.get_public_key_algs),
+            "encryption_algs": _algorithms(encryption.get_default_encryption_algs, encryption.get_encryption_algs),
+            "mac_algs": _algorithms(mac.get_default_mac_algs, mac.get_mac_algs)}
 
-async def _connect(login: Login, target: Login, tunnel=None, through: Login | None = None):
-    """One SSH connection: to login, which is target itself or a device on the way to it,
-    through the connection tunnel to the device before it (through)."""
-    import asyncssh
-    stored = _stored_keys(login)
-    client = _client_class()(login, stored)
+
+def _failure(e: BaseException, login: Login, hop: Login | None = None, through: Login | None = None) -> SSHError:
+    """The SSHError that an exception from asyncssh or the network means, worded as sshrun's. hop:
+    the device on the way to login where it failed; through: the device before the one that failed."""
+    who = hop or login
+    where = who.where if hop is None else f"{hop.ip}, on the way to {login.ip},"
+    if isinstance(e, SSHError):
+        return e
+    if isinstance(e, asyncssh.PermissionDenied):
+        return SSHError(f"{where} didn't accept the username and password.", "auth")
+    if isinstance(e, asyncssh.ChannelOpenError):  # the device before it couldn't pass the connection on
+        if e.code == 1:  # SSH_OPEN_ADMINISTRATIVELY_PROHIBITED: its SSH server forwards nothing
+            return SSHError(f"A device on the way to {login.ip} ({route_text(login) or 'its route'}) doesn't "
+                            "forward connections (TCP forwarding is off in its SSH server).", "forwarding")
+        return SSHError(f"{who.ip} port {who.port} can't be reached from {through.ip if through else 'its route'}"
+                        + (f", on the way to {login.ip}" if hop else "") + f" ({e.reason or 'connecting failed'}).",
+                        "unreachable")
+    if isinstance(e, asyncssh.KeyExchangeFailed):
+        return SSHError(f"{who.where} and OpenDisco have no SSH algorithms in common: {e}", "algorithms")
+    if isinstance(e, ConnectionRefusedError):
+        return SSHError(f"Nothing accepts SSH connections on {who.where}.", "refused")
+    if isinstance(e, (asyncio.TimeoutError, TimeoutError)):
+        return SSHError(f"No SSH answer from {who.where} (timed out).", "timeout")
+    if isinstance(e, OSError) and e.errno in (errno.EHOSTUNREACH, errno.ENETUNREACH, errno.EHOSTDOWN):
+        return SSHError(f"{who.ip} can't be reached from this phone.", "unreachable")
+    if isinstance(e, (asyncssh.ConnectionLost, ConnectionResetError, BrokenPipeError)):
+        return SSHError(f"The connection to {who.where} dropped.", "other")
+    if isinstance(e, asyncssh.Error):
+        return SSHError(f"SSH to {who.where} failed: {e.reason or e}", "other")
+    return SSHError(f"SSH to {who.where} failed: {e}", "other")
+
+
+def _kept_keys(login: Login) -> list:
+    """[(type, base64)] filed under the device's alias."""
+    path = Path(login.known_hosts)
+    lines = path.read_text(encoding="utf-8", errors="replace").splitlines() if path.exists() else []
+    return [tuple(l.split()[1:3]) for l in lines if len(l.split()) >= 3 and l.split()[0] == login.alias]
+
+
+def _host_key_checker(login: Login):
+    """An asyncssh client that checks the device's key during the key exchange, before the
+    password is sent: the one kept is trusted, a first one (of a type not kept) is kept, a
+    different one of a kept type is refused."""
+    class Checker(asyncssh.SSHClient):
+        changed = False
+
+        def validate_host_public_key(self, host, addr, port, key) -> bool:
+            kind, data = key.export_public_key("openssh").decode().split()[:2]
+            kept = _kept_keys(login)
+            if (kind, data) in kept:
+                return True
+            if any(k == kind for k, _ in kept):
+                self.changed = True
+                return False
+            path = Path(login.known_hosts)
+            path.parent.mkdir(parents=True, exist_ok=True)
+            with path.open("a", encoding="utf-8") as f:
+                f.write(f"{login.alias} {kind} {data}\n")
+            return True
+
+    return Checker()
+
+
+def forget_host_key(alias: str, known_hosts: Path) -> bool:
+    """Remove a device's saved host keys, so the next connection trusts its new one."""
+    path = Path(known_hosts)
+    if not path.exists():
+        return False
+    lines = path.read_text(encoding="utf-8", errors="replace").splitlines()
+    kept = [l for l in lines if not (l.split() and l.split()[0] == alias)]
+    if len(kept) == len(lines):
+        return False
+    path.write_text("".join(l + "\n" for l in kept), encoding="utf-8")
+    return True
+
+
+async def _open(login: Login, tunnel=None, hop_of: Login | None = None, through: Login | None = None):
+    checker = _host_key_checker(login)
     try:
-        conn, _ = await asyncio.wait_for(asyncssh.create_connection(
-            lambda: client, login.ip, login.port, tunnel=tunnel, username=login.user or None,
-            password=login.password or None, known_hosts=(stored, [], []), client_keys=None, agent_path=None,
-            connect_timeout=CONNECT_TIMEOUT, keepalive_interval=15, keepalive_count_max=3,
-            **_algorithms()), CONNECT_TIMEOUT * 4)
-        return conn
+        # known_hosts=([], [], []): no key is trusted outright, so every one goes to the checker.
+        return await asyncio.wait_for(asyncssh.connect(
+            login.ip, login.port, tunnel=tunnel, username=login.user, password=login.password,
+            client_factory=lambda: checker, config=[], known_hosts=([], [], []), client_keys=None,
+            agent_path=None, preferred_auth=("password", "keyboard-interactive"), keepalive_interval=15,
+            **_options()), CONNECT_TIMEOUT)
     except Exception as e:
-        raise _failure(e, target, None if login is target else login, client.changed, through) from e
+        if checker.changed:
+            raise SSHError(f"The SSH key of {login.ip} changed since the last connection: it was reset or replaced, "
+                           "or something is in between. If that's expected, use Forget SSH key, then try again.",
+                           "key") from None
+        raise _failure(e, hop_of or login, login if hop_of else None, through) from None
 
 
-async def _open(login: Login) -> list:
-    """The connections to each device on the way and then to the device, nearest first."""
+async def _connect(login: Login) -> list:
+    """The connections to each device on the way, then to the device itself (last)."""
     conns, route = [], [*login.via, login]
     try:
         for n, hop in enumerate(route):
-            conns.append(await _connect(hop, login, conns[-1] if conns else None, route[n - 1] if n else None))
+            conns.append(await _open(hop, conns[-1] if conns else None, None if hop is login else login,
+                                     route[n - 1] if n else None))
     except BaseException:
         _close(conns)
         raise
@@ -270,85 +267,41 @@ def _close(conns) -> None:
         conn.close()
 
 
-def _failure(e: Exception, login: Login, hop: Login | None = None, changed: bool = False,
-             through: Login | None = None) -> SSHError:
-    """The SSHError that an asyncssh or network error means for login (failing at hop, a device
-    on the way to it, when given; reached through the device through)."""
-    import asyncssh
-    if isinstance(e, SSHError):
-        return e
-    who = hop or login
-    where = f"{hop.ip}, on the way to {login.ip}," if hop else login.where
-    if changed or isinstance(e, asyncssh.HostKeyNotVerifiable):
-        return SSHError(f"The SSH key of {who.ip} changed since the last connection: it was reset or replaced, or "
-                        "something is in between. If that's expected, forget its saved SSH key, then try again.",
-                        "key")
-    if isinstance(e, asyncssh.PermissionDenied):
-        return SSHError(f"{where} didn't accept the username and password." if hop else
-                        f"{login.where} didn't accept the username and password.", "auth")
-    if isinstance(e, asyncssh.ChannelOpenError):  # the device before it couldn't pass the connection on
-        if e.code == 1:  # SSH_OPEN_ADMINISTRATIVELY_PROHIBITED: its SSH server forwards nothing
-            return SSHError(f"A device on the way to {login.ip} ({route_text(login) or 'its route'}) doesn't forward "
-                            "connections (TCP forwarding is off in its SSH server).", "forwarding")
-        return SSHError(f"{who.ip} port {who.port} can't be reached from {through.ip if through else 'its route'}"
-                        + (f", on the way to {login.ip}" if hop else "") + f" ({e.reason or 'connecting failed'}).",
-                        "unreachable")
-    if isinstance(e, ConnectionRefusedError):
-        return SSHError(f"Nothing accepts SSH connections on {who.ip} port {who.port}"
-                        + (f", on the way to {login.ip}." if hop else "."), "refused")
-    if isinstance(e, (asyncio.TimeoutError, TimeoutError, asyncssh.TimeoutError)):
-        return SSHError(f"No SSH answer from {who.ip} port {who.port}"
-                        + (f", on the way to {login.ip}" if hop else "") + " (timed out).", "timeout")
-    if isinstance(e, OSError) and e.errno in (errno.EHOSTUNREACH, errno.ENETUNREACH, errno.EHOSTDOWN):
-        return SSHError(f"{who.ip} can't be reached from this phone.", "unreachable")
-    if isinstance(e, asyncssh.KeyExchangeFailed):
-        return SSHError(f"{who.ip} port {who.port} only offers SSH algorithms this app doesn't have: {e.reason}",
-                        "algorithms")
-    if isinstance(e, (asyncssh.ConnectionLost, asyncssh.DisconnectError, ConnectionResetError, BrokenPipeError)):
-        reason = getattr(e, "reason", "") or str(e)
-        return SSHError(f"The connection to {login.where} dropped" + (f": {reason}" if reason else "."), "other")
-    return SSHError(f"SSH to {login.where} failed: {getattr(e, 'reason', '') or e or type(e).__name__}", "other")
-
-
-# ---------------------------------------------------------------------------
-# Running
-# ---------------------------------------------------------------------------
-
+# -- what devicetools calls ------------------------------------------------------------
 def run(login: Login, command: str, timeout: float = 60, stop: threading.Event | None = None) -> Result:
     """Run a command on the device. Raises SSHError when it couldn't connect or log in, or the
-    connection dropped; otherwise the result holds the command's exit code. Through a device that
-    refuses to forward, the command runs on the last hop's own SSH client."""
+    connection dropped or went quiet, as sshrun does; otherwise the result has the command's exit
+    code. Through a device that refuses to forward, it runs on that device's own SSH client."""
     if login.nested:
         return _run_nested(login, command, timeout, stop)
 
-    async def work():
-        import asyncssh
-        conns = await _open(login)
+    async def go():
+        conns = await _connect(login)
         try:
-            done = await conns[-1].run(command, check=False, timeout=timeout, encoding="utf-8", errors="replace")
-        except asyncssh.TimeoutError:
-            raise SSHError("The device stopped answering (timed out).", "timeout") from None
+            done = await asyncio.wait_for(conns[-1].run(command, check=False), timeout)
+        except (asyncio.TimeoutError, TimeoutError):
+            raise SSHError(f"{login.where} stopped answering (no answer within {timeout:.0f}s).", "timeout") from None
         except Exception as e:
-            raise _failure(e, login) from e
+            raise _failure(e, login) from None
         finally:
             _close(conns)
         code = done.exit_status if done.exit_status is not None and done.exit_status >= 0 else 255
-        return Result(code, done.stdout or "", done.stderr or "")
+        return Result(code, _text(done.stdout), _text(done.stderr))
 
     try:
-        return _call(work, timeout + CONNECT_TIMEOUT * 4 * (len(login.via) + 1), stop)
+        return _call(go(), stop)
     except SSHError as e:
-        if e.kind == "forwarding" and login.via:
-            login.nested = True
-            return _run_nested(login, command, timeout, stop)
-        raise
+        if e.kind != "forwarding" or not login.via:
+            raise
+    login.nested = True
+    return _run_nested(login, command, timeout, stop)
 
 
 def _run_nested(login: Login, command: str | None, timeout: float, stop) -> Result:
     hop = last_hop(login)
 
-    async def work():
-        conns = await _open(hop)
+    async def go():
+        conns = await _connect(hop)
         try:
             process = await conns[-1].create_process(nested_command(login, command), term_type="dumb",
                                                      term_size=(200, 50), encoding="utf-8", errors="replace")
@@ -363,17 +316,15 @@ def _run_nested(login: Login, command: str | None, timeout: float, stop) -> Resu
                 if typer.unanswered:
                     raise SSHError(f"{login.where} didn't accept the username and password.", "auth")
             await process.wait_closed()
-            return process.exit_status, plain("".join(text))
-        except asyncio.TimeoutError:
-            raise SSHError("The device stopped answering (timed out).", "timeout") from None
-        except SSHError:
-            raise
+            return process.exit_status, ANSI.sub("", "".join(text)).replace("\r\n", "\n").replace("\r", "\n")
+        except (asyncio.TimeoutError, TimeoutError):
+            raise SSHError(f"{login.where} stopped answering (timed out).", "timeout") from None
         except Exception as e:
-            raise _failure(e, login) from e
+            raise _failure(e, login) from None
         finally:
             _close(conns)
 
-    code, text = _call(work, timeout + CONNECT_TIMEOUT * 4 * len(login.via), stop)
+    code, text = _call(go(), stop)
     code = code if code is not None and code >= 0 else 255
     failure = _nested_failure(text, login)
     if failure and (code == 255 or failure.kind in ("key", "auth")):
@@ -437,132 +388,132 @@ def check_login(login: Login, stop: threading.Event | None = None) -> None:
             f"Logging in to {login.where} worked, but the device didn't run a command (exit code {result.code}).")
 
 
-# ---------------------------------------------------------------------------
-# Copying files (SCP: Dropbear on airOS and UniFi gear has no SFTP)
-# ---------------------------------------------------------------------------
-
 def upload(login: Login, local: Path, path: str, progress=None, stop: threading.Event | None = None,
            idle: float = 120) -> None:
-    """Copy a file to the device. progress(percent) as it goes."""
-    _copy(login, lambda conn: (str(local), (conn, path)), progress, stop, idle)
-
-
-def download(login: Login, path: str, local: Path, stop: threading.Event | None = None) -> None:
-    _copy(login, lambda conn: ((conn, path), str(local)), None, stop, 120)
-
-
-def _copy(login: Login, paths, progress, stop, idle: float) -> None:
-    if login.nested:
-        raise SSHError(f"A device on the way to {login.ip} ({route_text(login)}) doesn't forward connections, so "
-                       "files can't be copied to or from it.", "forwarding")
+    """Copy a file to the device (scp: Dropbear on airOS has no SFTP). progress(percent)."""
     moved = [time.monotonic()]
 
-    def seen(_source, _target, done: int, total: int) -> None:
+    def shown(_src, _dst, copied, total):
         moved[0] = time.monotonic()
         if progress and total:
-            progress(min(100, int(done * 100 / total)))
+            progress(int(copied * 100 / total))
 
-    async def work():
-        import asyncssh
-        conns = await _open(login)
+    async def go():
+        conns = await _connect(login)
         try:
-            source, target = paths(conns[-1])
-            copying = asyncio.ensure_future(asyncssh.scp(source, target, progress_handler=seen))
-            while not copying.done():
+            copying = asyncio.ensure_future(asyncssh.scp(str(local), (conns[-1], path), progress_handler=shown))
+            while not copying.done():  # stopped when nothing moves for idle seconds
                 await asyncio.wait([copying], timeout=1)
                 if not copying.done() and time.monotonic() - moved[0] > idle:
                     copying.cancel()
-                    raise SSHError("The device stopped answering (timed out).", "timeout")
+                    raise SSHError(f"{login.where} stopped answering (timed out).", "timeout")
             copying.result()
-        except asyncssh.SFTPError as e:  # what the device's scp said
-            reason = str(e.reason or e)
-            if "no space" in reason.lower():
-                raise SSHError("The device ran out of space for the file (its memory is full). Rebooting it frees "
-                               "memory; then try again.", "space") from None
-            raise SSHError(f"Copying failed: {reason}") from None
-        except (SSHError, asyncio.CancelledError):
-            raise
-        except Exception as e:
-            raise _failure(e, login) from e
+        except (asyncssh.Error, OSError) as e:
+            raise _copy_failure(e, login) from None
         finally:
             _close(conns)
+    _not_nested(login)
+    _call(go(), stop)
 
-    _call(work, 24 * 3600, stop)
+
+def download(login: Login, path: str, local: Path, stop: threading.Event | None = None) -> None:
+    async def go():
+        conns = await _connect(login)
+        try:
+            await asyncssh.scp((conns[-1], path), str(local))
+        except (asyncssh.Error, OSError) as e:
+            raise _copy_failure(e, login) from None
+        finally:
+            _close(conns)
+    _not_nested(login)
+    _call(go(), stop)
 
 
-# ---------------------------------------------------------------------------
-# An interactive shell, for the Tools console
-# ---------------------------------------------------------------------------
+def _not_nested(login: Login) -> None:
+    if login.nested:
+        raise SSHError(f"A device on the way to {login.ip} ({route_text(login)}) doesn't forward connections, so "
+                       "files can't be copied to or from it.", "forwarding")
 
+
+def _copy_failure(e, login: Login) -> SSHError:
+    if not isinstance(e, asyncssh.SFTPError) and isinstance(e, (asyncssh.DisconnectError, asyncssh.ChannelOpenError,
+                                                                  OSError)):
+        return _failure(e, login)  # the connection, not the copy
+    text = str(getattr(e, "reason", "") or e)
+    if "no space left" in text.lower():
+        return SSHError("The device ran out of space for the file (its memory is full). Rebooting it frees "
+                        "memory; then try again.", "space")
+    return SSHError(f"Copying a file over SSH with {login.where} failed: {text}", "other")
+
+
+def _text(value) -> str:
+    if isinstance(value, bytes):
+        return value.decode("utf-8", "replace")
+    return value or ""
+
+
+# -- the interactive session -------------------------------------------------------------
 class Shell:
-    """A login shell on the device in a pseudo-terminal. on_output(text) gets what it prints, with
-    its terminal escapes (plain() strips them); on_closed(reason) once when it ends, reason ""
-    when it was closed or exited. Both are called on phonessh's thread. Through a device that
-    refuses to forward, the shell runs through the last hop's own SSH client."""
+    """A shell on the device for the phone's console, a line at a time: on_output(text) as the
+    device sends it (escape sequences and carriage returns removed), on_end(reason) once it's
+    over. Both are called from the SSH thread. Creating one logs in and blocks until the shell
+    is up (call it from a worker thread); raises SSHError. Through a device that refuses to
+    forward, the shell runs through that device's own SSH client, which is given the password."""
 
-    def __init__(self, login: Login, on_output, on_closed, cols: int = 80, rows: int = 24):
-        self.login, self.on_output, self.on_closed = login, on_output, on_closed
-        self.size, self.process, self.conns, self.ended = (cols, rows), None, [], False
-        self.task = asyncio.run_coroutine_threadsafe(self._run(), _loop())
-
-    async def _start(self, login: Login, command: str | None):
-        self.conns = await _open(login)
-        return await self.conns[-1].create_process(command, term_type="xterm-256color", term_size=self.size,
-                                                   encoding="utf-8", errors="replace")
-
-    async def _run(self) -> None:
-        reason, typer, started = "", None, time.monotonic()
+    def __init__(self, login: Login, on_output, on_end, columns: int = 60):
+        self.login, self.on_output, self.on_end = login, on_output, on_end
+        self._typer, self._started = None, time.monotonic()
         try:
-            if self.login.nested:
-                raise SSHError("forwarding", "forwarding")
-            self.process = await self._start(self.login, None)
+            if login.nested:
+                raise SSHError("", "forwarding")
+            self._conns, self._process = _call(self._start(login, None, columns))
         except SSHError as e:
-            if e.kind != "forwarding" or not self.login.via:
-                return self._end(str(e))
-            self.login.nested = True
-        except Exception as e:
-            return self._end(str(_failure(e, self.login)))
+            if e.kind != "forwarding" or not login.via:
+                raise
+            login.nested = True
+            hop = last_hop(login)
+            self._conns, self._process = _call(self._start(hop, nested_command(login, None), columns))
+            self._typer = _PasswordTyper({**_as_dict(hop), login.ip: login.password}, self._process.stdin.write)
+        self._reader = asyncio.run_coroutine_threadsafe(self._read(), _ssh_loop())
+
+    async def _start(self, login: Login, command: str | None, columns: int):
+        conns = await _connect(login)
         try:
-            if self.process is None:  # through the last hop's own client, which asks for the password
-                hop = last_hop(self.login)
-                self.process = await self._start(hop, nested_command(self.login, None))
-                typer = _PasswordTyper({**_as_dict(hop), self.login.ip: self.login.password}, self.process.stdin.write)
+            process = await conns[-1].create_process(command, term_type="dumb", term_size=(columns, 40),
+                                                     encoding="utf-8", errors="replace")
+        except Exception as e:
+            _close(conns)
+            raise _failure(e, login) from None
+        return conns, process
+
+    async def _read(self):
+        reason = ""
+        try:
             while True:
-                data = await self.process.stdout.read(65536)
+                data = await self._process.stdout.read(4096)
                 if not data:
                     break
-                if typer and time.monotonic() - started < 30:  # only while logging in
-                    typer.feed(data)
-                self.on_output(data)
+                if self._typer and time.monotonic() - self._started < 30:  # only while logging in
+                    self._typer.feed(data)
+                text = ANSI.sub("", data).replace("\r\n", "\n").replace("\r", "")
+                if text:
+                    self.on_output(text)
         except Exception as e:
             reason = str(_failure(e, self.login))
         finally:
-            _close(self.conns)
-        self._end(reason)
-
-    def _end(self, reason: str) -> None:
-        if not self.ended:
-            self.ended = True
-            self.on_closed(reason)
+            _close(self._conns)
+        self.on_end(reason)
 
     def send(self, text: str) -> None:
-        """Type into the shell ("\\r" for Enter)."""
-        if self.process is not None and not self.ended:
-            _loop().call_soon_threadsafe(self.process.stdin.write, text)
+        """Type text into the shell (a command ends with "\\n")."""
+        _ssh_loop().call_soon_threadsafe(self._process.stdin.write, text)
 
-    def resize(self, cols: int, rows: int) -> None:
-        self.size = (cols, rows)
-        if self.process is not None and not self.ended:
-            _loop().call_soon_threadsafe(self.process.change_terminal_size, cols, rows)
+    def interrupt(self) -> None:
+        """Ctrl-C."""
+        self.send("\x03")
+
+    def resize(self, columns: int, rows: int = 40) -> None:
+        _ssh_loop().call_soon_threadsafe(self._process.change_terminal_size, columns, rows)
 
     def close(self) -> None:
-        def closing():
-            if self.process is not None:
-                self.process.close()
-            _close(self.conns)
-
-        _loop().call_soon_threadsafe(closing)
-
-    @property
-    def alive(self) -> bool:
-        return not self.ended
+        _ssh_loop().call_soon_threadsafe(_close, self._conns)

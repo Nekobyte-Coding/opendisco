@@ -138,6 +138,7 @@ requires = [
 requires = [
     "toga-iOS~=0.5.0",
     "certifi",  # root certificates for the CVE list's HTTPS: iOS lets no app read its own
+    "asyncssh==2.23.1",  # SSH in the app (phonessh); 2.24 needs a cryptography no phone has yet
 ]
 # Shown when iOS asks to let the app reach devices on the local network.
 info."NSLocalNetworkUsageDescription" = "OpenDisco finds network devices on the local network by discovery broadcasts, multicast and a sweep of the subnet, and checks which ports they answer on."

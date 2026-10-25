@@ -5,6 +5,9 @@ share sheet or clipboard; these give phone.py those, under the names phone.py's 
 """
 from pathlib import Path
 
+import toga
+from toga.style import Pack
+
 from opendisco import phone
 
 # SF Symbols for the device page's tabs, in place of Toga's star on every one
@@ -39,13 +42,41 @@ class BarItem:
         self.native.enabled = bool(value)
 
 
+_NAV_WATCHER = None
+_open_pages = []  # Pages pushed and not closed yet, to tell when Back took one off
+
+
+def _nav_watcher():
+    """The navigation controller's delegate: after Back (the button or the swipe) a page that was
+    on the stack is gone from it without its close() having run, and its on_back runs. (A page
+    whose push waits for another page's closing animation isn't on the stack yet: not Back.)"""
+    global _NAV_WATCHER
+    if _NAV_WATCHER is None:
+        from rubicon.objc import NSObject, objc_method
+
+        class OpenDiscoNavigationWatcher(NSObject):
+            @objc_method
+            def navigationController_didShowViewController_animated_(self, nav, shown, animated: bool) -> None:
+                stack = list(nav.viewControllers)
+                for page in _open_pages:
+                    page.stacked = page.stacked or page.controller in stack
+                for page in [p for p in _open_pages if p.stacked and p.controller not in stack]:
+                    _open_pages.remove(page)
+                    if page.on_back:
+                        page.on_back()
+
+        _NAV_WATCHER = OpenDiscoNavigationWatcher.alloc().init()
+    return _NAV_WATCHER
+
+
 class Page:
     """A page pushed over the device list, holding Toga content, with the title bar's back
-    button (and the swipe from the left edge) to return."""
+    button (and the swipe from the left edge) to return: then on_back runs."""
 
-    def __init__(self, app, content, on_back=None):  # (leaving needn't stop anything on iOS)
+    def __init__(self, app, content, on_back=None):
         from toga_iOS.container import ControlledContainer
-        self.app, self.content, self.laid_out = app, content, None
+        self.app, self.content, self.laid_out, self.on_back = app, content, None, on_back
+        self.stacked = False  # seen on the navigation stack
         self.container = ControlledContainer(on_refresh=lambda container: None, on_native_layout=self._layout)
         content.app = app
         self.container.content = content._impl
@@ -70,13 +101,19 @@ class Page:
         else:
             item.title = f"{title}  {subtitle}" if subtitle and subtitle != title else title
         nav = self.app.main_window._impl.container.controller
+        nav.delegate = _nav_watcher()
+        if self not in _open_pages:
+            _open_pages.append(self)
         if nav.topViewController != self.controller:
             nav.pushViewController(self.controller, animated=True)
 
     def close(self):
+        if self in _open_pages:
+            _open_pages.remove(self)
         nav = self.app.main_window._impl.container.controller
-        if nav.topViewController == self.controller:
-            nav.popViewControllerAnimated(True)
+        if self.controller in list(nav.viewControllers):  # this page, and any pushed over it
+            index = list(nav.viewControllers).index(self.controller)
+            nav.popToViewController(nav.viewControllers[index - 1], animated=True)
 
 
 def fit(app, export, notes, settings):
@@ -213,3 +250,78 @@ def share(app, path: Path):
         shown = shown.presentedViewController
     shown.presentViewController(sheet, animated=True, completion=None)
     app.status.text = f"Saved {path.name}: share it to Files, Mail or AirDrop."
+
+
+class Picker:
+    """A pop-up button: it shows the item chosen, and tapping it lists the others (iOS 15's
+    pop-up menu, in place of Toga's picker wheel)."""
+
+    def __init__(self, app, items):
+        from rubicon.objc import Block, objc_id
+        self.items, self.value = list(items), items[0]
+        self.widget = toga.Button(items[0], style=Pack(flex=1))
+        self._blocks = []
+        actions = []
+        for item in self.items:
+            def picked(_action, item=item) -> None:
+                self.value = item
+
+            self._blocks.append(Block(picked, None, objc_id))
+            actions.append(_objc("UIAction").actionWithTitle(item, image=None, identifier=None,
+                                                             handler=self._blocks[-1]))
+        actions[0].state = 1  # UIMenuElementStateOn: the one chosen
+        native = self.widget._impl.native
+        native.menu = _objc("UIMenu").menuWithTitle("", children=_objc("NSArray").arrayWithArray(actions))
+        native.showsMenuAsPrimaryAction = True
+        native.changesSelectionAsPrimaryAction = True
+        style_button(self.widget, "gray")
+
+
+def watch_keyboard(app, widget):
+    """Keep a text view's last lines above the on-screen keyboard while it's up (the SSH
+    session's console, as commands are typed under it)."""
+    try:
+        from rubicon.objc import Block, ObjCInstance, objc_id
+        from rubicon.objc.types import UIEdgeInsetsMake
+        center = _class_value(_objc("NSNotificationCenter"), "defaultCenter")
+
+        def moved(note) -> None:
+            view = widget._impl.native
+            if view.window is None:
+                return
+            keyboard = ObjCInstance(note).userInfo.objectForKey("UIKeyboardFrameEndUserInfoKey").CGRectValue
+            mine = view.convertRect(view.bounds, toView=None)
+            covered = max(0.0, mine.origin.y + mine.size.height - keyboard.origin.y)
+            view.contentInset = UIEdgeInsetsMake(0, 0, covered, 0)
+            view.verticalScrollIndicatorInsets = UIEdgeInsetsMake(0, 0, covered, 0)
+            widget.scroll_to_bottom()
+
+        app._keyboard_block = Block(moved, None, objc_id)  # kept alive, as the observer
+        app._keyboard_observer = center.addObserverForName("UIKeyboardWillChangeFrameNotification", object=None,
+                                                           queue=None, usingBlock=app._keyboard_block)
+    except Exception:
+        pass  # the console still scrolls by hand
+
+
+def plain_entry(widget, send: bool = False):
+    """A text field for usernames, passwords, ports and shell commands: no capital first letter,
+    no corrections, no smart quotes; send: its return key reads "send". (Set through the setters:
+    rubicon doesn't find UITextInputTraits' properties on a UITextField.)"""
+    native = widget._impl.native
+    for setter, value in (("setAutocapitalizationType:", 0), ("setAutocorrectionType:", 1),
+                          ("setSpellCheckingType:", 1), ("setSmartQuotesType:", 1), ("setSmartDashesType:", 1),
+                          ("setSmartInsertDeleteType:", 1), *((("setReturnKeyType:", 7),) if send else ())):
+        try:
+            from rubicon.objc import NSInteger, send_message
+            send_message(native, setter, value, restype=None, argtypes=[NSInteger])
+        except Exception:
+            pass
+
+
+def end_editing(app):
+    """Finish typing: the text field gives up the keyboard, and its last character (still
+    pending in a password field) is in its value."""
+    try:
+        app.main_window._impl.native.endEditing(True)
+    except Exception:
+        pass
