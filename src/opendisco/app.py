@@ -132,7 +132,7 @@ class OpenDiscoApp(toga.App):
         self.updating = False  # checking for, downloading or installing an update
         self.update_cancel = None  # stops a download
         self.close_settings = None
-        self._panels = []  # phones: (page, what Back does) shown in place of the main window's content, newest last
+        self._panels = []  # Android: (page, what Back does, title, subtitle) over the device list, newest last
         self.back_callback = None  # Android: takes Back while a page is open
         self._move_old_data()
         self.networks_path = self._networks_file()
@@ -267,7 +267,8 @@ class OpenDiscoApp(toga.App):
         if self.caps["platform"] != "ios":  # iOS shows no menus
             self._add_app_commands()
         if self.caps["platform"] == "android":
-            self._fit_phone_table()
+            if not phone_ui:
+                self._fit_phone_table()
             self.back_callback = self._android_back()
         self.on_mode(self.mode)
         if not mobile:
@@ -564,10 +565,8 @@ class OpenDiscoApp(toga.App):
         port = self.port_names.get(self.port.value)
         if port:
             args += ["-i", port]
-        if self.caps["platform"] == "android":  # phones can't do these, so don't waste the time
-            args += ["--no-mdns", "--no-ssdp", "--no-arp"]
-        elif self.caps["platform"] == "ios":  # no ARP table to read; the multicast entitlement covers mDNS, SSDP
-            args.append("--no-arp")
+        if self.caps["mobile"]:  # a phone app can't read the ARP table; mDNS and SSDP work (iOS: the
+            args.append("--no-arp")  # multicast entitlement; Android: the multicast lock, and unicast replies)
         return args
 
     async def _windows_ready(self) -> bool:
@@ -1503,16 +1502,17 @@ class OpenDiscoApp(toga.App):
     def _add_app_commands(self):
         """Settings… where each system keeps it (macOS: the app menu; Windows: File; Linux: the
         app's menu) and a check for updates (macOS: under About; Windows, Linux: Help). Android
-        has no standard place for either: they go in its ⋮ menu."""
+        has no standard place for either: the check goes in its ⋮ menu, and Settings too unless
+        it's in the title bar (phone_android)."""
         platform = self.caps["platform"]
-        settings = toga.Command.standard(self, toga.Command.PREFERENCES, text="Settings…")
-        if settings is None:
-            settings = toga.Command(lambda command, **kwargs: self.preferences(), text="Settings…")
         group = {"macos": toga.Group.APP, "android": toga.Group.COMMANDS}.get(platform, toga.Group.HELP)
         check = toga.Command(lambda command, **kwargs: self._check_for_update(quiet=False),
                              text="Check for OpenDisco updates…", group=group, section=-1 if platform == "macos" else 0,
                              order=1)
-        self.commands.add(settings, check)
+        self.commands.add(check)
+        if not self.phone_ui:
+            settings = toga.Command.standard(self, toga.Command.PREFERENCES, text="Settings…")
+            self.commands.add(settings or toga.Command(lambda command, **kwargs: self.preferences(), text="Settings…"))
 
     def _show_panel(self, title, content, size, on_close=None, resizable=False):
         """A small window over the main one; on phones, which have one window, a page shown in
@@ -1523,23 +1523,7 @@ class OpenDiscoApp(toga.App):
         if self.caps["mobile"]:
             page = toga.Box(style=Pack(direction=COLUMN, margin=12, gap=10), children=[
                 toga.Label(title, style=Pack(font_weight="bold", font_size=18)), content])
-
-            def close():
-                shown = [entry for entry in self._panels if entry[0] is page]
-                if shown:
-                    self._panels.remove(shown[0])
-                    self.main_window.content = self._panels[-1][0] if self._panels else self.main_content
-                    self._back_taken()
-
-            def back():  # Back, like a window's close button: close it, then on_close
-                close()
-                if on_close:
-                    on_close()
-
-            self._panels.append((page, back))
-            self.main_window.content = page
-            self._back_taken()
-            return close
+            return self._push_page(page, title, on_back=on_close)
         closed = []
 
         def closing(widget, **kwargs):
@@ -1560,10 +1544,39 @@ class OpenDiscoApp(toga.App):
         self._fit_window(window)
         return close
 
-    def _back_taken(self):
-        """Android: Back closes a page while one is open, and otherwise leaves the app."""
+    def _push_page(self, page, title, subtitle="", on_back=None):
+        """Android: show a page in place of the main window's content, over what was there (a
+        page shown already comes to the top). Returns what takes it away; Back and Up do that,
+        then on_back, as a window's close button would."""
+        self._pop_page(page, show_next=False)
+
+        def back():
+            self._pop_page(page)
+            if on_back:
+                on_back()
+
+        self._panels.append((page, back, title, subtitle))
+        self.main_window.content = page
+        self._top_changed()
+        return lambda: self._pop_page(page)
+
+    def _pop_page(self, page, show_next=True):
+        shown = [entry for entry in self._panels if entry[0] is page]
+        if not shown:
+            return
+        on_top = self._panels[-1] is shown[0]
+        self._panels.remove(shown[0])
+        if on_top and show_next:
+            self.main_window.content = self._panels[-1][0] if self._panels else self.main_content
+            self._top_changed()
+
+    def _top_changed(self):
+        """Android: Back closes a page while one is open, and otherwise leaves the app; the title
+        bar shows what's on top."""
         if self.back_callback is not None:
             self.back_callback.setEnabled(bool(self._panels))
+        if self.phone_ui and self.caps["platform"] == "android":
+            phone.native(self).show_bar(self)
 
     def _fit_window(self, window):
         """macOS: Toga grows a window to fit its content by comparing the content with the whole
@@ -1722,7 +1735,7 @@ class OpenDiscoApp(toga.App):
                        not_now, toga.Button("Update", on_press=lambda w, **kwargs: finish("update"))]
         if not self.caps["mobile"]:  # the answers on the right
             buttons.insert(len(buttons) - 2, toga.Box(style=Pack(flex=1)))
-        content = toga.Box(style=Pack(direction=COLUMN, flex=1, gap=10, margin=0 if self.caps["mobile"] else 14),
+        content = toga.Box(style=Pack(direction=COLUMN, flex=1, gap=10, margin=0 if self.caps["mobile"] and not self.phone_ui else 14),
                            children=[toga.Label(self._wrap(heading)), notes,
                                      *([toga.Label(self._wrap(why))] if why else []),
                                      toga.Box(style=Pack(direction=ROW, gap=8), children=buttons)])
@@ -1757,7 +1770,7 @@ class OpenDiscoApp(toga.App):
         amount = toga.Label("")
         bar = toga.ProgressBar(max=1.0, style=Pack(flex=1))
         stop = toga.Button("Cancel", on_press=lambda w, **kwargs: cancel.set())
-        content = toga.Box(style=Pack(direction=COLUMN, gap=10, margin=0 if self.caps["mobile"] else 14), children=[
+        content = toga.Box(style=Pack(direction=COLUMN, gap=10, margin=0 if self.caps["mobile"] and not self.phone_ui else 14), children=[
             label, bar, amount, toga.Box(style=Pack(direction=ROW), children=[toga.Box(style=Pack(flex=1)), stop])])
         close = self._show_panel("Updating OpenDisco", content, (520, 200), on_close=cancel.set)
 
@@ -1911,7 +1924,7 @@ class OpenDiscoApp(toga.App):
         text = (f"OpenDisco {release.version} is downloaded and checked. Android installs it once installing "
                 "apps from OpenDisco is allowed: turn on Allow from this source in the settings that open, then "
                 "come back to OpenDisco.")
-        content = toga.Box(style=Pack(direction=COLUMN, gap=10), children=[
+        content = toga.Box(style=Pack(direction=COLUMN, gap=10, margin=14 if self.phone_ui else 0), children=[
             toga.Label(self._wrap(text)),
             toga.Box(style=Pack(direction=ROW, gap=8), children=[
                 toga.Button("Not now", on_press=not_now),

@@ -153,8 +153,13 @@ requires = [
     "toga-android~=0.5.0",
 ]
 base_theme = "Theme.MaterialComponents.Light.DarkActionBar"
+# Blue like the iPhone's; the title bar and status bar are drawn light at startup (androidgui).
+primary_color = "#007AFF"
+primary_color_dark = "#F9F9F9"
+accent_color = "#007AFF"
 build_gradle_dependencies = [
     "com.google.android.material:material:1.13.0",
+    "androidx.swiperefreshlayout:swiperefreshlayout:1.1.0",  # Toga's DetailedList: the device list
 ]
 # Wi-Fi drops broadcasts in power save unless the app holds a multicast lock.
 permission."android.permission.CHANGE_WIFI_MULTICAST_STATE" = {}

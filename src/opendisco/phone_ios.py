@@ -274,6 +274,7 @@ class Picker:
         native.menu = _objc("UIMenu").menuWithTitle("", children=_objc("NSArray").arrayWithArray(actions))
         native.showsMenuAsPrimaryAction = True
         native.changesSelectionAsPrimaryAction = True
+        style_button(self.widget, "gray")
 
 
 def watch_keyboard(app, widget):

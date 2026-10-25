@@ -24,7 +24,8 @@ This module is what both phones share. What each does natively is in phone_<plat
     export(app, name)           save the report (export_file) and offer it (iOS: the share sheet)
     keep_selection(app, key)    select the device's row again after the list reloaded
     fit_safe_area(app)          keep the content clear of the screen's edges after a resize
-    Picker(app, items)          a drop-down choice: .widget to lay out, .value the item chosen
+    and, where the platform has its own (hook() falls back to plain ones otherwise):
+    Picker(app, items)          a drop-down choice, styled: .widget to lay out, .value the item chosen
     watch_keyboard(app, widget) keep a text view's last lines above the on-screen keyboard
     plain_entry(widget, send=False)   a text field without auto-capitals or corrections (logins,
                                 commands); send: its return key reads "send"
@@ -56,6 +57,30 @@ def supported(platform: str) -> bool:
 def native(app):
     """The platform's phone_<platform> module."""
     return importlib.import_module(f"opendisco.phone_{app.caps['platform']}")
+
+
+class _SelectionPicker:
+    """A drop-down where the platform has none of its own: Toga's Selection."""
+
+    def __init__(self, app, items):
+        self.widget = toga.Selection(items=list(items), style=Pack(flex=1))
+
+    @property
+    def value(self):
+        return self.widget.value
+
+
+def _nothing(*args, **kwargs):
+    pass
+
+
+FALLBACKS = {"Picker": _SelectionPicker, "watch_keyboard": _nothing, "plain_entry": _nothing,
+             "end_editing": _nothing}
+
+
+def hook(app, name: str):
+    """A phone_<platform> function that not every platform has, or its plain fallback."""
+    return getattr(native(app), name, None) or FALLBACKS[name]
 
 
 class Mirror:
@@ -113,10 +138,10 @@ def fit(app):
     for button in (app.ping_button, app.ssh_button, app.web_button, app.rescan_button, app.scan_from_button,
                    app.find_button):
         ui.style_button(button, "tinted")
-    for button in (app.port_picker.widget, app.copy_ip_button, app.copy_mac_button, *app.ssh_row.children[1:]):
+    for button in (app.copy_ip_button, app.copy_mac_button, *app.ssh_row.children[1:]):
         ui.style_button(button, "gray")
-    ui.watch_keyboard(app, app.console)
-    ui.plain_entry(app.ssh_input, send=True)
+    hook(app, "watch_keyboard")(app, app.console)
+    hook(app, "plain_entry")(app.ssh_input, send=True)
     update_tools(app)
 
 
@@ -185,7 +210,7 @@ def tools(app) -> toga.Box:
     app.web_button = toga.Button("Web UI", on_press=action("web"), style=grow)
     app.rescan_button = toga.Button("Rescan", on_press=action("rescan"), style=grow)
     app.scan_from_button = toga.Button("Scan from device", on_press=later(scan_from), style=grow)
-    app.port_picker = native(app).Picker(app, list(FIND_KINDS))
+    app.port_picker = hook(app, "Picker")(app, list(FIND_KINDS))
     app.find_button = toga.Button("Find", on_press=lambda w, **kw: find_port(app), style=grow)
     app.copy_ip_button = toga.Button("Copy IP", on_press=action("copy_ip"), style=grow)
     app.copy_mac_button = toga.Button("Copy MAC", on_press=action("copy_mac"), style=grow)
@@ -340,7 +365,7 @@ async def ask_login(app, d, purpose: str, via: tuple = ()):
             answer.set_result(login)
 
     async def log_in(*args, **kwargs):
-        native(app).end_editing(app)
+        hook(app, "end_editing")(app)
         text = port.value.strip()
         if not text.isdigit() or not 0 < int(text) < 65536:
             trouble.text = "The port is a number from 1 to 65535."
@@ -393,7 +418,7 @@ async def ask_login(app, d, purpose: str, via: tuple = ()):
     ui = native(app)
     ui.style_button(go)
     for entry in (user, password, port):
-        ui.plain_entry(entry)
+        hook(app, "plain_entry")(entry)
     close = push_panel(app, "Log in", content, on_back=lambda: finish(None))
     (password if user.value else user).focus()
     return await answer
