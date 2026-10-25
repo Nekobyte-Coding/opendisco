@@ -550,12 +550,17 @@ def write_config(login: sshrun.Login, text: str, apply: bool, report=None, stop=
     if apply:
         try:
             running = _fetch(login, AIROS_RUNNING, stop)
+            stored = _fetch(login, AIROS_CONFIG, stop) if _lines(running) == _lines(text) else ""
         except sshrun.SSHError as e:
             if e.kind in ("auth", "key", "cancelled"):
                 raise
             raise LostConnection(f"{untouched} ({e})", "not done") from None
-        if _lines(running) == _lines(text):
+        # Both: a config saved to flash but not applied (Save) is what the next reboot runs.
+        if _lines(running) == _lines(text) and _lines(stored) == _lines(text):
             return "Nothing to apply: the device already runs this config."
+    # It runs this config already, but has another saved: saving it is all there is to do (airOS's
+    # rc.softrestart save does nothing at all when the saved config matches the running one).
+    runs_it = apply and _lines(running) == _lines(text)
 
     say("Copying the config to the device…")
     folder = Path(tempfile.mkdtemp(prefix="opendisco-"))
@@ -579,8 +584,9 @@ def write_config(login: sshrun.Login, text: str, apply: bool, report=None, stop=
     sent = True
     try:
         # Detached: applying can restart SSH itself, which would end a command run in the session.
-        sshrun.run(login, detached(f"mv -f {STAGED_CONFIG} {AIROS_CONFIG} && " + (AIROS_APPLY if apply else AIROS_SAVE),
-                                   CONFIG_LOG, run), timeout=60, stop=stop)
+        sshrun.run(login, detached(f"mv -f {STAGED_CONFIG} {AIROS_CONFIG} && "
+                                   + (AIROS_APPLY if apply and not runs_it else AIROS_SAVE), CONFIG_LOG, run),
+                   timeout=60, stop=stop)
     except sshrun.SSHError as e:
         if e.kind in ("auth", "key"):
             raise
@@ -591,7 +597,8 @@ def write_config(login: sshrun.Login, text: str, apply: bool, report=None, stop=
     if state == "done":
         if code:
             raise ToolError(("Applying" if apply else "Saving") + " failed" + (f": {said[-300:]}" if said else "."))
-        done = "Applied and saved to flash." if apply else "Saved to flash. It takes effect at the next reboot."
+        done = ("It already ran this config: saved to flash, so it runs it after a reboot too." if runs_it
+                else "Applied and saved to flash." if apply else "Saved to flash. It takes effect at the next reboot.")
         if not sent or (dropped and not apply):  # applying restarts SSH: drops then are expected
             done += " The connection dropped meanwhile: the device finished on its own, checked after reconnecting."
         return done
