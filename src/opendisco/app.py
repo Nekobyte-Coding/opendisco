@@ -707,7 +707,7 @@ class OpenDiscoApp(toga.App):
         else:
             self.table.data = [dict(values, key=key) for key, values in rows]
         if self.phone_ui:  # iOS forgets the tapped row whenever a row changes
-            phone.native(self).keep_selection(self, selected)
+            phone.keep_selection(self, selected)
 
     def on_search(self, widget, **kwargs):
         self._show_devices(self._all_devices())
@@ -715,9 +715,13 @@ class OpenDiscoApp(toga.App):
     @staticmethod
     def _phone_row(d) -> dict:
         """A device as a phone lists it: address, model and name (Details has the rest). iOS
-        lists the model and name under the address."""
+        lists the model and name under the address, then the newer firmware that's out and its
+        latency, once known (what doesn't fit ends in …)."""
         model, name = d.model or "?", d.name or d.mac or ""
-        return {"ip": d.ip or "-", "model": model, "name": name, "summary": f"{model}  ·  {name}" if name else model}
+        fw = d.health.get("firmware") or {}
+        extra = [f"update {fw['latest']}" if fw.get("newer") else "", health.latency_cell(d)]
+        return {"ip": d.ip or "-", "model": model, "name": name,
+                "summary": " · ".join(x for x in (model, name, *extra) if x)}
 
     def _all_devices(self) -> list:
         if self.result:
@@ -1284,7 +1288,7 @@ class OpenDiscoApp(toga.App):
         until "Don't warn again" is ticked)."""
         text = PORT_SEARCH_WARNING.format(ip=d.ip)
         if self.caps["mobile"]:  # phones have no extra windows: a plain question
-            text = text.replace("this computer", "this phone")
+            text = text.replace("this computer", phone.hook(self, "here")(self) if self.phone_ui else "this phone")
             ok = await self.main_window.dialog(toga.QuestionDialog("Port search", text + " Go ahead?"))
             self.port_warning_accepted = bool(ok)
             return bool(ok)
@@ -1767,8 +1771,8 @@ class OpenDiscoApp(toga.App):
         """A small window over the main one; on phones, which have one window, a page shown in
         place of the main window's content (iOS: pushed over it, with a back button). Returns what
         closes it. on_close runs when it's closed from its title bar."""
-        if self.phone_ui:
-            return phone.push_panel(self, title, content, on_close)
+        if self.phone_ui:  # with the phone's looks
+            return phone.push_panel(self, title, content, on_close, fit=True)
         if self.caps["mobile"]:
             page = toga.Box(style=Pack(direction=COLUMN, margin=12, gap=10), children=[
                 toga.Label(title, style=Pack(font_weight="bold", font_size=18)), content])

@@ -4,7 +4,8 @@ phone_ios.py draws the phone layout with UIKit; this draws the same with Android
 under the names phone.py's docstring lists: the ActionBar is the title bar (Export, Notes and
 Log, Settings; on a page, the Up arrow with the page's title and subtitle), the system Back
 button and gesture go back like Up (app._android_back), and the tabs are Material's bottom
-navigation bar. Colours and button shapes follow the iPhone's.
+navigation bar. Colours and button shapes follow the iPhone's. A tablet (wide) shows the
+device page beside the list, and the list marks the device showing there.
 
 Everything here runs on the UI thread, and all of it is cosmetic except Page, Up and Back: when
 a native call fails the plain Toga widget is left as it was.
@@ -12,6 +13,8 @@ a native call fails the plain Toga widget is left as it was.
 import traceback
 
 import toga
+from toga.style import Pack
+from toga.style.pack import COLUMN
 
 # The iPhone's system colours (light mode), as Android colour ints (ARGB)
 BLUE, RED, GREEN = 0xFF007AFF, 0xFFFF3B30, 0xFF34C759
@@ -20,8 +23,11 @@ BAR = 0xFFF9F9F9  # the title bar, status bar and tab bar
 FILL = 0xFFE9E9EB  # a gray button
 DISABLED_FILL, DISABLED_TEXT = 0xFFF0F0F2, 0xFFB4B4B9
 SEPARATOR = 0xFFD8D8DC
+SELECTED = 0x24007AFF  # a tablet's list: the row of the device beside it
+SEARCH_FILL = 0xFFEEEEF0  # the search field
 COLORS = {"systemBlueColor": BLUE, "systemRedColor": RED, "systemGreenColor": GREEN}
-BAR_ICONS = {"Export": "ios_share", "Notes and Log": "list_alt", "Settings": "settings"}
+BAR_ICONS = {"Export": "ios_share", "Notes and Log": "list_alt", "Settings": "settings"}  # bar_button adds more
+SYMBOL_NAMES = {"plus": "add"}  # the iPhone's SF Symbol -> its Material Symbol
 TAB_ICONS = {"Details": "info", "Packets": "manage_search", "Tools": "build", "Notes": "chat_bubble", "Log": "list_alt"}
 # Material Symbols (Outlined, 24 px; Google, Apache License 2.0): SVG path data, drawn by _icon.
 # Like the iPhone's SF Symbols, in place of Android's dated built-in menu icons.
@@ -62,6 +68,11 @@ SYMBOLS = {
         "l-84 84q-12 12-29 12t-29-12Zm29-85 27-27-256-256q18-20 26-46.5t8-53.5q0-60-38.5-104.5T386-758l74"
         " 74q12 12 12 28t-12 28L332-500q-12 12-28 12t-28-12l-74-74q9 57 53.5 95.5T360-440q26 0 52-8t47-25"
         "l256 256ZM472-488Z"),
+    "add": "M440-440H200v-80h240v-240h80v240h240v80H520v240h-80v-240Z",
+    "search": (
+        "M784-120 532-372q-30 24-69 38t-83 14q-109 0-184.5-75.5T120-580q0-109 75.5-184.5T380-840q109 0 1"
+        "84.5 75.5T640-580q0 44-14 83t-38 69l252 252-56 56ZM380-400q75 0 127.5-52.5T560-580q0-75-52.5-127"
+        ".5T380-760q-75 0-127.5 52.5T200-580q0 75 52.5 127.5T380-400Z"),
     "chat_bubble": (
         "M80-80v-720q0-33 23.5-56.5T160-880h640q33 0 56.5 23.5T880-800v480q0 33-23.5 56.5T800-240H240L80-"
         "80Zm126-240h594v-480H160v525l46-45Zm-46 0v-480 480Z"),
@@ -280,12 +291,12 @@ def fit(app, export, notes, settings):
     def command(text, action, order):
         return toga.Command(lambda command, **kwargs: action(), text=text, group=toga.Group.COMMANDS, order=order)
 
-    export_command = command("Export", export, 1)
+    export_command = command("Export", lambda: (app.__dict__.get("_export_menu") or export)(), 1)
     export_command.enabled = False
     app.main_window.toolbar.add(export_command, command("Notes and Log", notes, 2), command("Settings", settings, 3))
     app.export_button = CommandButton(export_command)
-    for fitting in (_take_up_and_menu, _fit_system_bars, _fit_tabs, _fit_list, lambda app: _plain_widgets(),
-                    _sized_already, _keep_above_keyboard):
+    for fitting in (_take_up_and_menu, _fit_system_bars, _fit_tabs, _fit_list, _fit_wide,
+                    lambda app: _plain_widgets(), _sized_already, _keep_above_keyboard):
         try:
             fitting(app)
         except Exception:
@@ -362,10 +373,14 @@ def _fit_tabs(app):
     """The tabs as the iPhone shows them: a rounded bar floating over the bottom edge, as wide as
     its tabs need, with an icon for each; a tab that's turned off is hidden (the scan's Notes and
     Log page has no Details, Packets or Tools)."""
-    from java import jclass
+    from java import dynamic_proxy, jclass
     impl = app.tabs._impl
     view = impl.native_navigationview
     toga_enabled = impl.set_option_enabled
+
+    class NoInsets(dynamic_proxy(jclass("androidx.core.view.OnApplyWindowInsetsListener"))):
+        def onApplyWindowInsets(self, view, insets):  # (the content ends above the system bars already)
+            return insets
 
     def set_enabled(index, enabled):
         toga_enabled(index, enabled)
@@ -408,15 +423,34 @@ def _fit_tabs(app):
     params.gravity = jclass("android.view.Gravity").CENTER_HORIZONTAL
     view.setLayoutParams(params)
     view.setClipToOutline(True)
+    app._tab_insets = NoInsets()  # kept alive; a tablet's bar would grow by the navigation bar's height
+    jclass("androidx.core.view.ViewCompat").setOnApplyWindowInsetsListener(view, app._tab_insets)
+    view.setPadding(view.getPaddingLeft(), view.getPaddingTop(), view.getPaddingRight(), 0)
     fit_width()
+
+
+def wide(app) -> bool:
+    """A tablet: 600 dp and more across its narrow side, so the list and the device page fit side
+    by side turned either way (a phone turned sideways doesn't count)."""
+    try:
+        return _activity().getResources().getConfiguration().smallestScreenWidthDp >= 600
+    except Exception:
+        traceback.print_exc()
+        return False
+
+
+def side_by_side(app) -> bool:
+    """True on a tablet: the list stays in view beside the device page."""
+    return app.wide
 
 
 def _fit_list(app):
     """The device list as the iPhone shows it: the address over the model and name, a line
     between devices, no space for an icon, a ripple where it's tapped rather than a row that
     stays grey; a changed row is redrawn in place (Toga would redraw the whole list, losing the
-    selection, every second of a scan)."""
-    from java import jclass
+    selection, every second of a scan). On a tablet the device beside the list keeps its row
+    tinted."""
+    from java import jarray, jclass, jint
     View, RelativeLayout = jclass("android.view.View"), jclass("android.widget.RelativeLayout")
     TypedValue, ripple = jclass("android.util.TypedValue"), jclass("android.R$attr").selectableItemBackground
     impl = app.table._impl
@@ -429,7 +463,14 @@ def _fit_list(app):
             view = container.getChildAt(container.getChildCount() - 1)
             value = TypedValue()
             view.getContext().getTheme().resolveAttribute(ripple, value, True)
-            view.setBackground(view.getContext().getDrawable(value.resourceId))
+            if app.wide:  # the ripple over a tint while it's the device showing
+                tint = jclass("android.graphics.drawable.StateListDrawable")()
+                tint.addState(jarray(jint)([jclass("android.R$attr").state_activated]),
+                              jclass("android.graphics.drawable.ColorDrawable")(_int(SELECTED)))
+                view.setBackground(tint)
+                view.setForeground(view.getContext().getDrawable(value.resourceId))
+            else:
+                view.setBackground(view.getContext().getDrawable(value.resourceId))
             icon, texts = view.getChildAt(0), view.getChildAt(1)
             icon.setVisibility(View.GONE)
             params = texts.getLayoutParams()
@@ -439,6 +480,9 @@ def _fit_list(app):
             texts.getChildAt(0).setTextColor(_int(LABEL))
             texts.getChildAt(1).setTextSize(15.0)
             texts.getChildAt(1).setTextColor(_int(SECONDARY))
+            for line_number in (0, 1):  # one line each, cut short with … (the row's height is fixed)
+                texts.getChildAt(line_number).setMaxLines(1)
+                texts.getChildAt(line_number).setEllipsize(jclass("android.text.TextUtils$TruncateAt").END)
             line = View(view.getContext())
             line.setBackgroundColor(_int(SEPARATOR))
             line_params = RelativeLayout.LayoutParams(RelativeLayout.LayoutParams.MATCH_PARENT, max(1, _dp(0.5)))
@@ -459,11 +503,56 @@ def _fit_list(app):
         except Exception:
             impl._load_data()
 
+    def mark(index, marked):
+        if app.wide and index is not None and 0 <= index < impl._linear_layout.getChildCount():
+            impl._get_row(index).setActivated(marked)
+
+    def set_selection(index):
+        clear_selection()
+        impl._selection = index
+        mark(index, True)
+
+    def clear_selection():
+        mark(impl._selection, False)
+        impl._selection = None
+
     impl._make_row = make_row
     impl.source_change = source_change
-    impl._set_selection = lambda index: setattr(impl, "_selection", index)  # no grey row
-    impl._clear_selection = lambda: setattr(impl, "_selection", None)
+    impl._set_selection = set_selection  # no grey row (a tablet's is tinted)
+    impl._clear_selection = clear_selection
     impl._load_data()
+
+
+def _fit_wide(app):
+    """A tablet: the status line under the list wraps at the list's edge, and the device page's
+    title and subtitle end in … at the screen's, rather than run on (Toga makes a label as wide
+    as its text on one line, and the layout with it)."""
+    if not app.wide:
+        return
+    from decimal import ROUND_UP
+
+    from java import jclass
+    from travertino.size import at_least
+    MeasureSpec = jclass("android.view.View$MeasureSpec")
+
+    def narrow(label, one_line):
+        impl, native = label._impl, label._impl.native
+        if one_line:
+            native.setMaxLines(1)
+            native.setEllipsize(jclass("android.text.TextUtils$TruncateAt").END)
+
+        def rehint():
+            width = native.getWidth() or _dp(260)  # what it was given last (none yet: about that)
+            native.measure(MeasureSpec.makeMeasureSpec(width, MeasureSpec.AT_MOST), MeasureSpec.UNSPECIFIED)
+            impl.interface.intrinsic.height = impl.scale_out(native.getMeasuredHeight(), ROUND_UP)
+            impl.interface.intrinsic.width = at_least(0)
+
+        impl.rehint = rehint
+        label.refresh()
+
+    narrow(app.status.widgets[0], False)
+    narrow(app.page.title, True)
+    narrow(app.page.subtitle, True)
 
 
 def keep_selection(app, key):
@@ -473,7 +562,12 @@ def keep_selection(app, key):
         return
     index = next((i for i, row in enumerate(app.table.data) if getattr(row, "key", None) == key), None)
     if index is not None:
-        app.table._impl._selection = index
+        app.table._impl._set_selection(index)
+
+
+def clear_selection(app):
+    """A tablet: no row tinted (the scan's Notes and Log are beside the list)."""
+    app.table._impl._clear_selection()
 
 
 def fit_safe_area(app):
@@ -524,6 +618,158 @@ def plain_entry(widget, send=False, new_password=False):
         traceback.print_exc()
 
 
+def search_field(app, widget):
+    """The search field as the iPhone draws it: a rounded gray box with a magnifier and no
+    underline, typed without capitals or corrections; the keyboard's key reads Search and puts
+    the keyboard away (the list changes as it's typed)."""
+    plain_entry(widget)
+    try:
+        from java import dynamic_proxy, jclass
+        EditorInfo = jclass("android.view.inputmethod.EditorInfo")
+        impl, native = widget._impl, widget._impl.native
+        shape = jclass("android.graphics.drawable.GradientDrawable")()
+        shape.setCornerRadius(_dp(10))
+        shape.setColor(_int(SEARCH_FILL))
+        native.setBackground(shape)
+        impl.set_background_color = lambda color: None  # (Toga would put its underline back)
+        native.setPadding(_dp(10), _dp(8), _dp(10), _dp(8))
+        icon = _icon("search", SECONDARY, 20)
+        icon.setBounds(0, 0, _dp(20), _dp(20))
+        native.setCompoundDrawablesRelative(icon, None, None, None)
+        native.setCompoundDrawablePadding(_dp(6))
+        native.setHintTextColor(_int(SECONDARY))
+        native.setImeOptions(EditorInfo.IME_ACTION_SEARCH)
+
+        class Searched(dynamic_proxy(jclass("android.widget.TextView$OnEditorActionListener"))):
+            def onEditorAction(self, view, action, event):
+                if action == EditorInfo.IME_ACTION_SEARCH:
+                    end_editing(None)
+                    return True
+                return False
+
+        widget._searched = Searched()  # kept alive with the widget
+        native.setOnEditorActionListener(widget._searched)
+    except Exception:
+        traceback.print_exc()
+
+
+def text_box(widget):
+    """A many-line field to type into (a note, the subnets to sweep): a light frame around it,
+    not Android's line under the last line."""
+    try:
+        from java import jclass
+        impl, native = widget._impl, widget._impl.native
+        shape = jclass("android.graphics.drawable.GradientDrawable")()
+        shape.setCornerRadius(_dp(8))
+        shape.setColor(_int(0xFFFFFFFF))
+        shape.setStroke(max(1, _dp(1)), _int(SEPARATOR))
+        native.setBackground(shape)
+        impl.set_background_color = lambda color: None  # (Toga would put its underline back)
+        native.setPadding(_dp(10), _dp(8), _dp(10), _dp(8))
+    except Exception:
+        traceback.print_exc()
+
+
+def here(app) -> str:
+    """What the app's text calls the device it runs on."""
+    return "this tablet" if wide(app) else "this phone"
+
+
+def bar_button(app, symbol, title, action):
+    """One more title-bar button, first in the row (the + for Scan from an address), with the
+    symbol's Material counterpart for its icon."""
+    BAR_ICONS[title] = SYMBOL_NAMES.get(symbol, symbol)
+    app.main_window.toolbar.add(toga.Command(lambda command, **kwargs: action(), text=title,
+                                             group=toga.Group.COMMANDS, order=0))
+
+
+def menu_button(app, title, items):
+    """A button that opens a menu under it (Copy: the IP or MAC address): items() lists (title,
+    enabled, action) when it's tapped."""
+    def press(widget, **kwargs):
+        try:
+            from java import dynamic_proxy, jclass
+            Popup = jclass("androidx.appcompat.widget.PopupMenu")
+            menu = Popup(_activity(), widget._impl.native)
+            actions = {}
+            for index, (text, enabled, action) in enumerate(items()):
+                menu.getMenu().add(0, index, index, text).setEnabled(bool(enabled))
+                actions[index] = action
+
+            class Picked(dynamic_proxy(jclass("androidx.appcompat.widget.PopupMenu$OnMenuItemClickListener"))):
+                def onMenuItemClick(self, item):
+                    actions[item.getItemId()]()
+                    return True
+
+            widget._picked = Picked()  # kept alive while the menu shows
+            menu.setOnMenuItemClickListener(widget._picked)
+            menu.show()
+        except Exception:
+            traceback.print_exc()
+
+    return toga.Button(title, on_press=press, style=Pack(flex=1))
+
+
+async def open_file(app):
+    """A file picked in Android's file picker (Downloads, Drive, a USB stick…), copied into the
+    app's cache folder: its path, or None when nothing was picked."""
+    import asyncio
+    from pathlib import Path
+
+    from java import jarray, jbyte, jclass
+    Intent = jclass("android.content.Intent")
+    intent = Intent(Intent.ACTION_OPEN_DOCUMENT)
+    intent.addCategory(Intent.CATEGORY_OPENABLE)
+    intent.setType("*/*")
+    done = asyncio.get_running_loop().create_future()
+    app._impl.start_activity(intent, on_complete=lambda code, data: done.done() or done.set_result((code, data)))
+    code, data = await done
+    if code != jclass("android.app.Activity").RESULT_OK or data is None or data.getData() is None:
+        return None
+    uri, resolver = data.getData(), _activity().getContentResolver()
+    name = "picked"
+    cursor = resolver.query(uri, None, None, None, None)
+    if cursor is not None:
+        column = cursor.getColumnIndex(jclass("android.provider.OpenableColumns").DISPLAY_NAME)
+        if cursor.moveToFirst() and column >= 0:
+            name = cursor.getString(column) or name
+        cursor.close()
+    folder = Path(app.paths.cache) / "opened"
+    folder.mkdir(parents=True, exist_ok=True)
+    path = folder / Path(name).name
+    stream, chunk, parts = resolver.openInputStream(uri), jarray(jbyte)(65536), []
+    try:
+        while (count := stream.read(chunk)) > 0:
+            parts.append(bytes(chunk)[:count])
+            if sum(map(len, parts)) > 16_000_000:  # (a config is a few KB: this isn't one)
+                raise OSError(f"{name} is too big to be a config")
+    finally:
+        stream.close()
+    path.write_bytes(b"".join(parts))
+    return str(path)
+
+
+def export_menu(app, choices, pick):
+    """Export offers the scan report and the other reports: on a page, each one's button over
+    what it holds (iOS shows the same as a menu). choices() lists them, pick(kind) saves one."""
+    def show():
+        from opendisco import phone
+
+        def chosen(kind):
+            close()
+            pick(kind)
+
+        rows = []
+        for kind, title, detail, enabled in choices():
+            button = toga.Button(title, enabled=enabled, on_press=lambda w, kind=kind, **kw: chosen(kind))
+            style_button(button, "tinted")
+            rows.append(toga.Box(style=Pack(direction=COLUMN, gap=4), children=[
+                button, toga.Label(app._wrap(detail), style=Pack(font_size=13, color="#8a8a8e", margin_left=4))]))
+        close = phone.push_panel(app, "Export", toga.Box(style=Pack(direction=COLUMN, margin=14, gap=14), children=rows))
+
+    app._export_menu = show
+
+
 def end_editing(app):
     """Put the keyboard away."""
     try:
@@ -565,7 +811,8 @@ def _keep_above_keyboard(app):
             params = view.getLayoutParams()
             bottom = max(bars.bottom, keyboard.bottom)
             tabs = app.tabs._impl.native_navigationview
-            tabs.setVisibility(View.GONE if keyboard.bottom > bars.bottom else View.VISIBLE)
+            # (asked, not measured: a tablet counts the keyboard in the system bars' bottom too)
+            tabs.setVisibility(View.GONE if insets.isVisible(Type.ime()) else View.VISIBLE)
             if (params.leftMargin, params.topMargin, params.rightMargin, params.bottomMargin) != (
                     bars.left, bars.top, bars.right, bottom):
                 params.setMargins(bars.left, bars.top, bars.right, bottom)

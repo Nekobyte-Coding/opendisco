@@ -2,13 +2,17 @@
 
 A phone has no menus, no second windows and no room for a twelve-column table, and lets an app
 run no other program. So there the app opens on its device list, under Quick Scan, Full Scan and
-Stop, with Export, the scan's Notes and Log and Settings in the title bar. Tapping a device opens
+Stop and a search, with Export (the scan report and the other reports), the scan's Notes and Log
+and Settings in the title bar. Tapping a device opens
 its own page, titled with its name and address, with its tabs along the bottom: Details,
 Packets, Tools, Notes and Log. Tools pings the device (core.ping: the app's own ICMP), opens an
 SSH session to it (phonessh: the app's own SSH), finds its ports, opens its web UI, rescans it,
 reads what it sees of its neighbours (Scan from device, as on the desktop: devicetools), checks
-and updates its firmware, edits its config, changes its login (phonetools) and copies its
-addresses, with what they find, and the SSH session, in a console underneath.
+and updates its firmware, edits its config, keeps backups of it and uploads one, changes its
+login, reboots it, blinks its LED (phonetools), keeps a note on it, exports its own report and
+copies its addresses, with what they find, and the SSH session, in a console underneath. The
+title bar's + scans from a device given by its address (one the scan didn't find). On a tablet
+(wide), the device's page sits beside the list instead of over it, turned either way.
 
 This module is what both phones share. What each does natively is in phone_<platform>.py
 (phone_ios.py: UIKit through rubicon-objc; phone_android.py), which provides:
@@ -33,10 +37,30 @@ This module is what both phones share. What each does natively is in phone_<plat
                                 new_password: no password manager taking it over
     end_editing(app)            finish typing, so a field's value has its last character
     done_bar(app, widget)       a way to put the keyboard away from a many-line text view
+    wide(app)                   True on a tablet: the list and the device page side by side, laid
+                                out here (Detail)
+    side_by_side(app)           True while the platform's own layout keeps the list in view beside
+                                the pages (iOS: an iPad at a regular width, in a split view)
+    clear_selection(app)        a tablet: no row marked as the one beside the list (the scan's
+                                Notes and Log are showing there)
+    search_field(app, widget)   the search above the list, looking like the platform's own
+    export_menu(app, choices, pick)   Export offers a choice of reports: choices() lists them as
+                                (kind, title, detail, enabled) when it's tapped; pick(kind) saves one
+                                (without it, Export saves the scan report)
+    here(app)                   what the app's text calls the device it runs on ("this phone")
+    text_box(widget)            a text view for typing many lines into, drawn so it can be seen
+    menu_button(app, title, items)   a button that opens a menu: items() lists (title, enabled,
+                                action) when it's tapped (None where there's none: phone.py lays
+                                out a button for each instead)
+    bar_button(app, symbol, title, action)   one more title-bar button (the + for Scan from an
+                                address)
+    open_file(app)              (async) a file the user picks (iOS: from Files), as a local path;
+                                None when cancelled
 app.py makes the widgets every platform shares and calls in here; it all runs on the UI thread.
 """
 import importlib
 import importlib.util
+import re
 import shutil
 import threading
 from pathlib import Path
@@ -51,6 +75,8 @@ DEVICE_TABS = ("Details", "Packets", "Tools")  # hidden while the page shows the
 FIND_KINDS = {"HTTP": "find_http", "HTTPS": "find_https", "SSH": "find_ssh", "All ports": "all_ports"}
 CONSOLE_KEEP = 200_000  # characters of console output kept
 SHELL_COLUMNS = 64  # what the console shows in a line on an iPhone
+LIST_WIDTH = 320  # a tablet's device list, beside the device page
+PANEL_WIDTH = 560  # a tablet's small pages (Settings, Export, a note, a login), in the middle
 
 
 def supported(platform: str) -> bool:
@@ -79,12 +105,21 @@ def _nothing(*args, **kwargs):
 
 
 FALLBACKS = {"Picker": _SelectionPicker, "watch_keyboard": _nothing, "plain_entry": _nothing,
-             "end_editing": _nothing, "done_bar": _nothing}
+             "end_editing": _nothing, "done_bar": _nothing, "wide": lambda app: False,
+             "side_by_side": lambda app: False, "clear_selection": _nothing, "search_field": _nothing,
+             "export_menu": _nothing, "here": lambda app: "this phone", "text_box": _nothing,
+             "menu_button": _nothing, "bar_button": _nothing, "open_file": None}
 
 
 def hook(app, name: str):
     """A phone_<platform> function that not every platform has, or its plain fallback."""
     return getattr(native(app), name, None) or FALLBACKS[name]
+
+
+def beside(app) -> bool:
+    """True while the list is in view beside the device page: a tablet, laid out here (wide) or
+    by the platform (side_by_side)."""
+    return app.wide or hook(app, "side_by_side")(app)
 
 
 class Mirror:
@@ -105,15 +140,19 @@ class Mirror:
 
 # -- the device list ---------------------------------------------------------------
 def main_screen(app) -> toga.Box:
-    """Quick Scan, Full Scan and Stop across the top, the devices under them, the status line at
-    the bottom."""
+    """Quick Scan, Full Scan and Stop across the top, the search and the devices under them, the
+    status line at the bottom; on a tablet, the device page (Detail) to their right."""
     quick = toga.Button("Quick Scan", on_press=lambda w, **kw: _scan(app, "Quick"), style=Pack(flex=1))
     full = toga.Button("Full Scan", on_press=lambda w, **kw: _scan(app, "Full scan"), style=Pack(flex=1))
     status_here = app.status
     app.status = Mirror(status_here, app.tool_status)
     app.start_button = Mirror(quick, full)
+    app.search.placeholder = "Search: IP, MAC, model, name, note…"  # (and firmware, status, via)
+    app.search.on_confirm = lambda w, **kw: hook(app, "end_editing")(app)
+    app.search_count.style.update(color="#8a8a8e", font_size=13)
     content = toga.Box(style=Pack(direction=COLUMN, margin=10, gap=10), children=[
         toga.Box(style=Pack(direction=ROW, gap=8), children=[quick, full, app.stop_button]),
+        toga.Box(style=Pack(direction=ROW, align_items="center", gap=8), children=[app.search, app.search_count]),
         app.table,
         toga.Box(style=Pack(direction=ROW, align_items="center", gap=8), children=[app.spinner, status_here]),
     ])
@@ -121,11 +160,43 @@ def main_screen(app) -> toga.Box:
     style(quick)
     style(full)
     style(app.stop_button, "tinted", "systemRedColor")
-    return content
+    hook(app, "search_field")(app, app.search)
+    app.wide = hook(app, "wide")(app)
+    if not app.wide:
+        return content
+    content.style.update(width=LIST_WIDTH)
+    app.tool_status.parent.remove(app.tool_status)  # the list's, beside Tools, says it already
+    app.page = Detail(app)
+    return toga.Box(style=Pack(direction=ROW, flex=1), children=[
+        content, toga.Divider(direction=toga.Divider.VERTICAL), app.page.box])
+
+
+class Detail:
+    """A tablet's device page, beside the list rather than over it: the title and subtitle a
+    page shows in the title bar, over the tabs. With no device showing, it shows the scan's
+    Notes and Log (show_scan). Shows and closes like the phones' Page."""
+
+    def __init__(self, app):
+        self.app = app
+        self.key = None  # the device showing (None: the scan)
+        self.title = toga.Label("", style=Pack(font_size=20, font_weight="bold", color="#1c1c1e"))
+        self.subtitle = toga.Label("", style=Pack(font_size=14, color="#8a8a8e"))
+        self.box = toga.Box(style=Pack(direction=COLUMN, flex=1), children=[
+            toga.Box(style=Pack(direction=COLUMN, gap=2, margin=(12, 16, 4, 16)),
+                     children=[self.title, self.subtitle]),
+            app.tabs])
+
+    def show(self, title: str, subtitle: str = ""):
+        self.title.text, self.subtitle.text = title, subtitle
+
+    def close(self):
+        show_scan(self.app)
 
 
 def _scan(app, mode: str):
     app.mode.value = mode
+    if beside(app):  # the new scan clears the shown device's tabs; its Log shows how it goes
+        show_scan(app)
     app.loop.create_task(app.on_start(None))
 
 
@@ -136,25 +207,104 @@ def fit(app):
         text.style.update(margin_left=8, margin_right=8)
         ui.monospaced(text, 10)
     ui.monospaced(app.console, 10)
-    app.page = ui.Page(app, toga.Box(style=Pack(direction=COLUMN, flex=1), children=[app.tabs]))
+    if not app.wide:  # (a tablet's is beside the list: Detail)
+        app.page = ui.Page(app, toga.Box(style=Pack(direction=COLUMN, flex=1), children=[app.tabs]))
     ui.fit(app, export=lambda: app.loop.create_task(app.on_export(None)), notes=lambda: show_scan(app),
            settings=app.preferences)
     for button in (app.ping_button, app.ssh_button, app.web_button, app.rescan_button, app.scan_from_button,
-                   app.firmware_button, app.config_button, app.login_button, app.find_button):
+                   app.firmware_button, app.config_button, app.login_button, app.backups_button, app.reboot_button,
+                   app.locate_button, app.find_button):
         ui.style_button(button, "tinted")
-    for button in (app.copy_ip_button, app.copy_mac_button, *app.ssh_row.children[1:]):
+    for button in (app.note_button, app.export_device_button, app.copy_ip_button, app.copy_mac_button,
+                   *app.ssh_row.children[1:]):
         ui.style_button(button, "gray")
+    hook(app, "export_menu")(app, lambda: export_choices(app), lambda kind: app.loop.create_task(app._export(kind)))
+    hook(app, "bar_button")(app, "plus", "Scan from an address", lambda: app.loop.create_task(_tool(app, "scan_address")))
     hook(app, "watch_keyboard")(app, app.console)
     hook(app, "plain_entry")(app.ssh_input, send=True)
+    if app.wide:  # beside the list until a device is tapped
+        show_scan(app)
     update_tools(app)
 
 
-def push_panel(app, title: str, content, on_back=None):
+def push_panel(app, title: str, content, on_back=None, fit=False):
     """A small page (Settings, a login) over what's showing; returns what closes it. Back closes
-    it too, then calls on_back."""
-    page = native(app).Page(app, toga.Box(style=Pack(direction=COLUMN, flex=1), children=[content]), on_back)
+    it too, then calls on_back. fit: app.py's panels, made for every platform, get this one's looks
+    (fit_panel). (A tablet's is a phone's width, in the middle of the screen.)"""
+    if fit:
+        fit_panel(app, content)
+    column = toga.Box(style=Pack(direction=COLUMN, flex=1), children=[content])
+    if app.wide:
+        column.style.update(flex=0, width=PANEL_WIDTH)
+        column = toga.Box(style=Pack(direction=ROW, flex=1), children=[
+            toga.Box(style=Pack(flex=1)), column, toga.Box(style=Pack(flex=1))])
+    page = native(app).Page(app, column, on_back)
     page.show(title, "")
     return page.close
+
+
+EDITOR_HEIGHT = 170  # a panel's many-line text box (a note, the subnets to sweep)
+PRIMARY = ("Save", "Log in", "OK")  # a panel's buttons that go ahead: filled (Done just closes, as Back does)
+DANGER = ("Delete", "Reboot", "Restore", "Upload")  # what changes or loses something on a device: red
+
+
+def fit_panel(app, box):
+    """A panel app.py made for every platform, made to look at home on a phone: its buttons
+    styled (going ahead filled, deleting red, the rest gray) and a row of them at the right; its
+    one-line fields and monospaced text (addresses, logins) without auto-capitals or corrections,
+    in the platform's monospaced font; a many-line one in a box of its own size, with a way to
+    put the keyboard away and kept clear of it; and "this computer" in its text named for this
+    device."""
+    ui = native(app)
+    for widget in box.children:
+        if isinstance(widget, toga.Button):
+            text = widget.text or ""  # (one styled already has none: it keeps its looks)
+            if not text:
+                continue
+            if text in PRIMARY:
+                ui.style_button(widget)
+            elif text.startswith(DANGER):
+                ui.style_button(widget, "tinted", "systemRedColor")
+            else:
+                ui.style_button(widget, "gray")
+        elif isinstance(widget, toga.MultilineTextInput):
+            if "monospace" in str(widget.style.font_family):  # (a note stays prose, corrected as typed)
+                ui.monospaced(widget, 12)
+                hook(app, "plain_entry")(widget)
+            if not widget.readonly:  # a box of its own size, the buttons under it above the keyboard
+                widget.style.update(flex=0, height=EDITOR_HEIGHT)
+                hook(app, "text_box")(widget)
+                hook(app, "done_bar")(app, widget)
+                hook(app, "watch_keyboard")(app, widget, follow=False)
+        elif isinstance(widget, toga.TextInput):  # PasswordInput too
+            hook(app, "plain_entry")(widget)
+        elif isinstance(widget, toga.Label) and re.search(r"this\s+computer", widget.text):
+            noun = hook(app, "here")(app).split(" ", 1)[-1]  # (a wrapped label may break the line between)
+            widget.text = re.sub(r"this(\s+)computer", lambda m: f"this{m.group(1)}{noun}", widget.text)
+        elif isinstance(widget, toga.Box):
+            fit_panel(app, widget)
+    if box.children and isinstance(box.children[-1], toga.Box) and all(
+            isinstance(w, toga.Button) for w in box.children[-1].children):  # a row of buttons: at the right
+        box.children[-1].insert(0, toga.Box(style=Pack(flex=1)))
+
+
+def export_choices(app) -> list:
+    """What Export offers on a phone: the scan report, then the other reports (records.SITE_EXPORTS),
+    as (kind, title, detail, enabled)."""
+    from opendisco import records
+    backups = records.all_backups()
+    notes = len(app.device_notes.items)
+    details = {"scan": "Every device, with diagnostics: HTML",
+               "security": "Known CVEs and outdated firmware: HTML",
+               "backups": f"{sum(len(p) for _, p in backups)} file(s) from {len(backups)} device(s): .zip"
+                          if backups else "None saved yet",
+               "notes": f"{notes} note(s): HTML" if notes else "None written yet",
+               "log": "The Log, as text"}
+    enabled = {"scan": bool(app.result), "security": bool(app.result), "backups": bool(backups), "notes": bool(notes)}
+    choices = [("scan", "Scan report", details["scan"], enabled["scan"])]
+    for kind, button, _text, _types in records.SITE_EXPORTS:
+        choices.append((kind, button.rstrip("…"), details.get(kind, ""), enabled.get(kind, True)))
+    return choices
 
 
 # -- the device page ------------------------------------------------------------------
@@ -182,20 +332,46 @@ def show_device(app, d):
     _device_tabs(app, True)
     title = d.name or d.model or d.ip or d.mac or "Device"
     subtitle = " · ".join(x for x in (d.ip, d.model if d.name else "") if x)
+    if app.wide:
+        app.page.key = d.key
     app.page.show(title, subtitle)
     update_tools(app)
 
 
-def show_scan(app):
-    """Open the page on the scan's Notes and Log, with no device."""
-    _device_tabs(app, False)
+def _showing_scan(app) -> bool:
+    return not app.tabs.content["Details"].enabled
+
+
+def _scan_summary(app) -> str:
     if app.running:
-        summary = f"{app.mode.value}: scanning"
-    elif app.result:
-        summary = f"{app.mode.value}: {len(app.result.devices)} device(s), {app.result.elapsed:.0f}s"
-    else:
-        summary = "No scan yet"
-    app.page.show("Scan", summary)
+        return f"{app.mode.value}: scanning"
+    if app.result:
+        return f"{app.mode.value}: {len(app.result.devices)} device(s), {app.result.elapsed:.0f}s"
+    return "No scan yet"
+
+
+def show_scan(app):
+    """Open the page on the scan's Notes and Log, with no device (a tablet: beside the list,
+    with no device's row marked)."""
+    _device_tabs(app, False)
+    if app.wide:
+        app.page.key = None
+    if beside(app):
+        hook(app, "clear_selection")(app)
+    app.page.show("Scan", _scan_summary(app))
+
+
+def keep_selection(app, key):
+    """After the list was filled again: select the device's row again (Tools works on the
+    selected device). Beside a tablet's list, the page follows it: its device is selected again,
+    and when the search leaves it out the scan's Notes and Log take its place."""
+    if app.wide and app.page.key is not None:
+        key = app.page.key
+        if not any(getattr(row, "key", None) == key for row in app.table.data):
+            show_scan(app)
+            update_tools(app)
+            return
+    native(app).keep_selection(app, key)
 
 
 # -- Tools -------------------------------------------------------------------------------
@@ -215,19 +391,22 @@ def tools(app) -> toga.Box:
     app.rescan_button = toga.Button("Rescan", on_press=action("rescan"), style=grow)
     app.scan_from_button = toga.Button("Scan from device", on_press=later(scan_from), style=grow)
 
-    def tool(name):  # phonetools' (devicetools'), loaded when first used
-        async def run(app):
-            from opendisco import phonetools
-            await getattr(phonetools, name)(app)
-        return later(run)
+    def tool(name):
+        return lambda w, **kw: app.loop.create_task(_tool(app, name))
 
     app.firmware_button = toga.Button("Firmware", on_press=tool("firmware"), style=grow)
     app.config_button = toga.Button("Config", on_press=tool("config"), style=grow)
     app.login_button = toga.Button("Login", on_press=tool("change_login"), style=grow)
+    app.backups_button = toga.Button("Backups", on_press=tool("backups"), style=grow)
+    app.reboot_button = toga.Button("Reboot", on_press=tool("reboot"), style=grow)
+    app.locate_button = toga.Button("Locate", on_press=tool("locate"), style=grow)
     app.port_picker = hook(app, "Picker")(app, list(FIND_KINDS))
     app.find_button = toga.Button("Find", on_press=lambda w, **kw: find_port(app), style=grow)
+    app.note_button = toga.Button("Note", on_press=action("note"), style=grow)
+    app.export_device_button = toga.Button("Export device", on_press=action("export_device"), style=grow)
     app.copy_ip_button = toga.Button("Copy IP", on_press=action("copy_ip"), style=grow)
     app.copy_mac_button = toga.Button("Copy MAC", on_press=action("copy_mac"), style=grow)
+    app.copy_menu = hook(app, "menu_button")(app, "Copy", lambda: _copy_items(app))
     app.tool_status = toga.Label("", style=Pack(margin_left=2))
     app.console = toga.MultilineTextInput(readonly=True, placeholder="What the tools find shows here.",
                                           style=Pack(flex=1, font_family="monospace", font_size=10,
@@ -241,21 +420,43 @@ def tools(app) -> toga.Box:
     app.pinging = None  # (device key, Event that stops it) while a ping runs
     app.ssh = None  # (device key, phonessh.Shell) while an SSH session is open
     app.find_from = None  # app.py's; the phone has one Find button
-    app.device_job = None  # phonetools: {"key", "name", "stop"} while a firmware update or a new login runs
+    app.device_job = None  # phonetools: {"key", "name", "stop"} while a firmware update, reboot... runs
+    app.phone_locating = {}  # device key -> the login its LED was set blinking with (phonetools.locate)
     app.phone_passwords = {}  # device key -> its SSH password, for this run only: phones keep none
+    if app.copy_menu is not None:  # three to a row: the short name
+        app.export_device_button.text = "Export"
     row = Pack(direction=ROW, gap=8)
     app.tools_box = toga.Box(style=Pack(direction=COLUMN, margin=12, gap=8), children=[
         toga.Box(style=row, children=[app.ping_button, app.ssh_button, app.web_button]),
         toga.Box(style=row, children=[app.rescan_button, app.scan_from_button]),
         toga.Box(style=row, children=[app.firmware_button, app.config_button, app.login_button]),
+        toga.Box(style=row, children=[app.backups_button, app.reboot_button, app.locate_button]),
         toga.Box(style=Pack(direction=ROW, align_items="center", gap=8), children=[
             toga.Label("Find port", style=Pack(font_weight="bold", margin_left=2)), app.port_picker.widget,
             app.find_button]),
-        toga.Box(style=row, children=[app.copy_ip_button, app.copy_mac_button]),
+        *([toga.Box(style=row, children=[app.note_button, app.export_device_button, app.copy_menu])]
+          if app.copy_menu is not None else
+          [toga.Box(style=row, children=[app.note_button, app.export_device_button]),
+           toga.Box(style=row, children=[app.copy_ip_button, app.copy_mac_button])]),
         app.tool_status,
         app.console,
     ])
     return app.tools_box
+
+
+async def _tool(app, name: str):
+    """One of phonetools' device tools (devicetools' work), loaded when first used."""
+    from opendisco import phonetools
+    await getattr(phonetools, name)(app)
+
+
+def _copy_items(app) -> list:
+    """The Copy menu: the open device's IP and MAC address."""
+    d = app._selected_device()
+    return [(f"IP address  {d.ip}" if d and d.ip else "IP address", bool(d and d.ip),
+             lambda: app._device_action("copy_ip")),
+            (f"MAC address  {d.mac}" if d and d.mac else "MAC address", bool(d and d.mac),
+             lambda: app._device_action("copy_mac"))]
 
 
 def say(app, text: str):
@@ -316,6 +517,8 @@ def update_tools(app):
     retitle = native(app).retitle
     d = app._selected_device()
     state = app._menu_state(d)
+    if beside(app) and _showing_scan(app):  # a scan started or ended beside it
+        app.page.show("Scan", _scan_summary(app))
     idle = bool(d and d.ip and app.result) and not (app.running or app.rescanning or app.finding or app.device_job)
     retitle(app.find_button, "Stop" if app.finding else "Find")
     app.find_button.enabled = idle or app.finding
@@ -324,15 +527,18 @@ def update_tools(app):
     app.ssh_button.enabled = app.ssh is not None or (phonessh.available() and bool(d and d.ip))
     app.scan_from_button.enabled = phonessh.available() and idle
     for button, name in ((app.web_button, "web"), (app.rescan_button, "rescan"), (app.copy_ip_button, "copy_ip"),
-                         (app.copy_mac_button, "copy_mac")):
+                         (app.copy_mac_button, "copy_mac"), (app.note_button, "note"),
+                         (app.export_device_button, "export_device")):
         button.enabled = state[name][1]
+    retitle(app.note_button, "Edit note" if d and d.note else "Note")
     if app.device_job:
         app.rescan_button.enabled = False
     if phonessh.available():
         from opendisco import phonetools
         phonetools.update_buttons(app, d)
     else:
-        for button in (app.firmware_button, app.config_button, app.login_button):
+        for button in (app.firmware_button, app.config_button, app.login_button, app.backups_button,
+                       app.reboot_button, app.locate_button):
             button.enabled = False
 
 
@@ -493,8 +699,8 @@ def _ssh_ended(app, key, reason: str):
 # -- Scan from device ------------------------------------------------------------------
 async def scan_from(app):
     """What the device knows of its neighbours (its stations on airOS, LLDP neighbours and ARP
-    table), added to the scan as on the desktop, then back to the list, where the devices found
-    through it are listed under it."""
+    table), added to the scan as on the desktop, then back to the list (unless it's in view
+    beside the page already), where the devices found through it are listed under it."""
     from opendisco import devicetools
     d, result = app._selected_device(), app.result
     if d is None or not result:
@@ -534,7 +740,8 @@ async def scan_from(app):
     app._tool_said(lines[0])
     if lines[1:]:
         say(app, "\n".join(lines[1:]))
-    app.page.close()  # back to the list
+    if not beside(app):  # (a tablet shows the list already)
+        app.page.close()  # back to the list
 
 
 # -- export -----------------------------------------------------------------------------
