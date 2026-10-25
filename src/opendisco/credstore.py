@@ -24,7 +24,7 @@ def store_name() -> str:
         return "the macOS Keychain"
     if sys.platform == "win32":
         return "Windows Credential Manager"
-    return "the keyring (Secret Service)"
+    return "the desktop keyring"  # GNOME Keyring or KWallet, through the Secret Service
 
 
 def available() -> bool:
