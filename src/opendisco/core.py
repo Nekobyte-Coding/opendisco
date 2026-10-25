@@ -4671,7 +4671,10 @@ def render_notes(inv: Inventory, sc: Scanner, opts) -> list:
         notes.append(("note", "Nothing answered. Check that this computer is on the same VLAN as the devices, "
                               "that Wi-Fi client isolation isn't on, and that the firewall allows inbound UDP. "
                               "Newer gear on another subnet needs -a (temporary aliases); for routed or "
-                              "VPN networks, give the device subnet: opendisco.py 10.0.5.0/24"))
+                              "VPN networks, give the device subnet: opendisco.py 10.0.5.0/24"
+                              + (". On macOS, also check that OpenDisco (or the terminal running it) is allowed in "
+                                 "System Settings > Privacy & Security > Local Network: blocked, it hears nothing "
+                                 "and macOS doesn't say so." if sys.platform == "darwin" else "")))
     return notes
 
 
