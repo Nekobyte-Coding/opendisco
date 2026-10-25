@@ -372,15 +372,16 @@ class _Watcher:
         if self.on_tty:
             self.on_tty(data)
         self.tail = (self.tail + data)[-400:]
-        if terminal.PASSWORD_PROMPT.search(self.tail):
-            who, password = terminal.prompt_password(self.password, self.tail)
+        shown = terminal.plain(self.tail)  # Windows' console ends a prompt with escapes
+        if terminal.PASSWORD_PROMPT.search(shown):
+            who, password = terminal.prompt_password(self.password, shown)
             self.tail = b""
             if password and self.typed.get(who, 0) < 2:
                 self.typed[who] = self.typed.get(who, 0) + 1
                 self.write((password + "\r").encode("utf-8"))
             else:
                 self.unanswered = True
-        elif PASSPHRASE_PROMPT.search(self.tail):
+        elif PASSPHRASE_PROMPT.search(shown):
             self.tail = b""
             self.write(b"\r")
 

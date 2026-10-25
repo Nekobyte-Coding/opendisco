@@ -26,6 +26,15 @@ IS_WINDOWS = sys.platform == "win32"
 RESOURCES = Path(__file__).with_name("resources")
 PASSWORD_PROMPT = re.compile(rb"(?i)pass(word|code)[^\r\n]{0,60}:\s*$")
 KEY_CHANGED = b"REMOTE HOST IDENTIFICATION HAS CHANGED"
+# Terminal escapes, and one cut off at the end. Windows' console (ConPTY) draws ssh's "password: "
+# as "password:" and a cursor move, then sets the window title, so a prompt can end in escapes.
+ESCAPES = re.compile(rb"\x1b\[[0-9;?]*[ -/]*[@-~]|\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)|\x1b[()][0-9A-Za-z]|\x1b[=>]"
+                     rb"|\x1b\][^\x07\x1b]*$|\x1b\[[0-9;?]*$|\x1b$")
+
+
+def plain(data: bytes) -> bytes:
+    """What a terminal shows of data, without its escapes: what a prompt is matched against."""
+    return ESCAPES.sub(b"", data)
 
 if IS_WINDOWS:
     try:  # a real console (ConPTY) for each session
@@ -200,8 +209,9 @@ class Session:
         if KEY_CHANGED in seen:
             self.key_changed = True
         self.tail = seen[-300:]
-        if self.password and PASSWORD_PROMPT.search(self.tail):
-            who, password = prompt_password(self.password, self.tail)
+        shown = plain(self.tail)
+        if self.password and PASSWORD_PROMPT.search(shown):
+            who, password = prompt_password(self.password, shown)
             if password and who not in self.typed:
                 self.typed.add(who)
                 self.tail = b""
