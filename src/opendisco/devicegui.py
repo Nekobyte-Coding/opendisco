@@ -89,7 +89,8 @@ def menu_state(app, d, titles: dict) -> dict:
         state["scan_from"] = (titles["scan_from"], False)
     state["forget_login"] = (titles["forget_login"], bool(d.mac and _remembered(app, d)))
     kept = len(devicetools.list_backups(d.mac)) if d.mac else 0
-    state["backups"] = (titles["backups"] + (f"  ({kept} kept)" if kept else ""), bool(kept or state["backup"][1]))
+    state["backups"] = (titles["backups"] + (f"  ({kept} kept)" if kept else ""),
+                        bool(d.mac and (kept or state["backup"][1])))  # filed by MAC: none without one
     return state
 
 
