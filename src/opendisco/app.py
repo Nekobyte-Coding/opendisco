@@ -19,7 +19,7 @@ import toga
 from toga.style import Pack
 from toga.style.pack import COLUMN, ROW
 
-from opendisco import FULL_NAME, __version__, core, phone, vulns
+from opendisco import FULL_NAME, __version__, core, phone, records, vulns
 
 if core.platform_name() != "ios":  # left out of the iOS app (packaging/ios/build_ios.py)
     from opendisco import update
@@ -48,6 +48,7 @@ DEVICE_ACTIONS = [("web", "Open Web UI"), ("ssh", "Open SSH…"), ("ping", "Ping
                   ("all_ports", "Scan all ports"), None,
                   ("fw_check", "Check for firmware update"), ("fw_update", "Update firmware…"),
                   ("config", "Edit config…"), ("login", "Change login…"), None,
+                  ("note", "Note…"), ("export_device", "Export device…"), None,
                   ("copy_ip", "Copy IP address"), ("copy_mac", "Copy MAC address"), None,
                   ("forget", "Forget SSH key"), ("forget_login", "Forget saved login"), ("hide", "Hide device")]
 FINDS = {"find_http": "http", "find_https": "https", "find_ssh": "ssh", "all_ports": "all"}
@@ -60,9 +61,11 @@ NO_SESSION = "Right-click a device to get started: Open SSH or Ping."
 # The Settings window's checkboxes: settings.json key -> text. Both are on until turned off.
 SETTINGS = {"check_app_updates": "Check for OpenDisco updates when opening",
             "check_cve_updates": "Check for new CVEs when opening"}
-# What settings.json keeps; "update" remembers an update while the app restarts into it, and
-# "deep_checks" is iOS's Deep checks switch (in Settings there).
-SAVED_SETTINGS = ("hidden", "ssh_user", "skip_port_warning", "device_logins", *SETTINGS, "update", "deep_checks")
+# What settings.json keeps; "update" remembers an update while the app restarts into it,
+# "deep_checks" is iOS's Deep checks switch (in Settings there) and "sweep_subnets" Settings' list
+# of subnets every scan also sweeps (records.SWEEP_KEY).
+SAVED_SETTINGS = ("hidden", "ssh_user", "skip_port_warning", "device_logins", *SETTINGS, "update", "deep_checks",
+                  records.SWEEP_KEY)
 # Where earlier versions kept their data, by the parts of the data folder's path that changed:
 # folder name now -> patterns for its earlier names. macOS names the folder after the app ID
 # (earlier IDs ended .opendisco or .ubnt-discover); Windows after the publisher (until 1.4.1,
@@ -141,6 +144,7 @@ class OpenDiscoApp(toga.App):
         vulns.CACHE_DIR = Path(self.paths.data)  # where a downloaded CVE list is kept (vulns.refresh)
         self.settings = self._load_settings()
         self.hidden = self.settings.setdefault("hidden", {})  # device key (its MAC) -> what it was
+        self.device_notes = records.Notes(self.paths.data)  # a note per device, by MAC (notes.json)
         if not self.caps["mobile"]:
             core.SUDO_ASKPASS = self._ask_password  # no terminal here, so the GUI asks
         self.multicast_lock = self._android_multicast_lock()
@@ -170,6 +174,10 @@ class OpenDiscoApp(toga.App):
         self.mode_help = toga.Label("", style=Pack(margin_left=2) if mobile else Pack(flex=1, margin_left=8))
         self.hidden_button = toga.Button("", on_press=self.on_hidden)
         self._update_hidden_button()
+        # The search over the device list (records.filter_tree), above it; phones lay it out themselves.
+        self.search = toga.TextInput(placeholder="Search: IP, MAC, model, name, firmware, status, via, note",
+                                     on_change=self.on_search, style=Pack(flex=1))
+        self.search_count = toga.Label("")  # "3 of 25 shown" while searching
 
         self.find_buttons = []
         if mobile:
@@ -209,15 +217,7 @@ class OpenDiscoApp(toga.App):
         if not phone_ui:
             tabs.append(("On the wire", self.wire))
         tabs += [("Notes", self.notes), ("Log", self.log)]
-        if self.caps["aliases"]:
-            self.networks = toga.MultilineTextInput(value=self.networks_path.read_text(encoding="utf-8"), style=mono)
-            networks_box = toga.Box(style=Pack(direction=COLUMN, flex=1, gap=6), children=[
-                toga.Label(f"Networks probed through temporary addresses ({self.networks_path})"),
-                self.networks,
-                toga.Box(style=Pack(direction=ROW, gap=6), children=[
-                    toga.Button("Save", on_press=self.on_save_networks),
-                    toga.Button("Restore defaults", on_press=self.on_reset_networks)])])
-            tabs.append(("Networks", networks_box))
+        self.networks = None  # the networks file's editor, in Settings while it's open
         self.tabs = toga.OptionContainer(content=tabs, style=Pack(flex=1))
 
         self.spinner = toga.ActivityIndicator()
@@ -245,13 +245,15 @@ class OpenDiscoApp(toga.App):
                 footer.append(self.hold_button)
 
             row = Pack(direction=ROW, align_items="center", gap=8)
+            searching = toga.Box(style=row, children=[self.search, self.search_count])
             if mobile:  # phones: one column, no splitter
                 finder = toga.Box(style=Pack(direction=ROW, align_items="center", gap=4),
                                   children=[toga.Label("Find port"), *self.find_buttons])
                 body = toga.Box(style=Pack(direction=COLUMN, flex=1, gap=6),
-                                children=[self.table, finder, self.tabs])
+                                children=[searching, self.table, finder, self.tabs])
             else:
-                body = toga.SplitContainer(content=[self.table, self.tabs], direction=toga.SplitContainer.HORIZONTAL,
+                listed = toga.Box(style=Pack(direction=COLUMN, gap=6), children=[searching, self.table])
+                body = toga.SplitContainer(content=[listed, self.tabs], direction=toga.SplitContainer.HORIZONTAL,
                                            style=Pack(flex=1))
             self.main_window.content = toga.Box(style=Pack(direction=COLUMN, margin=10, gap=8), children=[
                 toga.Box(style=row, children=controls),
@@ -567,6 +569,8 @@ class OpenDiscoApp(toga.App):
             args += ["-i", port]
         if self.caps["mobile"]:  # a phone app can't read the ARP table; mDNS and SSDP work (iOS: the
             args.append("--no-arp")  # multicast entitlement; Android: the multicast lock, and unicast replies)
+        if name != "Direct to a device":  # Settings' routed and VPN subnets (Direct is about one device)
+            args += records.sweep_targets(self.settings.get(records.SWEEP_KEY))
         return args
 
     async def _windows_ready(self) -> bool:
@@ -666,15 +670,23 @@ class OpenDiscoApp(toga.App):
                                                      res.counters if res else None)
 
     def _show_devices(self, devices):
-        """Fill the table, minus hidden devices. Rows change in place when the same devices are
-        listed, so the selection stays put while a scan or a rescan updates them."""
+        """Fill the table, minus hidden devices and those the search leaves out. Rows change in
+        place when the same devices are listed, so the selection stays put while a scan or a rescan
+        updates them."""
         row = self._phone_row if self.caps["mobile"] else (lambda d: dict(zip(ACCESSORS, core.device_row(d))))
+        self.device_notes.apply(devices)
+        listed = [d for d in devices if d.key not in self.hidden]
         rows = []
-        for d, depth in core.tree_order(devices):  # found through another device: indented under it
-            if d.key not in self.hidden:
-                values = row(d)
-                values["ip"] = core.nested_ip(d, depth)
-                rows.append((d.key, values))
+        # Found through another device: indented under it, which a search keeps in view
+        for d, depth in records.filter_tree(listed, self.search.value or ""):
+            values = row(d)
+            values["ip"] = core.nested_ip(d, depth)
+            if d.note:
+                for attr in ("name", "summary"):
+                    if attr in values:
+                        values[attr] = f"{values[attr]} {records.NOTE_MARK}".lstrip()
+            rows.append((d.key, values))
+        self.search_count.text = f"{len(rows)} of {len(listed)} shown" if (self.search.value or "").strip() else ""
         data = self.table.data
         selected = getattr(self.table.selection, "key", None)
         if [key for key, _ in rows] == [getattr(row, "key", None) for row in data]:
@@ -686,6 +698,9 @@ class OpenDiscoApp(toga.App):
             self.table.data = [dict(values, key=key) for key, values in rows]
         if self.phone_ui:  # iOS forgets the tapped row whenever a row changes
             phone.native(self).keep_selection(self, selected)
+
+    def on_search(self, widget, **kwargs):
+        self._show_devices(self._all_devices())
 
     @staticmethod
     def _phone_row(d) -> dict:
@@ -897,6 +912,9 @@ class OpenDiscoApp(toga.App):
             "rescan": (titles["rescan"], idle),
             "issues": (f"Show issues ({len(d.issues)})…" if d.issues else titles["issues"], bool(d.issues)),
             **finds,
+            "note": ("Edit note…" if d.note else titles["note"], True) if d.mac
+                    else (titles["note"] + "  (no MAC to keep it under)", False),
+            "export_device": (titles["export_device"], True),
             "copy_ip": (f"Copy IP address  ({d.ip})" if ip else titles["copy_ip"], ip),
             "copy_mac": (f"Copy MAC address  ({d.mac})" if d.mac else titles["copy_mac"], bool(d.mac)),
             "forget": (titles["forget"], ip),
@@ -941,6 +959,10 @@ class OpenDiscoApp(toga.App):
             asyncio.create_task(self._find_after_warning(d, FINDS[name]))
         elif name == "issues":
             self._show_issues(d)
+        elif name == "note":
+            self._edit_note(d)
+        elif name == "export_device":
+            asyncio.create_task(self._export_device(d))
         elif name == "copy_ip":
             self._copy(d.ip, "IP address")
         elif name == "copy_mac":
@@ -958,6 +980,61 @@ class OpenDiscoApp(toga.App):
             self._update_hidden_button()
             self._show_devices(self._all_devices())
             self.status.text = f"Hid {d.ip or d.mac}. Hidden devices… brings it back."
+
+    # -- a device's note and its own export ------------------------------------------
+    def _edit_note(self, d):
+        """Write or change a device's note (where it's mounted, the site, who looks after it): kept
+        by its MAC through rescans, restarts and updates, until deleted."""
+        who = f"{d.ip or d.mac}  {d.name or d.model or ''}".strip()
+        text = toga.MultilineTextInput(value=d.note, placeholder="Where it's mounted, the site, who looks after it…",
+                                       style=Pack(flex=1))
+
+        def finish(keep):
+            close()
+            if keep is None:
+                return
+            try:
+                self.device_notes.set(d, text.value if keep else "")
+            except OSError as e:
+                self.status.text = f"Couldn't save the note: {e.strerror or e}"
+                return
+            self._notes_changed(d)
+            self.status.text = f"Saved the note on {d.ip or d.mac}." if d.note else f"No note on {d.ip or d.mac} now."
+
+        buttons = [toga.Button("Cancel", on_press=lambda w, **kw: finish(None)),
+                   toga.Button("Save", on_press=lambda w, **kw: finish(True))]
+        if d.note:
+            buttons.insert(0, toga.Button("Delete note", on_press=lambda w, **kw: finish(False)))
+        if not self.caps["mobile"]:
+            buttons.insert(1 if d.note else 0, toga.Box(style=Pack(flex=1)))
+        content = toga.Box(style=Pack(direction=COLUMN, flex=1, margin=14, gap=8), children=[
+            toga.Label(self._wrap(f"Kept with {d.mac} in this computer's OpenDisco data, through rescans, restarts "
+                                  "and updates; Details, the search and the exports include it.")),
+            text, toga.Box(style=Pack(direction=ROW, gap=8), children=buttons)])
+        close = self._show_panel(f"Note: {who}", content, (560, 300), resizable=True)
+        text.focus()
+
+    def _notes_changed(self, d):
+        """After a note changed: its ✎ in the list, and Details if it's the device shown."""
+        self._show_devices(self._all_devices())
+        if self._selected_device() is d:
+            self.details.value = core.render_details(d)
+        if self.phone_ui:
+            phone.update_tools(self)
+
+    async def _export_device(self, d):
+        """Save one device's report (records.device_report): HTML, or with its saved config
+        backups a .zip."""
+        who = f"{d.ip or d.mac}  {d.name or d.model or ''}".strip()
+        backups = records.backups_for(d)
+        packed = bool(backups) and await self.main_window.dialog(toga.QuestionDialog(
+            "Export device", f"{who} has {len(backups)} saved config backup(s). Include them? Yes saves a .zip with "
+                             "the report and the backups; No saves the report alone (.html)."))
+        ext = ".zip" if packed else ".html"
+        noted = self.device_notes.entry(d).get("updated", "")
+        await self._save_export(records.device_file_name(d, ext), f"Export {who}", [ext[1:]],
+                                lambda path: records.write_device_export(path, d, self.result,
+                                                                         backups if packed else (), noted))
 
     # -- SSH and ping ----------------------------------------------------------------
     def _show_terminal(self, session):
@@ -1383,45 +1460,115 @@ class OpenDiscoApp(toga.App):
 
     # -- exports and holding addresses ---------------------------------------------
     async def on_export(self, widget, **kwargs):
+        """The scan report; on desktops, first a choice of it or the extras (records.SITE_EXPORTS).
+        (Phones: the scan report as before; their Export offers the extras through _export.)"""
         if not self.result:
             return
-        name = f"opendisco-scan-{time.strftime('%Y%m%d-%H%M')}.html"
+        if self.caps["mobile"]:
+            await self._export("scan")
+            return
+        self._export_chooser()
+
+    def _export_chooser(self):
+        """Export: the scan report first, as it always was, then the site-wide extras."""
+        backups = records.all_backups()
+        notes = len(self.device_notes.items)
+        state = {"backups": (bool(backups), f"{sum(len(p) for _, p in backups)} file(s) from {len(backups)} device(s)"
+                             if backups else "none saved yet"),
+                 "notes": (bool(notes), f"{notes} note(s)" if notes else "none written yet")}
+        choices = [("scan", "Scan report…", "Every device as the table lists it, with diagnostics: HTML (opens on any "
+                                            "phone), CSV or JSON.", True)]
+        for kind, button, text, _types in records.SITE_EXPORTS:
+            enabled, extra = state.get(kind, (True, ""))
+            choices.append((kind, button, f"{text} ({extra})." if extra else f"{text}.", enabled))
+
+        def pick(kind):
+            close()
+            asyncio.create_task(self._export(kind))
+
+        rows = [toga.Box(style=Pack(direction=ROW, align_items="center", gap=10), children=[
+                    toga.Button(button, enabled=enabled, on_press=lambda w, kind=kind, **kw: pick(kind),
+                                style=Pack(width=170)),
+                    toga.Label(textwrap.fill(text, 58), style=Pack(flex=1))])
+                for kind, button, text, enabled in choices]
+        content = toga.Box(style=Pack(direction=COLUMN, margin=14, gap=10), children=[
+            *rows, toga.Box(style=Pack(direction=ROW), children=[
+                toga.Box(style=Pack(flex=1)), toga.Button("Close", on_press=lambda w, **kw: close())])])
+        close = self._show_panel("Export", content, (640, 290))
+
+    async def _export(self, kind: str):
+        """Save the scan report ("scan") or one of records.SITE_EXPORTS, named for now."""
+        stamp = time.strftime("%Y%m%d-%H%M")
+        devices = self._all_devices()
+        if kind == "scan":
+            res = self.result
+            if self.phone_ui:  # the phones' own: iOS's share sheet, Android's Downloads
+                try:
+                    phone.native(self).export(self, f"opendisco-scan-{stamp}.html")
+                except Exception as e:
+                    self.status.text = f"Couldn't save the export: {getattr(e, 'strerror', None) or e}"
+                return
+            await self._save_export(f"opendisco-scan-{stamp}.html",
+                                    "Export results (.html opens on any phone; .csv, .json)", ["html", "csv", "json"],
+                                    lambda path: core.write_export(res, path))
+            return
+        _kind, button, _text, types = next(e for e in records.SITE_EXPORTS if e[0] == kind)
+        names = {"security": "security", "backups": "config-backups", "notes": "notes", "log": "log"}
+        log = self.log.value
+        await self._save_export(f"opendisco-{names[kind]}-{stamp}.{types[0]}", f"Export: {button.rstrip('…')}", types,
+                                lambda path: records.write_site_export(kind, path, devices, self.device_notes, log))
+
+    async def _save_export(self, name: str, title: str, file_types: list, write):
+        """Save an export where this platform keeps files: a save dialog on desktops; on phones, the
+        share sheet (iOS) or Downloads (Android). write(path) writes it in the format its
+        extension names."""
         try:
-            if self.phone_ui:  # iOS: the share sheet saves it to Files or sends it
-                phone.native(self).export(self, name)
+            if self.caps["mobile"]:  # Toga has no save dialog there
+                folder = Path(self.paths.cache) / "exports"  # in place of the last one: shared already, or not wanted
+                shutil.rmtree(folder, ignore_errors=True)
+                folder.mkdir(parents=True)
+                path = folder / name
+                write(str(path))
+                share = getattr(phone.native(self), "share", None) if self.phone_ui else None
+                if share is not None:  # iOS: Files, Mail, AirDrop…
+                    share(self, path)
+                    return
+                if self.caps["platform"] == "android":
+                    self.status.text = f"Saved {self._save_to_downloads(name, path.read_bytes())}"
+                    return
+                self.status.text = f"Saved {path}"
                 return
-            if self.caps["platform"] == "android":  # Toga has no save dialog there: it returned nothing
-                self.status.text = f"Saved {self._save_to_downloads(name, core.export_text(self.result, '.html'))}"
-                return
-            path = await self.main_window.dialog(toga.SaveFileDialog(
-                "Export results (.html opens on any phone; .csv, .json)", name, file_types=["html", "csv", "json"]))
+            path = await self.main_window.dialog(toga.SaveFileDialog(title, name, file_types=file_types))
             if not path:
                 return
-            core.write_export(self.result, str(path))
+            write(str(path))
         except Exception as e:  # a read-only folder, a full disk, Android refusing...
             self.status.text = f"Couldn't save the export: {getattr(e, 'strerror', None) or e}"
             return
         self.status.text = f"Saved {path}"
 
-    def _save_to_downloads(self, name: str, text: str) -> str:
-        """Android: save a report where a file manager or browser can open it, the Downloads
-        folder (Android 10 and later; earlier, the app's folder on shared storage)."""
+    def _save_to_downloads(self, name: str, text) -> str:
+        """Android: save a report (text, or a file's bytes) where a file manager or browser can
+        open it, the Downloads folder (Android 10 and later; earlier, the app's folder on shared
+        storage)."""
+        import mimetypes
         from java import jclass
+        data = text.encode("utf-8") if isinstance(text, str) else bytes(text)
         context = self._impl.native.getApplicationContext()
         if jclass("android.os.Build$VERSION").SDK_INT < 29:
             path = Path(str(context.getExternalFilesDir(None))) / name
-            path.write_text(text, encoding="utf-8")
+            path.write_bytes(data)
             return str(path)
         columns = jclass("android.provider.MediaStore$MediaColumns")
         values = jclass("android.content.ContentValues")()
         values.put(columns.DISPLAY_NAME, name)
-        values.put(columns.MIME_TYPE, "text/html")
+        values.put(columns.MIME_TYPE, mimetypes.guess_type(name)[0] or "application/octet-stream")
         values.put(columns.RELATIVE_PATH, jclass("android.os.Environment").DIRECTORY_DOWNLOADS)
         resolver = context.getContentResolver()
         uri = resolver.insert(jclass("android.provider.MediaStore$Downloads").EXTERNAL_CONTENT_URI, values)
         stream = resolver.openOutputStream(uri)
         try:
-            stream.write(text.encode("utf-8"))
+            stream.write(data)
         finally:
             stream.close()
         try:  # Android adds " (1)" when the folder already has that name: say what it's called
@@ -1482,8 +1629,10 @@ class OpenDiscoApp(toga.App):
         self.hold_button.text = "Keep addresses"
         self.status.text = "Temporary addresses removed."
 
-    # -- networks file -------------------------------------------------------------
-    def on_save_networks(self, widget, **kwargs):
+    # -- networks file (in Settings) ---------------------------------------------------
+    def on_save_networks(self, widget=None, **kwargs) -> bool:
+        """Check Settings' networks list and save it; False, with the line that's wrong on the
+        status line, when it can't be used."""
         try:
             for n, line in enumerate(self.networks.value.splitlines(), 1):
                 line = line.split("#", 1)[0].strip()
@@ -1491,11 +1640,16 @@ class OpenDiscoApp(toga.App):
                     core.parse_alias_spec(line)
         except ValueError as e:
             self.status.text = f"Networks line {n}: {e}"
-            return
-        self.networks_path.write_text(self.networks.value, encoding="utf-8")
+            return False
+        try:
+            self.networks_path.write_text(self.networks.value, encoding="utf-8")
+        except OSError as e:
+            self.status.text = f"Couldn't save {self.networks_path}: {e.strerror or e}"
+            return False
         self.status.text = f"Saved {self.networks_path}"
+        return True
 
-    def on_reset_networks(self, widget, **kwargs):
+    def on_reset_networks(self, widget=None, **kwargs):
         self.networks.value = Path(core.DEFAULT_NETWORKS_FILE).read_text(encoding="utf-8")
 
     # -- settings and updates -------------------------------------------------------
@@ -1600,14 +1754,57 @@ class OpenDiscoApp(toga.App):
         return "\n".join(textwrap.fill(part, width) for part in text.split("\n"))
 
     def preferences(self, *args, **kwargs):
-        """The Settings window. Toga's standard Settings… command calls this."""
+        """The Settings window: the switches, the subnets every scan also sweeps, and where
+        temporary addresses work, the networks probed through them. Toga's standard Settings…
+        command calls this."""
         if self.close_settings:  # open already: bring it back to the front
             self.close_settings()
+        mono = Pack(flex=1, font_family="monospace", font_size=12 if self.caps["mobile"] else 11)
+        sweep = toga.MultilineTextInput(value="\n".join(map(str, self.settings.get(records.SWEEP_KEY) or [])),
+                                        placeholder="10.20.0.0/24   # a subnet or an address a line", style=mono)
+        sweep_said, networks_said = toga.Label("", style=Pack(flex=1)), toga.Label("", style=Pack(flex=1))
+        saved = {"sweep": sweep.value, "networks": None}
+        swept = records.sweep_targets(self.settings.get(records.SWEEP_KEY))
+        if swept:
+            sweep_said.text = self._wrap(f"Every scan also sweeps {records.describe_targets(swept)}.")
+
+        def save_sweep(*args, **kwargs) -> bool:
+            targets, problems = records.parse_sweep_list(sweep.value)
+            if problems:
+                sweep_said.text = self._wrap(problems[0])
+                return False
+            self.settings[records.SWEEP_KEY] = [line.rstrip() for line in sweep.value.strip().splitlines()]
+            self._save_settings()
+            saved["sweep"] = sweep.value
+            sweep_said.text = self._wrap(f"Saved: every scan also sweeps {records.describe_targets(targets)}."
+                                         if targets else "Saved: no extra subnets.")
+            return True
+
+        def save_networks(*args, **kwargs) -> bool:
+            ok = self.on_save_networks()
+            networks_said.text = self._wrap(self.status.text)
+            if ok:
+                saved["networks"] = self.networks.value
+            return ok
+
+        def save_changed() -> bool:
+            ok = sweep.value == saved["sweep"] or save_sweep()
+            if self.networks is not None and self.networks.value != saved["networks"]:
+                ok = save_networks() and ok
+            return ok
 
         def done(*args, **kwargs):
-            close, self.close_settings = self.close_settings, None
+            if not save_changed():  # stays open, saying what's wrong
+                return
+            close, self.close_settings, self.networks = self.close_settings, None, None
             if close:
                 close()
+
+        def closed():  # from the title bar (phones: Back): what can be saved is
+            self.close_settings = None
+            if not save_changed():
+                self.status.text = "Settings: a list with a mistake wasn't saved."
+            self.networks = None
 
         def changed(widget, key, **kwargs):
             self.settings[key] = widget.value
@@ -1622,13 +1819,34 @@ class OpenDiscoApp(toga.App):
                 changed(widget, "deep_checks")
 
             switches.insert(0, toga.Switch(self.deep.text, value=self.deep.value, on_change=deep))
-        content = toga.Box(style=Pack(direction=COLUMN, margin=14, gap=10), children=[
+        heading = Pack(font_weight="bold", margin_top=6)
+        lists = [toga.Label("Also sweep these subnets", style=heading),
+                 toga.Label(self._wrap("Routed or VPN subnets that every scan also probes with UBNT discovery, so "
+                                       "gear there turns up from here: a subnet or an address a line, # starts a "
+                                       f"comment. Up to {records.SWEEP_LIMIT:,} addresses in all, about "
+                                       f"{records.sweep_seconds(records.SWEEP_LIMIT):.0f} s more per scan.")),
+                 sweep,
+                 toga.Box(style=Pack(direction=ROW, align_items="center", gap=8), children=[
+                     sweep_said, toga.Button("Save", on_press=save_sweep)])]
+        if self.caps["aliases"]:  # desktops: Probe listed networks
+            self.networks = toga.MultilineTextInput(value=self.networks_path.read_text(encoding="utf-8"),
+                                                    style=Pack(flex=2, font_family="monospace", font_size=11))
+            saved["networks"] = self.networks.value
+            lists += [toga.Label("Networks probed through temporary addresses", style=heading),
+                      toga.Label(self._wrap("With Probe listed networks on, a scan gives this computer an address "
+                                            f"in each for a moment. Kept in {self.networks_path}")),
+                      self.networks,
+                      toga.Box(style=Pack(direction=ROW, align_items="center", gap=8), children=[
+                          networks_said, toga.Button("Restore defaults", on_press=self.on_reset_networks),
+                          toga.Button("Save", on_press=save_networks)])]
+        content = toga.Box(style=Pack(direction=COLUMN, flex=1, margin=14, gap=8), children=[
             *switches,
             toga.Label(textwrap.fill(vulns.NVD_NOTICE, 60), style=Pack(font_size=10)),
+            *lists,
             toga.Box(style=Pack(direction=ROW), children=[toga.Box(style=Pack(flex=1)),
                                                           toga.Button("Done", on_press=done)])])
-        self.close_settings = self._show_panel("Settings", content, (460, 200),
-                                               on_close=lambda: setattr(self, "close_settings", None))
+        size = (760, 740) if self.caps["aliases"] else (560, 480)
+        self.close_settings = self._show_panel("Settings", content, size, on_close=closed, resizable=True)
 
     def _launch_checks(self):
         if self.caps["updates"]:
