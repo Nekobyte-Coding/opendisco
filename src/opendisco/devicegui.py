@@ -798,7 +798,7 @@ class ConfigEditor:
             await self.window.dialog(toga.ErrorDialog("Not a config", heading + "\n".join(problems[:10])))
             return
         changed = devicetools.lines_changed(self.saved, text)
-        boot = "boot config" if self.kind == "edgeos" else "flash"
+        boot = "its boot config" if self.kind == "edgeos" else "flash"
         what = ("Apply the config on" if apply else f"Save the config to {boot} on") + f" {_label(self.d)}?"
         detail = (f"{changed} line(s) changed. " if changed else "Nothing changed in the editor. ") + (
             f"It's applied now and saved to {boot}; the device restarts what the changes affect." if apply
@@ -1199,7 +1199,7 @@ async def _diff_window(app, d, kind, current, text, source, tools):
     """What uploading the config changes on the device; "save", "apply" or None (cancelled)."""
     answer = app.loop.create_future()
     diff, changed = devicetools.config_diff(current, text)
-    boot = "boot config" if kind == "edgeos" else "flash"
+    boot = "its boot config" if kind == "edgeos" else "flash"
     heading = (f"{source} → {_label(d)}: {changed} line(s) change." if changed
                else f"{source} → {_label(d)}: no differences, the device has this config already.")
     note = (f"Save writes it to {boot}: it takes effect at the next reboot. Apply now also applies it: the device "
