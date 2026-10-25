@@ -4219,14 +4219,43 @@ def sorted_devices(inv: Inventory) -> list:
     return sorted(inv.devices.values(), key=_ip_sort_key)
 
 
+# What the Status column says for each finding, in a word or two; Diagnostics say the rest.
+STATUS_LABELS = {
+    "IP-CONFLICT": "IP conflict", "LINK-LOCAL": "No IP address", "DEFAULT": "Factory default",
+    "LOCATING": "Locating (LED)", "NOT-SET-UP": "Not set up", "NOT-PROBED": "Not probed",
+    "OTHER-SUBNET": "Other subnet", "WIFI-AP": "This Wi-Fi's AP", "ALIAS": "Via temporary address",
+    "ALIAS-CONFLICT": "Address clash", "DAMAGED": "Damaged packets", "FALLBACK-IP": "Fallback IP",
+    "LOSS": "Missed replies", "NO-DISCOVERY": "No discovery reply", "NO-LEASE": "No DHCP lease",
+    "NO-PORTS": "No ports open", "OFF-SUBNET": "Wrong subnet", "REBOOTED": "Rebooted recently",
+    "WAN-DOWN": "WAN down", "HTTPS-PORT": "HTTPS port problem", "SSH-PORT": "SSH port problem",
+    "CVE": "CVE risk",
+}
+LEVEL_ORDER = ("ok", "note", "warn", "error")
+NVD_URL = "https://nvd.nist.gov/vuln/detail/{}"
+
+
+def status_label(tag: str) -> str:
+    return STATUS_LABELS.get(tag, tag.replace("-", " ").capitalize())
+
+
 def status_cell(d: Device) -> tuple:
-    """Plain text and coloured text for the STATUS column."""
-    parts = [(tag, level) for level, tag, _ in d.issues]
-    if d.console:
-        parts.insert(0, ("console", "note"))
-    if not parts:
-        parts = [("ok", "ok")]
-    return " ".join(t for t, _ in parts), " ".join(Style.level(t, lv) for t, lv in parts)
+    """Plain and coloured text for the Status column: the finding in a word or two, or "Multiple
+    issues" when there's more than one (Details and the issue list name them all)."""
+    if not d.issues:
+        text, level = ("Console", "note") if d.console else ("OK", "ok")
+    elif len(d.issues) == 1:
+        level, tag, _ = d.issues[0]
+        text = status_label(tag)
+    else:
+        text = f"Multiple issues ({len(d.issues)})"
+        level = max((lv for lv, _, _ in d.issues), key=LEVEL_ORDER.index)
+    return text, Style.level(text, level)
+
+
+def issue_links(d: Device) -> list:
+    """[(name, URL)] for the public write-ups its findings point to: each CVE's NVD page."""
+    ids = dict.fromkeys(m for _, _, msg in d.issues for m in re.findall(r"\bCVE-\d{4}-\d{4,}\b", msg))
+    return [(cve, NVD_URL.format(cve)) for cve in ids]
 
 
 def render_table(devs) -> str:
@@ -4589,7 +4618,8 @@ def parse_args(argv=None):
     g.add_argument("--deep", action="store_true", help="--ports plus the UniFi OS console API")
     g.add_argument("--all-ports", action="store_true",
                    help="check every TCP port on the TARGET addresses given and name what answers on each "
-                        "(SSH, HTTPS, HTTP...), the way a port scanner would; about 20-60s a device")
+                        "(SSH, HTTPS, HTTP...), the way a port scanner would; about 20-60s a device. Intrusion "
+                        "prevention may report it as a port scan")
     g.add_argument("--https-port", action="append", default=[], metavar="PORTS",
                    help="the standard web UI port(s), e.g. 8443: gear reporting another is flagged, and "
                         "--ports/--deep check them")
@@ -4876,9 +4906,12 @@ def export_html(res: ScanResult) -> str:
     rows = []
     for d in res.devices:
         cells = "".join(f"<td>{escape(str(v))}</td>" for v in device_row(d)[:-1])
-        tags = " ".join(f'<span style="color:{colors.get(lv, "#2e7d32")}">{escape(tag)}</span>'
-                        for lv, tag, _ in d.issues) or '<span style="color:#2e7d32">ok</span>'
-        issues = "".join(f"<li><b>{escape(tag)}</b> {escape(msg)}</li>" for _, tag, msg in d.issues)
+        tags = ", ".join(f'<span style="color:{colors.get(lv, "#2e7d32")}">{escape(status_label(tag))}</span>'
+                         for lv, tag, _ in d.issues) or '<span style="color:#2e7d32">OK</span>'
+        links = dict(issue_links(d))
+        issues = "".join(f"<li><b>{escape(status_label(tag))}</b> "
+                         + re.sub(r"\bCVE-\d{4}-\d{4,}\b", lambda m: f'<a href="{links[m.group(0)]}">{m.group(0)}</a>',
+                                  escape(msg)) + "</li>" for _, tag, msg in d.issues)
         rows.append(f"<tr>{cells}<td>{tags}</td></tr>"
                     + (f'<tr class="issues"><td colspan="{len(EXPORT_COLUMNS)}"><ul>{issues}</ul></td></tr>'
                        if issues else ""))
@@ -5272,6 +5305,9 @@ def main(argv=None) -> int:
     if not isinstance(res, ScanResult):
         return res
     if opts.all_ports:
+        log("Note: to intrusion prevention (UniFi's IPS / Threat Management, a firewall's port-scan detection) "
+            "this looks like a port scan from this computer: it may raise an alert, a false alarm here, or block "
+            "this computer for a while.")
         for ip in expand_targets(opts.targets, lambda m: sys.exit(f"error: {m}"))[0]:
             d = res.inv.find(ip=ip) or res.inv.lookup(ip=ip)  # checked even if it didn't answer discovery
             find_ports(res, d, "all", log, port_progress)
