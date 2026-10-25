@@ -118,7 +118,7 @@ def cli_gate(folder, accept: bool) -> bool:
     if agreed(folder):
         return True
     if not accept:
-        if not sys.stdin.isatty():
+        if not (sys.stdin.isatty() and sys.stderr.isatty()):  # (the Mac app's output goes to the system log)
             print(CLI_UNATTENDED, file=sys.stderr)
             return False
         print(f"{CLI_INTRO}\n\n{summary()}\n\n"
