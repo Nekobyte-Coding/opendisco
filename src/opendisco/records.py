@@ -36,14 +36,25 @@ SWEEP_KEY = "sweep_subnets"  # settings.json: the list's lines, comments and all
 SWEEP_LIMIT = 8192
 SWEEP_RATE = 500  # core.parse_args' --rate default
 
-# Export's choices after the scan report: (kind, button, what it saves, file types, the first the default)
+# Export's choices: (kind, button, what it saves, file types, the first the default and on phones
+# the only one). The scan report comes first, then the site-wide extras.
+SCAN_EXPORT = ("scan", "Scan report…", "Every device as the table lists it, with diagnostics", ["html", "csv", "json"])
 SITE_EXPORTS = [
-    ("security", "Security report…", "Known CVEs and outdated firmware, device by device: HTML or CSV",
-     ["html", "csv"]),
-    ("backups", "Config backups…", "Every saved config backup, in a .zip with an index", ["zip"]),
-    ("notes", "Notes…", "Every device's note, seen in this scan or not: HTML, CSV or JSON", ["html", "csv", "json"]),
-    ("log", "Log…", "The Log, as a text file", ["txt"]),
+    ("security", "Security report…", "Known CVEs and outdated firmware, device by device", ["html", "csv"]),
+    ("backups", "Config backups…", "Every saved config backup, with an index", ["zip"]),
+    ("notes", "Notes…", "Every device's note, seen in this scan or not", ["html", "csv", "json"]),
+    ("log", "Log…", "The Log", ["txt"]),
 ]
+FORMAT_NAMES = {"html": "HTML", "csv": "CSV", "json": "JSON", "zip": "a .zip", "txt": "a text file"}
+
+
+def choice_text(text: str, types, extra: str = "") -> str:
+    """An export choice's line: what it saves, how many (extra), and the formats it's saved in
+    ("Known CVEs ...: HTML or CSV.")."""
+    names = [FORMAT_NAMES.get(t, t.upper()) for t in types]
+    formats = names[0] if len(names) == 1 else f"{', '.join(names[:-1])} or {names[-1]}"
+    return f"{text}{f' ({extra})' if extra else ''}: {formats}."
+
 
 
 # -- search ----------------------------------------------------------------------------

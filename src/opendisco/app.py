@@ -1008,8 +1008,11 @@ class OpenDiscoApp(toga.App):
         if not self.caps["mobile"]:
             buttons.insert(1 if d.note else 0, toga.Box(style=Pack(flex=1)))
         content = toga.Box(style=Pack(direction=COLUMN, flex=1, margin=14, gap=8), children=[
-            toga.Label(self._wrap(f"Kept with {d.mac} in this computer's OpenDisco data, through rescans, restarts "
-                                  "and updates; Details, the search and the exports include it.")),
+            toga.Label(self._wrap(f"Kept with {d.mac} in "
+                                  + ("OpenDisco's data on this phone" if self.caps["mobile"]
+                                     else "this computer's OpenDisco data")
+                                  + ", through rescans, restarts and updates; Details, the search and the exports "
+                                    "include it.")),
             text, toga.Box(style=Pack(direction=ROW, gap=8), children=buttons)])
         close = self._show_panel(f"Note: {who}", content, (560, 300), resizable=True)
         text.focus()
@@ -1476,11 +1479,11 @@ class OpenDiscoApp(toga.App):
         state = {"backups": (bool(backups), f"{sum(len(p) for _, p in backups)} file(s) from {len(backups)} device(s)"
                              if backups else "none saved yet"),
                  "notes": (bool(notes), f"{notes} note(s)" if notes else "none written yet")}
-        choices = [("scan", "Scan report…", "Every device as the table lists it, with diagnostics: HTML (opens on any "
-                                            "phone), CSV or JSON.", True)]
-        for kind, button, text, _types in records.SITE_EXPORTS:
+        choices = []
+        for kind, button, text, types in [records.SCAN_EXPORT, *records.SITE_EXPORTS]:
             enabled, extra = state.get(kind, (True, ""))
-            choices.append((kind, button, f"{text} ({extra})." if extra else f"{text}.", enabled))
+            saved = types[:1] if self.caps["mobile"] else types  # phones save the first type only
+            choices.append((kind, button, records.choice_text(text, saved, extra), enabled))
 
         def pick(kind):
             close()
@@ -1509,7 +1512,7 @@ class OpenDiscoApp(toga.App):
                     self.status.text = f"Couldn't save the export: {getattr(e, 'strerror', None) or e}"
                 return
             await self._save_export(f"opendisco-scan-{stamp}.html",
-                                    "Export results (.html opens on any phone; .csv, .json)", ["html", "csv", "json"],
+                                    "Export results (.html opens on any phone; .csv, .json)", records.SCAN_EXPORT[3],
                                     lambda path: core.write_export(res, path))
             return
         _kind, button, _text, types = next(e for e in records.SITE_EXPORTS if e[0] == kind)
