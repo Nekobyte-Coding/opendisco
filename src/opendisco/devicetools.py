@@ -520,6 +520,15 @@ def config_problems(text: str) -> list:
             if line.strip() and not re.match(r"[A-Za-z0-9_.-]+=", line)]
 
 
+def lines_changed(old: str, new: str) -> int:
+    """How many lines differ between two configs: an edited line counts once (not as one line
+    taken out and one put in), as do one added and one removed."""
+    import difflib
+    a, b = old.replace("\r", "").splitlines(), new.replace("\r", "").splitlines()
+    return sum(max(i2 - i1, j2 - j1) for tag, i1, i2, j1, j2 in difflib.SequenceMatcher(None, a, b, autojunk=False)
+               .get_opcodes() if tag != "equal")
+
+
 def write_config(login: sshrun.Login, text: str, apply: bool, report=None, stop=None,
                  new_login: sshrun.Login | None = None, confirm_within: float = 240) -> str:
     """Write the config and save it to flash; with apply, apply it in place too (rc.softrestart

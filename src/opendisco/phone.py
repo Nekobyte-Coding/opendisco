@@ -6,8 +6,9 @@ Stop, with Export, the scan's Notes and Log and Settings in the title bar. Tappi
 its own page, titled with its name and address, with its tabs along the bottom: Details,
 Packets, Tools, Notes and Log. Tools pings the device (core.ping: the app's own ICMP), opens an
 SSH session to it (phonessh: the app's own SSH), finds its ports, opens its web UI, rescans it,
-reads what it sees of its neighbours (Scan from device, as on the desktop: devicetools) and
-copies its addresses, with what they find, and the SSH session, in a console underneath.
+reads what it sees of its neighbours (Scan from device, as on the desktop: devicetools), checks
+and updates its firmware, edits its config, changes its login (phonetools) and copies its
+addresses, with what they find, and the SSH session, in a console underneath.
 
 This module is what both phones share. What each does natively is in phone_<platform>.py
 (phone_ios.py: UIKit through rubicon-objc; phone_android.py), which provides:
@@ -27,9 +28,11 @@ This module is what both phones share. What each does natively is in phone_<plat
     and, where the platform has its own (hook() falls back to plain ones otherwise):
     Picker(app, items)          a drop-down choice, styled: .widget to lay out, .value the item chosen
     watch_keyboard(app, widget) keep a text view's last lines above the on-screen keyboard
-    plain_entry(widget, send=False)   a text field without auto-capitals or corrections (logins,
-                                commands); send: its return key reads "send"
+    plain_entry(widget, send=False, new_password=False)   a text field without auto-capitals or
+                                corrections (logins, commands); send: its return key reads "send";
+                                new_password: no password manager taking it over
     end_editing(app)            finish typing, so a field's value has its last character
+    done_bar(app, widget)       a way to put the keyboard away from a many-line text view
 app.py makes the widgets every platform shares and calls in here; it all runs on the UI thread.
 """
 import importlib
@@ -76,7 +79,7 @@ def _nothing(*args, **kwargs):
 
 
 FALLBACKS = {"Picker": _SelectionPicker, "watch_keyboard": _nothing, "plain_entry": _nothing,
-             "end_editing": _nothing}
+             "end_editing": _nothing, "done_bar": _nothing}
 
 
 def hook(app, name: str):
@@ -137,7 +140,7 @@ def fit(app):
     ui.fit(app, export=lambda: app.loop.create_task(app.on_export(None)), notes=lambda: show_scan(app),
            settings=app.preferences)
     for button in (app.ping_button, app.ssh_button, app.web_button, app.rescan_button, app.scan_from_button,
-                   app.find_button):
+                   app.firmware_button, app.config_button, app.login_button, app.find_button):
         ui.style_button(button, "tinted")
     for button in (app.copy_ip_button, app.copy_mac_button, *app.ssh_row.children[1:]):
         ui.style_button(button, "gray")
@@ -211,6 +214,16 @@ def tools(app) -> toga.Box:
     app.web_button = toga.Button("Web UI", on_press=action("web"), style=grow)
     app.rescan_button = toga.Button("Rescan", on_press=action("rescan"), style=grow)
     app.scan_from_button = toga.Button("Scan from device", on_press=later(scan_from), style=grow)
+
+    def tool(name):  # phonetools' (devicetools'), loaded when first used
+        async def run(app):
+            from opendisco import phonetools
+            await getattr(phonetools, name)(app)
+        return later(run)
+
+    app.firmware_button = toga.Button("Firmware", on_press=tool("firmware"), style=grow)
+    app.config_button = toga.Button("Config", on_press=tool("config"), style=grow)
+    app.login_button = toga.Button("Login", on_press=tool("change_login"), style=grow)
     app.port_picker = hook(app, "Picker")(app, list(FIND_KINDS))
     app.find_button = toga.Button("Find", on_press=lambda w, **kw: find_port(app), style=grow)
     app.copy_ip_button = toga.Button("Copy IP", on_press=action("copy_ip"), style=grow)
@@ -228,11 +241,13 @@ def tools(app) -> toga.Box:
     app.pinging = None  # (device key, Event that stops it) while a ping runs
     app.ssh = None  # (device key, phonessh.Shell) while an SSH session is open
     app.find_from = None  # app.py's; the phone has one Find button
+    app.device_job = None  # phonetools: {"key", "name", "stop"} while a firmware update or a new login runs
     app.phone_passwords = {}  # device key -> its SSH password, for this run only: phones keep none
     row = Pack(direction=ROW, gap=8)
     app.tools_box = toga.Box(style=Pack(direction=COLUMN, margin=12, gap=8), children=[
         toga.Box(style=row, children=[app.ping_button, app.ssh_button, app.web_button]),
         toga.Box(style=row, children=[app.rescan_button, app.scan_from_button]),
+        toga.Box(style=row, children=[app.firmware_button, app.config_button, app.login_button]),
         toga.Box(style=Pack(direction=ROW, align_items="center", gap=8), children=[
             toga.Label("Find port", style=Pack(font_weight="bold", margin_left=2)), app.port_picker.widget,
             app.find_button]),
@@ -301,7 +316,7 @@ def update_tools(app):
     retitle = native(app).retitle
     d = app._selected_device()
     state = app._menu_state(d)
-    idle = bool(d and d.ip and app.result) and not (app.running or app.rescanning or app.finding)
+    idle = bool(d and d.ip and app.result) and not (app.running or app.rescanning or app.finding or app.device_job)
     retitle(app.find_button, "Stop" if app.finding else "Find")
     app.find_button.enabled = idle or app.finding
     app.ping_button.enabled = bool(d and d.ip) or app.pinging is not None
@@ -311,6 +326,14 @@ def update_tools(app):
     for button, name in ((app.web_button, "web"), (app.rescan_button, "rescan"), (app.copy_ip_button, "copy_ip"),
                          (app.copy_mac_button, "copy_mac")):
         button.enabled = state[name][1]
+    if app.device_job:
+        app.rescan_button.enabled = False
+    if phonessh.available():
+        from opendisco import phonetools
+        phonetools.update_buttons(app, d)
+    else:
+        for button in (app.firmware_button, app.config_button, app.login_button):
+            button.enabled = False
 
 
 # -- logging in (SSH) -------------------------------------------------------------------
