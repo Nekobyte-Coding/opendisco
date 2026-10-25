@@ -103,6 +103,10 @@ def main() -> int:
         sys.exit(f"error: no release key at {KEYSTORE}: restore it from its backup (or, for a first release "
                  "only, make one with --create-key)")
     version = re.search(r'__version__ = "([^"]+)"', (ROOT / "src" / "opendisco" / "__init__.py").read_text())[1]
+    python = re.search(r'chaquopy\s*\{[^}]*version\s*=\s*"(3\.\d+)"', (ROOT / "pyproject.toml").read_text())
+    if python and not shutil.which(f"python{python[1]}"):  # Chaquopy's pip runs on the same version
+        sys.exit(f"error: the Android app is built with Python {python[1]}, and Chaquopy needs python{python[1]} "
+                 f"on this computer to install its packages: brew install python@{python[1]}")
     work = args.work.resolve()
     work.mkdir(parents=True, exist_ok=True)
     for name in NEEDED:

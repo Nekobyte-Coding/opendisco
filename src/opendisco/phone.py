@@ -47,6 +47,7 @@ from opendisco import core, phonessh
 DEVICE_TABS = ("Details", "Packets", "Tools")  # hidden while the page shows the scan's Notes and Log
 FIND_KINDS = {"HTTP": "find_http", "HTTPS": "find_https", "SSH": "find_ssh", "All ports": "all_ports"}
 CONSOLE_KEEP = 200_000  # characters of console output kept
+SHELL_COLUMNS = 64  # what the console shows in a line on an iPhone
 
 
 def supported(platform: str) -> bool:
@@ -223,7 +224,7 @@ def tools(app) -> toga.Box:
                                    style=Pack(flex=1))
     app.ssh_row = toga.Box(style=Pack(direction=ROW, align_items="center", gap=8), children=[
         app.ssh_input,
-        toga.Button("Ctrl-C", on_press=lambda w, **kw: app.ssh and app.ssh[1].interrupt())])
+        toga.Button("Ctrl-C", on_press=lambda w, **kw: app.ssh and app.ssh[1].send("\x03"))])
     app.pinging = None  # (device key, Event that stops it) while a ping runs
     app.ssh = None  # (device key, phonessh.Shell) while an SSH session is open
     app.find_from = None  # app.py's; the phone has one Find button
@@ -439,16 +440,9 @@ async def toggle_ssh(app):
         return
     key = d.key
     app._tool_said(f"SSH to {login.where} as {login.user}…", begins=True)
-
-    def shell():
-        return phonessh.Shell(login, lambda text: app._from_worker(_append, app, text),
-                              lambda reason: app._from_worker(_ssh_ended, app, key, reason))
-
-    try:
-        session = await _work(app, shell)
-    except phonessh.SSHError as e:
-        app._tool_said(f"SSH to {d.ip}: {e}")
-        return
+    # It starts in the background; a failure arrives as the reason it closed.
+    session = phonessh.Shell(login, lambda text: app._from_worker(_append, app, phonessh.plain(text)),
+                             lambda reason: app._from_worker(_ssh_ended, app, key, reason), cols=SHELL_COLUMNS)
     app.ssh = (key, session)
     app.tools_box.insert(len(app.tools_box.children) - 1, app.ssh_row)
     app.status.text = f"SSH session with {d.ip} as {login.user}: commands go in the line below."
@@ -458,7 +452,7 @@ async def toggle_ssh(app):
 
 def send_ssh(app):
     if app.ssh is not None:
-        app.ssh[1].send(app.ssh_input.value + "\n")
+        app.ssh[1].send(app.ssh_input.value + "\r")
         app.ssh_input.value = ""
 
 

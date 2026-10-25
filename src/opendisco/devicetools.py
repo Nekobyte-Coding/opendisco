@@ -33,7 +33,7 @@ from pathlib import Path
 
 from opendisco import core
 
-if core.platform_name() in ("ios", "android"):  # no ssh program there: the app's own SSH, same calls
+if core.platform_name() in ("ios", "android"):  # no ssh program there: asyncssh, with the same calls
     from opendisco import phonessh as sshrun
 else:
     from opendisco import sshrun
@@ -171,8 +171,12 @@ _CONTEXT = None
 
 
 def https_context() -> ssl.SSLContext:
-    """Certificates checked as usual. A Python without its own CA list on macOS gets the system's."""
+    """Certificates checked as usual. A Python without its own CA list on macOS gets the system's;
+    phones get tls.context()'s (Android's own roots, certifi's on iOS)."""
     global _CONTEXT
+    if _CONTEXT is None and core.platform_name() in ("ios", "android"):
+        from opendisco import tls
+        _CONTEXT = tls.context()
     if _CONTEXT is None:
         ctx = ssl.create_default_context()
         if not ctx.cert_store_stats().get("x509_ca") and sys.platform == "darwin":
