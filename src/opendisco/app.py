@@ -1189,7 +1189,7 @@ class OpenDiscoApp(toga.App):
         until "Don't warn again" is ticked)."""
         text = PORT_SEARCH_WARNING.format(ip=d.ip)
         if self.caps["mobile"]:  # phones have no extra windows: a plain question
-            text = text.replace("this computer", "this phone")
+            text = text.replace("this computer", phone.hook(self, "here")(self) if self.phone_ui else "this phone")
             ok = await self.main_window.dialog(toga.QuestionDialog("Port search", text + " Go ahead?"))
             self.port_warning_accepted = bool(ok)
             return bool(ok)
@@ -1672,8 +1672,8 @@ class OpenDiscoApp(toga.App):
         """A small window over the main one; on phones, which have one window, a page shown in
         place of the main window's content (iOS: pushed over it, with a back button). Returns what
         closes it. on_close runs when it's closed from its title bar."""
-        if self.phone_ui:
-            return phone.push_panel(self, title, content, on_close)
+        if self.phone_ui:  # with the phone's looks
+            return phone.push_panel(self, title, content, on_close, fit=True)
         if self.caps["mobile"]:
             page = toga.Box(style=Pack(direction=COLUMN, margin=12, gap=10), children=[
                 toga.Label(title, style=Pack(font_weight="bold", font_size=18)), content])
