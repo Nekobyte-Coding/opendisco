@@ -277,9 +277,10 @@ class Picker:
         style_button(self.widget, "gray")
 
 
-def watch_keyboard(app, widget):
-    """Keep a text view's last lines above the on-screen keyboard while it's up (the SSH
-    session's console, as commands are typed under it)."""
+def watch_keyboard(app, widget, follow: bool = True):
+    """Keep a text view clear of the on-screen keyboard while it's up: the part it covers can be
+    scrolled into view. follow: show its last lines (the SSH session's console, as commands are
+    typed under it); otherwise the text being edited stays where it is (the config editor)."""
     try:
         from rubicon.objc import Block, ObjCInstance, objc_id
         from rubicon.objc.types import UIEdgeInsetsMake
@@ -294,20 +295,36 @@ def watch_keyboard(app, widget):
             covered = max(0.0, mine.origin.y + mine.size.height - keyboard.origin.y)
             view.contentInset = UIEdgeInsetsMake(0, 0, covered, 0)
             view.verticalScrollIndicatorInsets = UIEdgeInsetsMake(0, 0, covered, 0)
-            widget.scroll_to_bottom()
+            if follow:
+                widget.scroll_to_bottom()
+            elif view.isFirstResponder() and covered:  # the line being edited comes out from under it
+                view.scrollRangeToVisible(view.selectedRange)
 
-        app._keyboard_block = Block(moved, None, objc_id)  # kept alive, as the observer
-        app._keyboard_observer = center.addObserverForName("UIKeyboardWillChangeFrameNotification", object=None,
-                                                           queue=None, usingBlock=app._keyboard_block)
+        if not hasattr(app, "_keyboard_watchers"):
+            app._keyboard_watchers = []  # (block, observer) for each view, kept alive
+        block = Block(moved, None, objc_id)
+        app._keyboard_watchers.append((block, center.addObserverForName(
+            "UIKeyboardWillChangeFrameNotification", object=None, queue=None, usingBlock=block)))
     except Exception:
         pass  # the console still scrolls by hand
 
 
-def plain_entry(widget, send: bool = False):
+def plain_entry(widget, send: bool = False, new_password: bool = False):
     """A text field for usernames, passwords, ports and shell commands: no capital first letter,
-    no corrections, no smart quotes; send: its return key reads "send". (Set through the setters:
-    rubicon doesn't find UITextInputTraits' properties on a UITextField.)"""
+    no corrections, no smart quotes; send: its return key reads "send". new_password: a new
+    password for a device, which iOS mustn't take over with a "strong password" of its own (that
+    blanks the field and swallows typing): marked as a one-time code instead. (Set through the
+    setters: rubicon doesn't find UITextInputTraits' properties on a UITextField.)"""
     native = widget._impl.native
+    if new_password:
+        try:
+            from rubicon.objc import send_message, objc_id
+            from rubicon.objc.api import ns_from_py
+            send_message(native, "setTextContentType:", ns_from_py("one-time-code"), restype=None,
+                         argtypes=[objc_id])
+            native.passwordRules = None
+        except Exception:
+            pass
     for setter, value in (("setAutocapitalizationType:", 0), ("setAutocorrectionType:", 1),
                           ("setSpellCheckingType:", 1), ("setSmartQuotesType:", 1), ("setSmartDashesType:", 1),
                           ("setSmartInsertDeleteType:", 1), *((("setReturnKeyType:", 7),) if send else ())):
@@ -323,5 +340,28 @@ def end_editing(app):
     pending in a password field) is in its value."""
     try:
         app.main_window._impl.native.endEditing(True)
+    except Exception:
+        pass
+
+
+def done_bar(app, widget):
+    """A Done button above the keyboard for a text view that takes many lines (the config
+    editor), where Return is a new line: Done puts the keyboard away. Dragging the text down
+    does too."""
+    try:
+        from rubicon.objc import Block, objc_id
+        if not hasattr(app, "_done_blocks"):
+            app._done_blocks = []  # kept alive
+        block = Block(lambda action: end_editing(app), None, objc_id)
+        app._done_blocks.append(block)
+        UIBarButtonItem = _objc("UIBarButtonItem")
+        done = _objc("UIAction").actionWithTitle("Done", image=None, identifier=None, handler=block)
+        bar = _objc("UIToolbar").alloc().init()
+        bar.items = _objc("NSArray").arrayWithArray([UIBarButtonItem.flexibleSpaceItem(),
+                                                     UIBarButtonItem.alloc().initWithPrimaryAction(done)])
+        bar.sizeToFit()
+        native = widget._impl.native
+        native.inputAccessoryView = bar
+        native.keyboardDismissMode = 2  # UIScrollViewKeyboardDismissModeInteractive
     except Exception:
         pass

@@ -5,7 +5,6 @@ system's credential store. The work itself is opendisco.devicetools, run in work
 app.py only lists the actions in DEVICE_ACTIONS and calls menu_state() and act().
 """
 import asyncio
-import difflib
 import socket
 import threading
 import time
@@ -751,9 +750,7 @@ class ConfigEditor:
             await self.window.dialog(toga.ErrorDialog(
                 "Not a config", "airOS reads only key=value lines. These aren't:\n" + "\n".join(problems[:10])))
             return
-        changed = sum(1 for line in difflib.unified_diff(self.saved.replace("\r", "").splitlines(),
-                                                         text.replace("\r", "").splitlines(), lineterm="", n=0)
-                      if line[:1] in "+-" and line[:3] not in ("+++", "---"))
+        changed = devicetools.lines_changed(self.saved, text)
         what = ("Apply the config on" if apply else "Save the config to flash on") + f" {_label(self.d)}?"
         detail = (f"{changed} line(s) changed. " if changed else "Nothing changed in the editor. ") + (
             "It's saved to flash and applied now; the device restarts what the changes affect." if apply
@@ -805,8 +802,9 @@ async def login_flow(app, d):
         if not answer:
             return
         new_text, new_user, new_password, scheme = answer
-        message = (f"Change the login of {_label(d)} from {login.user} to {new_user} with the new password? "
-                   f"It's applied right away and saved to flash; the old login stops working.\n\n"
+        what = (f"the password of {login.user} on {_label(d)}" if new_user == login.user
+                else f"the login of {_label(d)} from {login.user} to {new_user} with the new password")
+        message = (f"Change {what}? It's applied right away and saved to flash; the old login stops working.\n\n"
                    f"The password is stored on the device as an {scheme} hash, the format it uses now.")
         if pending:
             message += ("\n\nIts config also has changes that aren't applied yet (made in its web UI, or saved "
