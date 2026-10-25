@@ -216,8 +216,7 @@ def _no_underline(native):
     if not isinstance(native.getBackground(), jclass("android.graphics.drawable.ColorDrawable")):
         native.setBackground(None)
         native.setPadding(_dp(4), _dp(4), _dp(4), _dp(4))
-    else:
-        native.setHintTextColor(_int(SECONDARY))  # readable on the console's dark grey
+    native.setHintTextColor(_int(SECONDARY))  # readable on white and on the console's dark grey
 
 
 def retitle(button, text: str):
@@ -286,7 +285,7 @@ def fit(app, export, notes, settings):
     app.main_window.toolbar.add(export_command, command("Notes and Log", notes, 2), command("Settings", settings, 3))
     app.export_button = CommandButton(export_command)
     for fitting in (_take_up_and_menu, _fit_system_bars, _fit_tabs, _fit_list, lambda app: _plain_widgets(),
-                    _sized_already):
+                    _sized_already, _keep_above_keyboard):
         try:
             fitting(app)
         except Exception:
@@ -381,9 +380,11 @@ def _fit_tabs(app):
         params.width = _dp(16 + 76 * max(1, shown))
         view.setLayoutParams(params)
 
-    def resize_tab_content():  # Toga leaves out the bar's margins
+    def resize_tab_content():  # Toga leaves out the bar's margins (and counts it when it's hidden)
         params, bar = impl.native.getLayoutParams(), view.getLayoutParams()
-        impl.resize_content(params.width, params.height - view.getHeight() - bar.topMargin - bar.bottomMargin)
+        shown = view.getVisibility() == jclass("android.view.View").VISIBLE
+        taken = view.getHeight() + bar.topMargin + bar.bottomMargin if shown else 0
+        impl.resize_content(params.width, params.height - taken)
 
     impl.set_option_enabled = set_enabled
     impl.resize_tab_content = resize_tab_content
@@ -486,6 +487,94 @@ def monospaced(text, size: float):
         _no_underline(text._impl.native)
     except Exception:
         traceback.print_exc()
+
+
+# -- typing ------------------------------------------------------------------------------
+def plain_entry(widget, send=False):
+    """A field for logins and commands: no capitals, corrections or suggestions (a password field
+    stays hidden); send: the keyboard's action key reads Send and confirms the field."""
+    try:
+        from java import dynamic_proxy, jclass
+        InputType, EditorInfo = jclass("android.text.InputType"), jclass("android.view.inputmethod.EditorInfo")
+        native = widget._impl.native
+        hidden = native.getInputType() & InputType.TYPE_MASK_VARIATION == InputType.TYPE_TEXT_VARIATION_PASSWORD
+        variation = InputType.TYPE_TEXT_VARIATION_PASSWORD if hidden else InputType.TYPE_TEXT_VARIATION_VISIBLE_PASSWORD
+        native.setInputType(InputType.TYPE_CLASS_TEXT | variation | InputType.TYPE_TEXT_FLAG_NO_SUGGESTIONS)
+        native.setTypeface(jclass("android.graphics.Typeface").DEFAULT)  # (the variation would make it monospace)
+        if send:
+            native.setImeOptions(EditorInfo.IME_ACTION_SEND)
+            impl = widget._impl
+
+            class Sent(dynamic_proxy(jclass("android.widget.TextView$OnEditorActionListener"))):
+                def onEditorAction(self, view, action, event):
+                    if action == EditorInfo.IME_ACTION_SEND:
+                        impl._on_confirm()
+                        return True
+                    return False
+
+            widget._sent = Sent()  # kept alive with the widget
+            native.setOnEditorActionListener(widget._sent)
+    except Exception:
+        traceback.print_exc()
+
+
+def end_editing(app):
+    """Put the keyboard away."""
+    try:
+        from java import jclass
+        activity = _activity()
+        focused = activity.getCurrentFocus()
+        if focused is not None:
+            board = activity.getSystemService(jclass("android.content.Context").INPUT_METHOD_SERVICE)
+            board.hideSoftInputFromWindow(focused.getWindowToken(), 0)
+            focused.clearFocus()
+    except Exception:
+        traceback.print_exc()
+
+
+def watch_keyboard(app, widget):
+    """Keep the text view's last lines in sight above the keyboard: _keep_above_keyboard shrinks
+    the content to the space above it, and this scrolls the view to its end when it does."""
+    watched = app.__dict__.setdefault("_keyboard_watched", [])
+    watched.append(widget)
+
+
+def _keep_above_keyboard(app):
+    """The content ends where the keyboard begins, rather than behind it (Briefcase's activity
+    keeps it clear of the system bars only): Briefcase's insets listener, with the keyboard added.
+    The tab bar steps aside while the keyboard is up, leaving the room to what's typed and shown."""
+    from java import dynamic_proxy, jclass
+    Compat, Type = jclass("androidx.core.view.ViewCompat"), jclass("androidx.core.view.WindowInsetsCompat$Type")
+    View = jclass("android.view.View")
+    content = _activity().findViewById(jclass("android.R$id").content)
+    parent = content.getParent()
+    status = next((parent.getChildAt(i) for i in range(parent.getChildCount())
+                   if parent.getChildAt(i).getClass().getName() == "android.view.View"), None)
+
+    class Insets(dynamic_proxy(jclass("androidx.core.view.OnApplyWindowInsetsListener"))):
+        def onApplyWindowInsets(self, view, insets):
+            bars = insets.getInsets(Type.systemBars() | Type.displayCutout())
+            keyboard = insets.getInsets(Type.ime())
+            params = view.getLayoutParams()
+            bottom = max(bars.bottom, keyboard.bottom)
+            tabs = app.tabs._impl.native_navigationview
+            tabs.setVisibility(View.GONE if keyboard.bottom > bars.bottom else View.VISIBLE)
+            if (params.leftMargin, params.topMargin, params.rightMargin, params.bottomMargin) != (
+                    bars.left, bars.top, bars.right, bottom):
+                params.setMargins(bars.left, bars.top, bars.right, bottom)
+                view.setLayoutParams(params)
+                for widget in app.__dict__.get("_keyboard_watched", []):
+                    app.loop.call_later(0.2, widget.scroll_to_bottom)
+            if status is not None:
+                status_params = status.getLayoutParams()
+                status_params.height = bars.top
+                status_params.setMargins(bars.left, 0, bars.right, 0)
+                status.requestLayout()
+            return insets
+
+    app._insets_listener = Insets()  # kept alive
+    Compat.setOnApplyWindowInsetsListener(content, app._insets_listener)
+    Compat.requestApplyInsets(content)
 
 
 # -- the clipboard and exports -------------------------------------------------------

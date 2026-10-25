@@ -1242,7 +1242,11 @@ def local_macs() -> set:
         from opendisco import winnet
         macs = {norm_mac(a["mac"]) for a in winnet.adapters() if a["mac"]}
     elif os.path.isdir("/sys/class/net"):
-        for name in os.listdir("/sys/class/net"):
+        try:
+            names = os.listdir("/sys/class/net")
+        except OSError:  # Android keeps it from apps (and hides the phone's MACs from them anyway)
+            names = []
+        for name in names:
             try:
                 with open(f"/sys/class/net/{name}/address") as f:
                     macs.add(norm_mac(f.read().strip()))
