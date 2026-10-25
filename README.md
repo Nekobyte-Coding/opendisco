@@ -10,9 +10,9 @@ merges what they find by MAC address, and checks each device for common problems
 names and addresses. More pictures under [Screenshots](#screenshots).*
 
 OpenDisco is an independent project. It isn't made, endorsed or supported by Ubiquiti Inc.
-Ubiquiti, UniFi, airMAX, EdgeMAX, UISP, AmpliFi and WiFiman are trademarks of Ubiquiti Inc.,
-and other product names belong to their owners; they appear here only to say what the tool
-works with.
+Ubiquiti, UniFi, UniFi OS, airMAX, airFiber, LTU, GigaBeam, EdgeMAX, EdgeOS, EdgeRouter,
+EdgeSwitch, UISP, AmpliFi and WiFiman are trademarks of Ubiquiti Inc., and other product names
+belong to their owners; they appear here only to say what the tool works with.
 
 | Borrowed from | Method | What it finds |
 |---|---|---|
@@ -1145,6 +1145,7 @@ Linux one inside containers, so nothing big ends up in iCloud. Finished installe
 | `docs/images/` | Screenshots |
 | `opendisco.py` | The command-line launcher |
 | `LICENSE`, `NOTICE` | The Apache License 2.0, and the copyright and trademark notices |
+| `src/opendisco/resources/THIRD-PARTY-NOTICES.md` | The licenses of the components each build bundles, and where their source code is (the app's Open-source licenses…) |
 | `networks.txt` | The CLI's networks file: not in git, made from the default (`src/opendisco/resources/networks.txt`) on first run. The app keeps its own copy in its data folder |
 
 ## License

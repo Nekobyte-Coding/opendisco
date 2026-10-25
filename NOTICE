@@ -4,8 +4,9 @@ Copyright 2026 Michael Froehlke
 Licensed under the Apache License, Version 2.0 (see LICENSE).
 
 OpenDisco is an independent project. It isn't made, endorsed or supported by Ubiquiti Inc.
-Ubiquiti, UniFi, airMAX, EdgeMAX, UISP, AmpliFi and WiFiman are trademarks of Ubiquiti Inc.,
-and other product names belong to their owners; they're used only to say what the tool works with.
+Ubiquiti, UniFi, UniFi OS, airMAX, airFiber, LTU, GigaBeam, EdgeMAX, EdgeOS, EdgeRouter,
+EdgeSwitch, UISP, AmpliFi and WiFiman are trademarks of Ubiquiti Inc., and other product names
+belong to their owners; they're used only to say what the tool works with.
 
 The CVE check uses data from the National Vulnerability Database (NVD) at NIST. This product
 uses the NVD API but is not endorsed or certified by the NVD.
@@ -14,3 +15,13 @@ This product includes xterm.js, used under the MIT License; its copyright notice
 are in opendisco/resources/xterm/LICENSE.
 
 The Android app's icons are Material Symbols by Google, used under the Apache License 2.0.
+
+The Android and iPhone and iPad apps include asyncssh 2.23.1, Copyright (c) 2013-2024 by Ron
+Frederick and others, which OpenDisco distributes under the Eclipse Public License 2.0. Its source
+code is available under that license: asyncssh-2.23.1.tar.gz is attached to each OpenDisco release
+at https://github.com/Nekobyte-Coding/opendisco/releases, and is also at
+https://pypi.org/project/asyncssh/2.23.1/.
+
+OpenDisco's installers, packages and apps include other third-party components under their own
+licenses. opendisco/resources/THIRD-PARTY-NOTICES.md, shown in the app as Open-source licenses,
+lists them with their licenses and says where to get the source code those licenses require.
