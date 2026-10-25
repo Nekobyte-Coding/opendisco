@@ -49,6 +49,8 @@ DEVICE_ACTIONS = [("web", "Open Web UI"), ("ssh", "Open SSH…"), ("ping", "Ping
                   ("all_ports", "Scan all ports"), None,
                   ("fw_check", "Check for firmware update"), ("fw_update", "Update firmware…"),
                   ("config", "Edit config…"), ("login", "Change login…"), None,
+                  ("backup", "Back up config"), ("backups", "Config backups…"), ("upload", "Upload config…"), None,
+                  ("reboot", "Reboot…"), ("locate", "Locate (blink LED)"), None,
                   ("copy_ip", "Copy IP address"), ("copy_mac", "Copy MAC address"), None,
                   ("note", "Note…"), ("export_device", "Export device…"), None,
                   ("forget", "Forget SSH key"), ("forget_login", "Forget saved login"), ("hide", "Hide device")]
@@ -144,6 +146,8 @@ class OpenDiscoApp(toga.App):
         self.settings_path = Path(self.paths.data) / "settings.json"
         self.known_hosts = Path(self.paths.data) / "known_hosts"  # SSH host keys, filed by MAC
         vulns.CACHE_DIR = Path(self.paths.data)  # where a downloaded CVE list is kept (vulns.refresh)
+        from opendisco import devicetools  # its SSH parts load only when used
+        devicetools.BACKUP_ROOT = Path(self.paths.data) / devicetools.BACKUP_FOLDER  # config backups, by MAC
         self.settings = self._load_settings()
         self.hidden = self.settings.setdefault("hidden", {})  # device key (its MAC) -> what it was
         self.device_notes = records.Notes(self.paths.data)  # a note per device, by MAC (notes.json)
@@ -708,9 +712,13 @@ class OpenDiscoApp(toga.App):
     @staticmethod
     def _phone_row(d) -> dict:
         """A device as a phone lists it: address, model and name (Details has the rest). iOS
-        lists the model and name under the address."""
+        lists the model and name under the address, then the newer firmware that's out and its
+        latency, once known (what doesn't fit ends in …)."""
         model, name = d.model or "?", d.name or d.mac or ""
-        return {"ip": d.ip or "-", "model": model, "name": name, "summary": f"{model}  ·  {name}" if name else model}
+        fw = d.health.get("firmware") or {}
+        extra = [f"update {fw['latest']}" if fw.get("newer") else "", health.latency_cell(d)]
+        return {"ip": d.ip or "-", "model": model, "name": name,
+                "summary": " · ".join(x for x in (model, name, *extra) if x)}
 
     def _all_devices(self) -> list:
         if self.result:
@@ -938,6 +946,10 @@ class OpenDiscoApp(toga.App):
 
     def _device_action(self, name):
         d = self._selected_device()
+        if d is None and name == "scan_from" and not self.caps["mobile"]:  # from a device given by its address
+            from opendisco import devicegui
+            asyncio.create_task(devicegui.scan_address(self))
+            return
         if d is None:
             self.status.text = "Select a device first."
             return

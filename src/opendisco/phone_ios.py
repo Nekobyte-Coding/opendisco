@@ -105,18 +105,21 @@ class Page:
         self.controller.view.backgroundColor = _class_value(_objc("UIColor"), "systemBackgroundColor")
 
     def _layout(self, container):
-        """Lay the content out below the title bar whenever the page changes size (rotation), and
-        beside the list's column, which the right-hand one runs under."""
+        """Lay the content out below the title bar whenever the page changes size (rotation),
+        beside the list's column, which the right-hand one runs under, and above the home bar
+        (the device page's tabs keep clear of it themselves)."""
         bar = (self.controller.navigationController or _phone_nav(self.app)).navigationBar
         top = bar.frame.origin.y + bar.frame.size.height
+        insets = container.native.safeAreaInsets
         left = right = 0
         if _split(self.app).view is not None:
-            insets = container.native.safeAreaInsets
             left, right = insets.left, insets.right
-        size = (container.native.bounds.size.width, container.native.bounds.size.height, top, left, right)
+        bottom = 0 if self is getattr(self.app, "page", None) else insets.bottom
+        size = (container.native.bounds.size.width, container.native.bounds.size.height, top, left, right, bottom)
         if size != self.laid_out:
             self.laid_out = size
             container.top_inset, container.left_inset, container.right_inset = top, left, right
+            container.bottom_inset = bottom
             self.content.refresh()
 
     def show(self, title: str, subtitle: str):
@@ -402,37 +405,120 @@ def export_menu(app, choices, pick):
     """Export opens a menu of the reports, listed afresh each time it opens: the scan report,
     then the security report, config backups, notes and the Log, each saying what's in it (and
     dimmed while there's nothing). Choosing one saves it and offers it to the share sheet."""
-    from rubicon.objc import Block, objc_id
-    from rubicon.objc.api import ObjCBlock
-    UIAction, UIImage = _objc("UIAction"), _objc("UIImage")
-
-    def provide(completion) -> None:
-        app._ios_export_blocks = []  # the open menu's handlers, kept alive while it's up
-        actions = []
-        for kind, title, detail, enabled in choices():
-            block = Block(lambda _action, kind=kind: pick(kind), None, objc_id)
-            app._ios_export_blocks.append(block)
-            action = UIAction.actionWithTitle(title, image=UIImage.systemImageNamed(EXPORT_SYMBOLS.get(kind, "doc")),
-                                              identifier=None, handler=block)
-            try:
-                action.subtitle = detail  # iOS 15 and later
-            except Exception:
-                pass
-            if not enabled:
-                action.attributes = 1  # UIMenuElementAttributesDisabled
-            actions.append(action)
-        ObjCBlock(completion, None, objc_id)(_objc("NSArray").arrayWithArray(actions))
+    def items():
+        return [(title, enabled, lambda kind=kind: pick(kind), detail, EXPORT_SYMBOLS.get(kind, "doc"))
+                for kind, title, detail, enabled in choices()]
 
     try:
-        app._ios_export_provider = Block(provide, None, objc_id)
-        deferred = _objc("UIDeferredMenuElement").elementWithUncachedProvider(app._ios_export_provider)
         item = app.export_button.native
-        item.menu = _objc("UIMenu").menuWithTitle("", children=_objc("NSArray").arrayWithObject(deferred))
+        item.menu = _deferred_menu(app, app, items)
         item.primaryAction = None  # a tap opens the menu
         app.export_button.menu = True
         app.export_button.enabled = True
     except Exception:
         pass  # Export saves the scan report, as before
+
+
+def _deferred_menu(app, owner, items):
+    """A UIMenu listed afresh each time it opens, from items(): (title, enabled, action), or
+    with a line under the title and an SF Symbol: (title, enabled, action, detail, symbol)."""
+    from rubicon.objc import Block, objc_id
+    from rubicon.objc.api import ObjCBlock
+    UIAction, UIImage = _objc("UIAction"), _objc("UIImage")
+
+    def provide(completion) -> None:
+        owner._ios_menu_blocks = []  # the open menu's handlers, kept alive while it's up
+        actions = []
+        for title, enabled, action, *more in items():
+            detail, symbol = (more + ["", ""])[:2]
+            block = Block(lambda _action, action=action: action(), None, objc_id)
+            owner._ios_menu_blocks.append(block)
+            element = UIAction.actionWithTitle(title, image=UIImage.systemImageNamed(symbol) if symbol else None,
+                                               identifier=None, handler=block)
+            if detail:
+                try:
+                    element.subtitle = detail  # iOS 15 and later
+                except Exception:
+                    pass
+            if not enabled:
+                element.attributes = 1  # UIMenuElementAttributesDisabled
+            actions.append(element)
+        ObjCBlock(completion, None, objc_id)(_objc("NSArray").arrayWithArray(actions))
+
+    owner._ios_menu_provider = Block(provide, None, objc_id)
+    deferred = _objc("UIDeferredMenuElement").elementWithUncachedProvider(owner._ios_menu_provider)
+    return _objc("UIMenu").menuWithTitle("", children=_objc("NSArray").arrayWithObject(deferred))
+
+
+def menu_button(app, title: str, items):
+    """A gray button that opens a menu of items() (Copy: the IP or the MAC address)."""
+    try:
+        button = toga.Button(title, style=Pack(flex=1))
+        native = button._impl.native
+        native.menu = _deferred_menu(app, button, items)
+        native.showsMenuAsPrimaryAction = True
+        style_button(button, "gray")
+        return button
+    except Exception:
+        return None  # phone.py lays out a button for each
+
+
+def bar_button(app, symbol: str, title: str, action):
+    """One more button in the title bar, at the right, left of Notes and Log."""
+    try:
+        from rubicon.objc import Block, objc_id
+
+        def tapped(_action) -> None:
+            try:
+                action()
+            except Exception as e:  # UIKit would drop it silently
+                app.status.text = f"{title}: {type(e).__name__}: {e}"
+
+        block = Block(tapped, None, objc_id)
+        app._ios_blocks.append(block)
+        act = _objc("UIAction").actionWithTitle(title, image=_objc("UIImage").systemImageNamed(symbol),
+                                                identifier=None, handler=block)
+        item = _objc("UIBarButtonItem").alloc().initWithPrimaryAction(act)
+        bar = app.main_window._impl.container.content_controller.navigationItem
+        bar.rightBarButtonItems = _objc("NSArray").arrayWithArray([*bar.rightBarButtonItems, item])
+    except Exception:
+        pass
+
+
+_PICKER_DELEGATE = None
+
+
+async def open_file(app):
+    """A file picked in Files (a copy in the app's own folder), as a path; None when cancelled."""
+    global _PICKER_DELEGATE
+    from rubicon.objc import NSObject, objc_method
+    if _PICKER_DELEGATE is None:
+        class OpenDiscoPickerDelegate(NSObject):
+            @objc_method
+            def documentPicker_didPickDocumentsAtURLs_(self, picker, urls) -> None:
+                paths = [str(url.path) for url in urls]
+                self.done(paths[0] if paths else None)
+
+            @objc_method
+            def documentPickerWasCancelled_(self, picker) -> None:
+                self.done(None)
+
+        _PICKER_DELEGATE = OpenDiscoPickerDelegate
+    answer = app.loop.create_future()
+    delegate = _PICKER_DELEGATE.alloc().init()
+    delegate.done = lambda path: answer.done() or answer.set_result(path)
+    kinds = _objc("NSArray").arrayWithObject(_objc("UTType").typeWithIdentifier("public.data"))
+    picker = _objc("UIDocumentPickerViewController").alloc().initForOpeningContentTypes(kinds, asCopy=True)
+    picker.delegate = delegate
+    app._ios_picker = (picker, delegate)  # kept alive while it's up
+    shown = app.main_window._impl.native.rootViewController
+    while shown.presentedViewController:
+        shown = shown.presentedViewController
+    shown.presentViewController(picker, animated=True, completion=None)
+    try:
+        return await answer
+    finally:
+        app._ios_picker = None
 
 
 def here(app) -> str:
