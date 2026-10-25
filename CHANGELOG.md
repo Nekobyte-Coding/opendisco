@@ -59,7 +59,8 @@ and known issues.
 - Fixed: picking Direct to a device or Trunk VLANs turned on "Probe listed networks", and it
   stayed on after switching back to Full scan or Sniff the wire, so the next scan added
   temporary addresses (and asked for an administrator password) nobody asked for (1.1.0 to
-  1.4.1). Leaving those modes now sets the switch back to how it was.
+  1.4.1 on macOS and Linux, 1.4.0 and 1.4.1 on Windows; the switch was "Probe my networks"
+  before 1.4.1). Leaving those modes now sets the switch back to how it was.
 - Fixed: a scan started while Keep addresses was still adding its addresses lost track of them,
   and they stayed until the app quit. Start now waits until they're in place.
 - Fixed: on Android, a second export in the same minute was reported under the first one's file

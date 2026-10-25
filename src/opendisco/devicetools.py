@@ -1025,23 +1025,38 @@ def _read_meta(path: Path) -> dict:
     return meta if isinstance(meta, dict) else {}
 
 
-def list_backups(mac: str, root=None) -> list:
-    """The device's saved configs, the newest first: Backups with path and date (and meta)."""
-    folder = backup_folder(mac, root) if mac else None
-    if folder is None or not folder.is_dir():
-        return []
+def list_backups(mac: str | None = None, root=None) -> list:
+    """Saved configs, the newest first, as Backups (.path, .when, .date, .reason, .meta): one
+    device's (by its MAC), or with mac None every device's."""
+    if mac:
+        folders = [backup_folder(mac, root)]
+    else:
+        top = backup_root(root)
+        folders = [f for f in top.iterdir() if f.is_dir()] if top.is_dir() else []
     found = []
-    for path in folder.iterdir():
-        if path.name.endswith((".json", ".part")) or not path.is_file():
+    for folder in folders:
+        if not folder.is_dir():
             continue
-        meta = _read_meta(path)
-        when = None
-        try:
-            when = time.mktime(time.strptime(str(meta.get("saved", ""))[:19], "%Y-%m-%dT%H:%M:%S"))
-        except ValueError:
-            pass
-        found.append(Backup(path, when or path.stat().st_mtime, meta))
+        for path in folder.iterdir():
+            if path.name.endswith((".json", ".part")) or not path.is_file():
+                continue
+            meta = _read_meta(path)
+            when = None
+            try:
+                when = time.mktime(time.strptime(str(meta.get("saved", ""))[:19], "%Y-%m-%dT%H:%M:%S"))
+            except ValueError:
+                pass
+            found.append(Backup(path, when or path.stat().st_mtime, meta))
     return sorted(found, key=lambda b: b.when, reverse=True)
+
+
+def backup_macs(root=None) -> list:
+    """The MACs (aa:bb:cc:dd:ee:ff) that have a backups folder."""
+    top = backup_root(root)
+    if not top.is_dir():
+        return []
+    return sorted(f.name.replace("-", ":") for f in top.iterdir()
+                  if f.is_dir() and re.fullmatch(r"(?:[0-9a-f]{2}-){5}[0-9a-f]{2}", f.name))
 
 
 def delete_backup(backup: Backup) -> None:
@@ -1090,7 +1105,7 @@ def upload_check(d, kind: str, text: str, meta: dict) -> tuple:
     warn = []
     if match is None:
         warn.append(f"The file doesn't say which model it's from. Upload only a config from another {model}: settings "
-                    "for other hardware (radios, ports) can leave it unreachable.")
+                    "for other hardware (radios, interfaces) can leave it unreachable.")
     if meta.get("mac") and d.mac and core.norm_mac(meta["mac"]) != d.mac:
         warn.append(f"It's from another device ({meta['mac']}{', ' + meta['name'] if meta.get('name') else ''}): its "
                     "address, name and logins come with it.")

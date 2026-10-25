@@ -6,7 +6,7 @@ This folder runs on any Linux distribution, from wherever it's extracted.
     cd opendisco-*
     ./opendisco              # the app
     ./opendisco --quick      # the command-line tool (see --help)
-    ./install-desktop-entry.sh             # optional: adds the app to the desktop's menu
+    ./install-desktop-entry.sh  # optional: adds the app to the desktop's menu
 
 On Ubuntu 24.04 or Fedora 44, the `.deb` or `.rpm` from the same release is easier: it
 installs everything it needs.
@@ -15,7 +15,7 @@ installs everything it needs.
 
 It needs only Python 3.8 or newer, which every current distribution has. Sniffing, temporary
 addresses and VLANs (`--sniff`, `-a`, `--vlans`, `--direct`) also need `tcpdump`, `ip` and `sudo`,
-and `iw` names the access point a Wi-Fi port is joined to.
+and `iw` names the access point a Wi-Fi interface is joined to.
 
 ## The app
 

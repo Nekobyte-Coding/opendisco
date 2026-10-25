@@ -35,11 +35,11 @@ Installers are on the [Releases](https://github.com/Nekobyte-Coding/opendisco/re
 | 1.5.0 | Find HTTP/HTTPS/SSH port and Scan all ports for one device, and an HTTP column. Status in plain words with an issue list. A CVE check of each device's firmware, updated from the NVD. TFTP recovery detection. Device tools over SSH: firmware updates, config editor, change login, Scan from device, devices behind other devices. Settings and self-update. A new phone layout | macOS, Windows, Linux, Android; iOS (beta, no public download yet) |  |
 | 1.4.2 | "Probe listed networks" no longer stays on after Direct or Trunk VLANs. Start waits for Keep addresses. Android names the export file it saved. Clearer networks-file errors | macOS, Windows, Linux, Android | macOS: a scan can find nothing on a Mac that has an older OpenDisco (another app ID) or another app built with Briefcase (1.5.0) |
 | 1.4.1 | Android release-signed, with a three-column list. Windows fixes: Keep addresses, adapter names with spaces, the About version, the data folder. CSV exports open right in Excel | macOS, Windows, Linux, Android | "Probe listed networks" stays on after Direct or Trunk VLANs, so the next scan adds temporary addresses (1.4.2). Android: a second export in the same minute is reported under the first one's file name (1.4.2) |
-| 1.4.0 | Renamed OpenDisco, Apache 2.0 license. Windows sniffs, probes VLANs and adds temporary addresses (Npcap). First Android release. The Windows app opens again | macOS, Windows, Linux, Android | Windows: Keep addresses fails, and a Port whose adapter name has a space (Ethernet 2) isn't the one scanned. Android: Export does nothing (1.4.1). "Probe listed networks" stays on after Direct or Trunk VLANs (1.4.2) |
-| 1.3.2 | First Linux release (.deb, .rpm, portable). A UCG Fiber's HTTPS port is read correctly | macOS, Windows, Linux | Windows: the app doesn't open (1.4.0). Mac and Linux: "Probe listed networks" stays on after Direct or Trunk VLANs (1.4.2) |
-| 1.3.1 | Popup windows open over the app. Open Web UI uses the port the device reports | macOS, Windows | Windows: the app doesn't open (1.4.0). A UCG Fiber's port 7080 is shown as its HTTPS port (1.3.2). Mac and Linux: "Probe listed networks" stays on after Direct or Trunk VLANs (1.4.2) |
-| 1.3.0 | Right-click menu and Terminal tab (SSH and ping sessions). HTTPS and SSH ports from what each device reports, with typo checks. Hidden devices | macOS, Windows | Same as 1.3.1 |
-| 1.2.0 | Packets tab with each device's packets, decoded and checked for damage. Missed-reply and error counters. The unicast sweep finds UniFi OS gear | macOS, Windows | Windows: the table's columns open too narrow to read (1.4.0). UCG Fiber port 7080 (1.3.2). Mac and Linux: "Probe listed networks" stays on after Direct or Trunk VLANs (1.4.2) |
+| 1.4.0 | Renamed OpenDisco, Apache 2.0 license. Windows sniffs and hears VLANs (through Npcap) and adds temporary addresses. First Android release. The Windows app opens again | macOS, Windows, Linux, Android | Windows: Keep addresses fails, and a Port whose adapter name has a space (Ethernet 2) isn't the one scanned (1.4.1). Android: Export does nothing (1.4.1). "Probe my networks" stays on after Direct or Trunk VLANs (1.4.2) |
+| 1.3.2 | First Linux release (.deb, .rpm, portable). A UCG Fiber's HTTPS port is read correctly | macOS, Windows, Linux | Windows: the app doesn't open (1.4.0). Mac and Linux: "Probe my networks" stays on after Direct or Trunk VLANs (1.4.2) |
+| 1.3.1 | Popup windows open over the app. Open Web UI uses the port the device reports | macOS, Windows | Windows: the app doesn't open (1.4.0). A UCG Fiber's port 7080 is shown as its HTTPS port (1.3.2). Mac and Linux: "Probe my networks" stays on after Direct or Trunk VLANs (1.4.2) |
+| 1.3.0 | Right-click menu and Terminal tab (SSH and ping sessions). HTTPS and SSH ports from what each device reports, with typo checks. Hidden devices | macOS, Windows | Same as 1.3.1, and Open Web UI uses the standard port, not the one the device reports, when a deep check found nothing answering (1.3.1) |
+| 1.2.0 | Packets tab with each device's packets, decoded and checked for damage. Missed-reply and error counters. The unicast sweep finds UniFi OS gear | macOS, Windows | Windows: the table's columns open too narrow to read (1.4.0). A UCG Fiber's port 7080 is shown as its HTTPS port (1.3.2). Mac and Linux: "Probe my networks" stays on after Direct or Trunk VLANs (1.4.2) |
 | 1.1.0 | First app release, for macOS and Windows: a window over the command-line scanner, with Touch ID for sudo and HTTPS and SSH port columns | macOS, Windows | Same as 1.2.0, and the unicast sweep misses UniFi OS gear (1.2.0) |
 
 - **Rebuilds:** every installer before 1.4.0 was rebuilt in October 2026 from that version's
@@ -105,7 +105,8 @@ Applications until deleted, on Linux its package stays until removed, and on And
 new version installs as a separate app.
 
 **The window:**
-- Pick a mode and a port, then press Start.
+- Pick a mode and an **Interface** (the network adapter to scan from, or "Any interface"),
+  then press Start. 1.5.0 and earlier label this picker **Port**, with "Any port".
 - Devices fill the table as they're found. Selecting one shows everything it reported and
   what to check. A device found through another device (Scan from device) is listed under it,
   indented.
@@ -203,10 +204,10 @@ or Tools on a phone) chase one device's service when it isn't where it should be
    ports for it, the ports the rest of the gear uses, and typos of those (a fat-fingered
    config). It stops as soon as the service answers. **Stop** ends it early.
 
-**Scan all ports** checks every port and lists what answers on each, the way a port scanner's
-version detection does: the SSH banner, the web page's status, server and title, the TLS
-certificate's name. Details lists them under Open TCP ports. A full sweep takes about 20–60
-seconds a device. Only the device chosen is checked, never the whole list.
+**Scan all ports** checks every TCP port and lists what answers on each, the way a port
+scanner's version detection does: the SSH banner, the web page's status, server and title, the
+TLS certificate's name. Details lists them under Open TCP ports. It takes about 20–60 seconds a
+device. Only the device chosen is checked, never the whole list.
 
 Intrusion prevention (UniFi's IPS / Threat Management, a firewall's port-scan detection) can
 take a port search for a port scan from this computer: it may raise an alert, a false alarm
@@ -221,7 +222,8 @@ Tapping a device opens its page, titled with its name and address, with tabs alo
 bottom: **Details**, **Packets**, **Tools**, **Notes** and **Log**. **Tools** has:
 - **Ping**, the app's own, and an **SSH** session through the app's own SSH client (phones
   can't run other programs);
-- **Find** a port and **Web UI**, **Rescan**, **Scan from device**;
+- **Find** (a port: HTTP, HTTPS, SSH or all of them), **Web UI**, **Rescan** and **Scan from
+  device**;
 - **Firmware** (check and update), **Config** (airMAX) and **Login**, as on the desktop;
 - **Copy IP** and **Copy MAC**.
 
@@ -230,16 +232,17 @@ traffic, add addresses or tag VLANs, so they offer Quick and Full scans.
 
 ### Settings and updates
 
-**Settings** (the app menu's Settings… on a Mac; on phones, the title bar) has two switches,
-both on until turned off:
+**Settings…** (in the app menu on macOS and Linux, and the File menu on Windows; on phones, in
+the title bar) has two switches, both on until turned off:
 - **Check for OpenDisco updates when opening:** asks GitHub for the latest release. When
   there's a newer one, the app says what's in it and offers to update: it downloads the file
   for this platform, checks it against the SHA-256 GitHub lists, installs it the way this copy
   was installed (the .app on a Mac, the setup.exe on Windows, the .deb, .rpm or portable
   folder on Linux, the APK on Android, which asks once to allow installs from OpenDisco) and
-  reopens. "Check for OpenDisco updates…" checks by hand. Copies run from the source update
-  their own way. The iPhone/iPad app has no self-update: Apple allows installs only through
-  its own channels.
+  reopens. **Check for OpenDisco updates…** (the app menu on a Mac, the Help menu on Windows
+  and Linux, the ⋮ menu on Android) checks straight away. A copy run from source doesn't update itself: it links the release page
+  instead. The iPhone/iPad app has no self-update: Apple allows installs only through its own
+  channels.
 - **Check for new CVEs when opening:** about once a day, downloads current data from the NVD
   and Ubiquiti's security advisories, so newly published CVEs are flagged without a new
   release (see [Known vulnerabilities](#known-vulnerabilities-cves)).
@@ -267,7 +270,7 @@ Right-click a device in the table (or select it and use the **Device** menu):
 - **Scan from device…** (airMAX, UniFi, UniFi OS, EdgeOS) logs in to the device and adds what
   it knows of its neighbours to the table: the stations associated with it (airMAX
   `wstalist`), its LLDP neighbours (where it runs lldpd: `lldpcli`) and its ARP table
-  (`/proc/net/arp`). They show **via** `from-device`. A device this computer hadn't found
+  (`/proc/net/arp`). Their **Via** column says `from-device`. A device this computer hadn't found
   itself, and a station or LLDP neighbour attached to it, is listed under it, indented; one
   this computer found that's merely in its ARP table isn't.
 - **Check for firmware update** asks Ubiquiti's public firmware server for the latest release
@@ -398,8 +401,8 @@ Every problem found is listed below the table. `-v` shows every field each devic
 | `opendisco.py -a --hold` | The same, then keeps the aliases that reached gear, so it can be managed, until Ctrl+C |
 | `opendisco.py -a --dry-run` | Prints the exact alias commands without running anything |
 | `opendisco.py --vlans` | On a trunk port: finds the VLANs it carries by listening, then probes each one through a temporary tagged interface |
-| `opendisco.py --vlan 20,30` | Probes these VLANs on the wired ports, without listening first |
-| `opendisco.py --sniff` | Listens on every port, Wi-Fi included, for ARP, LLDP/CDP and broadcasts, and lists the gear it hears on any subnet |
+| `opendisco.py --vlan 20,30` | Probes these VLANs on the wired interfaces, without listening first |
+| `opendisco.py --sniff` | Listens on every interface, Wi-Fi included, for ARP, LLDP/CDP and broadcasts, and lists the gear it hears on any subnet |
 | `opendisco.py --sniff -a` | The same, then probes that gear through temporary addresses in its subnets |
 | `opendisco.py --direct -i en7` | Wired straight into one radio: finds its IP and VLAN from what it says, live, and reports whether its config survived |
 
@@ -415,8 +418,9 @@ address at all, because the network has no DHCP) it stays silent. `-a` solves th
 any manual IP setup:
 
 1. It finds every **active** Ethernet and Wi-Fi interface: link up, with or without an IPv4
-   address. On macOS that's the hardware ports from `networksetup` with `status: active`; on
-   Linux it's the physical NICs with carrier; on Windows, the physical adapters that are up.
+   address. On macOS that's the interfaces `networksetup -listallhardwareports` lists whose
+   `ifconfig` status is `active`; on Linux, the physical NICs with carrier; on Windows, the
+   physical adapters that are up.
 2. For each interface, one at a time, it adds a temporary address in each network listed in
    `networks.txt`, probes, reads the ARP table, and removes the address again. It takes a few
    seconds per round.
@@ -445,12 +449,12 @@ Networks can also be given on the command line: `--alias 10.0.0.0/24` (repeatabl
 
 **Safety:**
 - Aliases are only added with administrator rights (`sudo` asks once on macOS and Linux), and
-  only on physical Ethernet/Wi-Fi ports. VPN, bridge and virtual interfaces never get one.
+  only on physical Ethernet/Wi-Fi interfaces. VPN, bridge and virtual interfaces never get one.
 - Every alias is written to `~/.opendisco_aliases.json` before it's added. They're all
   removed on exit, Ctrl+C or `kill`. If a run dies hard (power loss, `kill -9`), the next `-a`
   run removes the leftovers, as does `opendisco.py --cleanup-aliases`.
 - A network that overlaps a subnet the computer already has gets no alias; it's probed
-  normally instead. If the gear is on another port with the same subnet as the computer's
+  normally instead. If the gear is on another interface with the same subnet as the computer's
   Wi-Fi, turn Wi-Fi off first.
 - Adding an alias briefly announces that address on the network. If a device secretly owns
   it (it didn't answer ARP or discovery), the two clash for a few seconds; the tool reports
@@ -473,27 +477,27 @@ This replaces the manual routine of creating a VLAN interface, setting its tag, 
 its IP:
 
 1. **Listen.** For 20 seconds (`--vlan-listen` to change), `sudo tcpdump` captures the
-   broadcast and multicast frames arriving on each wired port (Npcap on Windows). Untagged
-   frames are captured too. From those it learns:
-   - which VLAN tags the port carries, and which subnets live on each (from ARP and IP
+   broadcast and multicast frames arriving on each wired interface (Npcap on Windows).
+   Untagged frames are captured too. From those it learns:
+   - which VLAN tags arrive on the interface, and which subnets live on each (from ARP and IP
      senders);
-   - what the switch says over LLDP: its name, the port, the **native VLAN**, and any VLAN
-     names it advertises;
+   - what the switch says over LLDP: its name, the switch port, the **native VLAN**, and any
+     VLAN names it advertises;
    - any Ubiquiti gear chattering on any VLAN (`sniff` in the VIA column), before anything
      is probed.
 2. **Tag and probe.** For each VLAN found, it creates a temporary tagged interface:
    `ifconfig vlan200 create` / `vlan 20 vlandev en7` on macOS, or `ip link add ... type vlan`
    on Linux. It then runs the alias rounds on the subnets heard on that VLAN plus
-   `networks.txt`, and destroys the interface. Untagged subnets heard on the port are probed
-   on the port itself. Windows can't tag VLANs, so there it lists the VLANs and probes the
-   untagged network only.
+   `networks.txt`, and destroys the interface. Untagged subnets heard on the interface are
+   probed on the interface itself. Windows can't tag VLANs, so there it lists the VLANs and
+   probes the untagged network only.
 3. **Report.** Each device shows the VLAN it was found on. Untagged shows as **1**, or as
-   the port's native VLAN if the switch announced it over LLDP. A "VLANs heard on wired
-   ports" section summarises what each port carries, which also shows what VLAN an access
-   port is on.
+   the switch port's native VLAN if the switch announced it over LLDP. A "VLANs heard on
+   wired interfaces" section summarises what each interface carries, which also shows what
+   VLAN an access port is on.
 
 ```
-VLANs heard on wired ports
+VLANs heard on wired interfaces
   en7 (Thunderbolt Ethernet), listened 20s: switch USW-Pro-24-PoE port Port 7
     untagged = VLAN 10 (LLDP) "Default"  192.168.10.0/24 (2 hosts)
     VLAN 20 "Cameras"                    10.20.0.0/24 (2 hosts)
@@ -523,7 +527,7 @@ Other details:
 A computer's own ARP table only ever holds addresses on its own subnets: the OS never ARPs
 for anything else. But ARP requests are layer-2 broadcasts, so every device on the wire
 hears every device's ARPs, whatever subnet it's on. `--sniff` listens for them on every
-active port (Wi-Fi included) for 20 seconds (`--vlan-listen` to change).
+active interface (Wi-Fi included) for 20 seconds (`--vlan-listen` to change).
 
 ```bash
 python3 opendisco.py --sniff
@@ -538,7 +542,8 @@ IP             VLAN  VENDOR    MAC                MODEL                  NAME   
 ```
 
 What it picks up:
-- **ARP:** "who has X, tell Y" gives Y's IP and MAC, plus the VLAN tag if the port is a trunk.
+- **ARP:** "who has X, tell Y" gives Y's IP and MAC, plus the VLAN tag if the switch port is a
+  trunk.
 - **LLDP and CDP:** give names, models and management IPs.
 - **UBNT announcements:** broadcast by Ubiquiti gear.
 - **Other broadcasts:** DHCP requests and the like.
@@ -553,9 +558,10 @@ for tcpdump on macOS and Linux (on Windows, Npcap), and changes nothing on the c
 unless `-a` is added.
 
 Options while listening:
-- **`-v`:** lists every talker on each port: MAC, vendor, VLAN, addresses, what it sent (ARP,
-  CDP, LLDP, STP, IPv6...) and its CDP/LLDP identity.
-- **`--pcap PREFIX`:** saves each port's capture as `PREFIX-<interface>.pcap` for Wireshark.
+- **`-v`:** lists every talker on each interface: MAC, vendor, VLAN, addresses, what it sent
+  (ARP, CDP, LLDP, STP, IPv6...) and its CDP/LLDP identity.
+- **`--pcap PREFIX`:** saves each interface's capture as `PREFIX-<interface>.pcap` for
+  Wireshark.
 
 **The access point the computer's Wi-Fi is joined to.** An AP's management address lives on
 its management VLAN, which usually isn't bridged to the Wi-Fi VLAN its clients are on. So
@@ -566,14 +572,14 @@ nothing from its management side reaches the Wi-Fi.
 - **When its management side was found elsewhere** (say, heard tagged on a wired trunk), it's
   the same row, marked `WIFI-AP`.
 - **When it wasn't:** the AP gets a row of its own, with no IP.
-- **Getting its IP and details:** run `--sniff --vlans` from a wired port whose trunk carries
-  the management VLAN, so the tool can tag that VLAN and probe it.
+- **Getting its IP and details:** run `--sniff --vlans` from a wired interface on a trunk that
+  carries the management VLAN, so the tool can tag that VLAN and probe it.
 - **Caveat:** macOS hides the BSSID from most programs, and if it also hides it from `wdutil`,
   the tool says so.
 
 ## Other vendors
 
-Ubiquiti gets full discovery. These get identified wherever they turn up (a sniffed port,
+Ubiquiti gets full discovery. These get identified wherever they turn up (heard on the wire,
 the ARP table, a direct wire), shown in the VENDOR column:
 
 | Vendor | Identified by |
@@ -610,13 +616,14 @@ tower. Plug a computer straight into it and run:
 python3 opendisco.py --direct -i en7
 ```
 
-`-i` names the port the radio is plugged into. Without it, the tool picks wired ports that
-have link but no real IP address, and refuses ports that have one, so it never listens on an
-office LAN by accident. If the port has no link yet, it listens anyway: plug in, or re-seat
-the cable, once it's running. Devices talk the most right after link comes up.
+`-i` names the interface the radio is plugged into. Without it, the tool picks wired
+interfaces that have link but no real IP address, and refuses ones that have one, so it never
+listens on an office LAN by accident. If the interface has no link yet, it listens anyway:
+plug in, or re-seat the cable, once it's running. Devices talk the most right after link
+comes up.
 
-On a direct wire, whatever is talking is the radio, so the tool listens to it like a trunk
-port (up to 45 seconds) and prints what it learns as it happens:
+On a direct wire, whatever is talking is the radio, so the tool listens to it the way it
+listens on a trunk (up to 45 seconds) and prints what it learns as it happens:
 
 ```
 Listening on en7 (Thunderbolt Ethernet, 1000baseT full-duplex) for up to 45s.
@@ -670,11 +677,14 @@ opened.
 - `ubnt`: answered UBNT discovery (broadcast or unicast)
 - `mcast`: answered the multicast probe
 - `announce`: sent an unsolicited announcement (`--listen`)
-- `sniff`: heard in traffic on a port (`--sniff`, `--vlans`, `--direct`)
+- `sniff`: heard in traffic on an interface (`--sniff`, `--vlans`, `--direct`)
+- `from-device`: known to another device (Scan from device: its stations, LLDP neighbours, ARP
+  table)
 - `wifi`: the access point the computer's Wi-Fi is joined to
 - `mdns`: found by mDNS/Bonjour
 - `ssdp`: found by UPnP/SSDP
-- `arp`: its MAC is in the computer's ARP table with a Ubiquiti prefix
+- `arp`: its MAC is in the computer's ARP table, with a Ubiquiti prefix or another known
+  vendor's (see [Other vendors](#other-vendors))
 
 **STATUS** tags:
 
@@ -803,7 +813,7 @@ release. If the bulletins can't be read, the CVEs read from them before are kept
 ## Protocol notes
 
 **The 255.255.255.255 broadcast** is sent out of every interface, including alias, VLAN and
-direct-wire ports. A plain send to 255.255.255.255 only leaves through the interface with the
+direct-wire interfaces. A plain send to 255.255.255.255 only leaves through the interface with the
 default route. Yet it's the only broadcast that old gear on *another* subnet accepts: it
 throws away other subnets' directed broadcasts like 10.8.6.255. macOS scopes a socket per
 interface with `IP_BOUND_IF`; Linux sends it out of the interface that owns the socket's
@@ -841,8 +851,8 @@ a packet for decoding.
   tested live. `-a --dry-run` and `--vlan 20 --dry-run` print the commands without running
   them.
 - Some built-in NICs strip VLAN tags in hardware before a capture can see them. If
-  `--vlans` reports several subnets as untagged on a port known to be a trunk, name the VLANs
-  with `--vlan` instead. USB Ethernet adapters normally don't strip tags.
+  `--vlans` reports several subnets as untagged on an interface plugged into a known trunk,
+  name the VLANs with `--vlan` instead. USB Ethernet adapters normally don't strip tags.
 - It doesn't do the Bluetooth (BLE) setup discovery that the UniFi mobile app uses for
   brand-new consoles.
 - Some field meanings come from observation rather than documentation: `0x0F` flags,
@@ -894,11 +904,15 @@ python3 -m venv .venv && .venv/bin/pip install briefcase toga
   `$OPENDISCO_KEYSTORE_PASSWORD`). Android only installs an update signed with the same
   key, so both need a backup. `--create-key` made the key, once. `briefcase package
   android` makes a Play Store bundle.
-- **iPhone:** needs a Mac with Xcode installed. `.venv/bin/briefcase run iOS` runs it in the
-  simulator, and `briefcase open iOS` opens the project in Xcode to sign and install it on a
-  phone. A free Apple ID can sideload to a personal phone for 7 days at a time. Broadcast
-  discovery needs Apple's `com.apple.developer.networking.multicast` entitlement, added in
-  Xcode; without it the app still finds gear by sweeping the Wi-Fi subnet.
+- **iPhone and iPad:** needs a Mac with Xcode installed.
+  `.venv/bin/python packaging/ios/build_ios.py --simulator` builds it and runs it in the
+  Simulator; `--device NAME` builds it, installs it on an iPhone and opens it. Like the Mac
+  build, it works on a copy in `~/Library/Caches/opendisco`, and it leaves out what iOS can't
+  use (self-update, the Terminal tab, the desktop's SSH windows, the Windows helpers).
+  Broadcast and multicast discovery need Apple's `com.apple.developer.networking.multicast`
+  entitlement, which Apple grants per app ID on request; `pyproject.toml` lists it, so Xcode's
+  signing has to be for an app ID that has it. Without it the app still finds gear by
+  sweeping the Wi-Fi subnet.
 
 The Mac and Windows build scripts do their work in `~/Library/Caches/opendisco`, and the
 Linux one inside containers, so nothing big ends up in iCloud. Finished installers go in
@@ -910,11 +924,16 @@ Linux one inside containers, so nothing big ends up in iCloud. Finished installe
 |---|---|
 | `src/opendisco/core.py` | The scanner, shared by the app and the CLI |
 | `src/opendisco/app.py` | The GUI |
+| `src/opendisco/phone.py`, `phone_android.py`, `phone_ios.py` | The phone screens, shared by Android and iPhone/iPad, and each one's native parts |
 | `src/opendisco/terminal.py` | The Terminal tab: SSH and ping sessions |
+| `src/opendisco/devicetools.py`, `devicegui.py`, `phonetools.py` | The device tools over SSH (firmware, config, login, Scan from device) and their windows on desktops and phones |
+| `src/opendisco/sshrun.py`, `phonessh.py`, `credstore.py` | SSH for the device tools (the computer's `ssh` and `scp`; asyncssh on phones) and remembered logins in the system's credential store |
+| `src/opendisco/vulns.py` | The CVE check and its updates from the NVD and Ubiquiti's advisories |
+| `src/opendisco/update.py` | Checking for, downloading and installing OpenDisco updates |
 | `src/opendisco/winnet.py` | Windows networking: adapters, Npcap capture, administrator rights |
-| `src/opendisco/resources/` | App icon (redraw with `packaging/make_icons.py`), the default networks file, and the Npcap download script |
+| `src/opendisco/resources/` | App icon (redraw with `packaging/make_icons.py`), the default networks file, the built-in CVE list (regenerate with `packaging/update_cves.py`), and the Npcap download and Windows update scripts |
 | `src/opendisco/resources/xterm/` | xterm.js 5.5.0 (MIT), the terminal emulator; `packaging/fetch_xterm.py` fetches it from npm and checks it |
-| `packaging/macos/`, `packaging/windows/`, `packaging/linux/`, `packaging/android/` | The build scripts, the NSIS installer definition, and the portable Linux version's launcher, menu-entry script and README |
+| `packaging/macos/`, `packaging/windows/`, `packaging/linux/`, `packaging/android/`, `packaging/ios/` | The build scripts, the NSIS installer definition, and the portable Linux version's launcher, menu-entry script and README |
 | `docs/images/` | Screenshots |
 | `opendisco.py` | The command-line launcher |
 | `LICENSE`, `NOTICE` | The Apache License 2.0, and the copyright and trademark notices |

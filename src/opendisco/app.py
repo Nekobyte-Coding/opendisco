@@ -28,7 +28,7 @@ if core.platform_name() != "ios":  # left out of the iOS app (packaging/ios/buil
 MODES = [
     ("Quick", "Broadcast and multicast discovery only, like Ubiquiti's old Java tool.", ["--quick"], None),
     ("Full scan", "Discovery plus a sweep of the local subnets, mDNS, SSDP and the ARP table.", [], None),
-    ("Sniff the wire", "Listen on every port for gear on any subnet (ARP, LLDP, CDP, broadcasts).",
+    ("Sniff the wire", "Listen on every interface for gear on any subnet (ARP, LLDP, CDP, broadcasts).",
      ["--sniff"], "listen"),
     ("Trunk VLANs", "Find the VLANs on a trunk port, then probe each one through a temporary tagged interface.",
      ["--vlans"], "vlans"),
@@ -40,7 +40,7 @@ ACCESSORS = [c.lower() for c in COLUMNS]
 # Phones: Android's table doesn't scroll sideways, so twelve columns ran off the screen. Three
 # larger ones instead; tapping a device shows the rest in Details.
 PHONE_COLUMNS = ["IP", "Model", "Name"]
-ANY_PORT = "Any port"
+ANY_PORT = "Any interface"
 # What a device's right-click menu (and the Device menu) offers; None separates groups.
 DEVICE_ACTIONS = [("web", "Open Web UI"), ("ssh", "Open SSH…"), ("ping", "Ping"), ("latency", "Measure latency"),
                   ("rescan", "Rescan device"),
@@ -146,8 +146,11 @@ class OpenDiscoApp(toga.App):
         self.settings_path = Path(self.paths.data) / "settings.json"
         self.known_hosts = Path(self.paths.data) / "known_hosts"  # SSH host keys, filed by MAC
         vulns.CACHE_DIR = Path(self.paths.data)  # where a downloaded CVE list is kept (vulns.refresh)
-        from opendisco import devicetools  # its SSH parts load only when used
-        devicetools.BACKUP_ROOT = Path(self.paths.data) / devicetools.BACKUP_FOLDER  # config backups, by MAC
+        try:  # config backups, by MAC (its SSH parts load only when used; a build may leave it out)
+            from opendisco import devicetools
+            devicetools.BACKUP_ROOT = Path(self.paths.data) / devicetools.BACKUP_FOLDER
+        except ImportError:
+            pass
         self.settings = self._load_settings()
         self.hidden = self.settings.setdefault("hidden", {})  # device key (its MAC) -> what it was
         self.device_notes = records.Notes(self.paths.data)  # a note per device, by MAC (notes.json)
@@ -160,7 +163,7 @@ class OpenDiscoApp(toga.App):
         self.phone_ui = phone_ui = phone.supported(self.caps["platform"])
         self.mode = toga.Selection(items=[m[0] for m in self.modes], on_change=self.on_mode,
                                    style=Pack(flex=1) if mobile else Pack(width=190))
-        self.port_names = self._ports()  # what the Port list shows -> the interface name
+        self.port_names = self._ports()  # what the Interface list shows -> the interface name
         self.port = toga.Selection(items=list(self.port_names), style=Pack(width=230))
         self.start_button = toga.Button("Start", on_press=self.on_start, style=Pack(width=90))
         self.stop_button = toga.Button("Stop", on_press=self.on_stop, enabled=False,
@@ -239,7 +242,7 @@ class OpenDiscoApp(toga.App):
         else:
             controls = [toga.Label("Mode"), self.mode]
             if not mobile:
-                controls += [toga.Label("Port"), self.port]
+                controls += [toga.Label("Interface"), self.port]
             controls += [self.start_button, self.stop_button] + ([] if mobile else [self.mode_help])
             options = [self.aliases, self.deep] if not mobile else [self.deep]
             if self.offers_listening:
@@ -340,7 +343,7 @@ class OpenDiscoApp(toga.App):
         return path
 
     def _ports(self) -> dict:
-        """The Port list: {what it shows: interface name}. Windows adapter names can have spaces
+        """The Interface list: {what it shows: interface name}. Windows adapter names can have spaces
         ("Ethernet 2"), so the name is looked up rather than cut from what's shown."""
         try:
             links = core.hardware_links(core.local_interfaces())
