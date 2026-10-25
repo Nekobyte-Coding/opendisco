@@ -378,7 +378,10 @@ class OpenDiscoApp(toga.App):
 
     def _size_columns(self, *args, **kwargs):
         """Windows: toga sizes the table's columns once, before the window has its width, which left
-        them as slivers with no headings. Spread them over the table's width instead."""
+        them as slivers with no headings. Each column gets the width its heading and longest text
+        need, and what's left of the table's width is shared by weight; when the table is too narrow
+        for that, the columns with long texts give up width first. Runs as the rows change, but
+        measures only when the table's width or a column's longest text has changed."""
         if self.caps["platform"] != "windows":
             return
         try:
@@ -386,9 +389,28 @@ class OpenDiscoApp(toga.App):
             width = view.ClientSize.Width
             if width < 200:
                 return
+            rows = list(self.table.data)[:300]
+            texts = [[str(getattr(r, accessor, "") or "") for r in rows] for accessor in ACCESSORS]
+            longest = [max(column, key=len, default="") for column in texts]
+            if getattr(self, "_columns_sized", None) == (width, longest):
+                return
+            self._columns_sized = (width, longest)
+            from System.Windows.Forms import TextRenderer
+            font, pad = view.Font, 16
+            least = [TextRenderer.MeasureText(column.Text, font).Width + pad for column in view.Columns]
+            need = [max(head, max((TextRenderer.MeasureText(t, font).Width  # the few longest stand for all
+                                   for t in sorted(set(column), key=len)[-5:] if t), default=0) + pad)
+                    for head, column in zip(least, texts)]
+            need[0] += 20  # the first column leaves room for an icon
             weights = self.COLUMN_WEIGHTS[:view.Columns.Count]
-            for column, weight in zip(view.Columns, weights):
-                column.Width = int(width * weight / sum(weights))
+            if sum(need) <= width:
+                spare = width - sum(need)
+                sizes = [n + spare * w / sum(weights) for n, w in zip(need, weights)]
+            else:
+                spare, extra = max(0, width - sum(least)), [n - h for n, h in zip(need, least)]
+                sizes = [h + (spare * e / sum(extra) if sum(extra) else 0) for h, e in zip(least, extra)]
+            for column, size in zip(view.Columns, sizes):
+                column.Width = int(size)
         except Exception:
             pass  # cosmetic
 
@@ -706,6 +728,7 @@ class OpenDiscoApp(toga.App):
                         setattr(row, attr, value)
         else:
             self.table.data = [dict(values, key=key) for key, values in rows]
+        self._size_columns()  # Windows: to what the rows hold now
         if self.phone_ui:  # iOS forgets the tapped row whenever a row changes
             phone.keep_selection(self, selected)
 
