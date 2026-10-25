@@ -1635,7 +1635,7 @@ class OpenDiscoApp(toga.App):
             failed = self._after_update()
             if self.settings.get("check_app_updates", True) and not failed:  # not the same offer straight away
                 self._check_for_update(quiet=True)
-        if self.settings.get("check_cve_updates", True):
+        if self.settings.get("check_cve_updates", True) and vulns.refresh_due(self.paths.data):  # about daily
             self._refresh_cves()
 
     def _refresh_cves(self):

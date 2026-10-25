@@ -276,9 +276,16 @@ def _applies(a: dict, family: str, model: str, key) -> bool:
             return False
     if a.get("before"):
         return key < version_key(a["before"])
-    if a.get("through"):
-        return key <= version_key(a["through"])
+    if a.get("through"):  # as precise as the bound: "through 5.1.33" includes 5.1.33.44
+        bound, n = version_key(a["through"]), _precision(a["through"])
+        return (key[0][:n], key[1]) <= (bound[0][:n], bound[1])
     return False
+
+
+def _precision(text) -> int:
+    """How many numbers a version gives (up to 4): 3 for "5.1.33", 4 for "6.5.28.1"."""
+    m = _VERSION.match(str(text).strip())
+    return min(4, len(m.group(1).split("."))) if m else 4
 
 
 def check(d):
@@ -970,14 +977,24 @@ def fetch_nvd(log=None, timeout: float = 60.0, request_timeout: float = 15.0) ->
                 if cve.get("id"):
                     found[cve["id"]] = cve
             total, size = page.get("totalResults", 0), page.get("resultsPerPage", 0)
-            if not total:
-                raise ValueError(f"the NVD found nothing for {query}")
             start += size
             if not size or start >= total:
                 break
         if log:
             log(f"  {query.split('=')[-1]}: {total} CVEs")
+    if not found:  # one query finding nothing is fine; all of them is the NVD answering wrongly
+        raise ValueError("the NVD found nothing")
     return list(found.values())
+
+
+def refresh_due(cache_dir, hours: float = 20) -> bool:
+    """Whether the downloaded list is older than this (or missing): the launch check refreshes at
+    most about once a day, sparing the NVD's rate limit and phones' data."""
+    try:
+        age = time.time() - (Path(cache_dir) / CACHE_NAME).stat().st_mtime
+    except OSError:
+        return True
+    return not 0 <= age < hours * 3600
 
 
 # The community site's own API, not a documented one: the list of bulletins, then each one's text
