@@ -30,17 +30,17 @@ It comes two ways:
 
 Installers are on the [Releases](https://github.com/Nekobyte-Coding/opendisco/releases) page.
 
-| Version | What's new | Released for | Builds added later | Known issues (fixed in) |
-|---|---|---|---|---|
+| Version | What's new | Released for | Known issues (fixed in) |
+|---|---|---|---|
 | 1.5.0 | Find HTTP/HTTPS/SSH port and Scan all ports for one device, and an HTTP column. Status in plain words with an issue list. A CVE check of each device's firmware, updated from the NVD. TFTP recovery detection. Device tools over SSH: firmware updates, config editor, change login, Scan from device, devices behind other devices. Settings and self-update. A new phone layout | macOS, Windows, Linux, Android; iOS (beta, no public download yet) | | |
 | 1.4.2 | "Probe listed networks" no longer stays on after Direct or Trunk VLANs. Start waits for Keep addresses. Android names the export file it saved. Clearer networks-file errors | macOS, Windows, Linux, Android | | macOS: a scan can find nothing on a Mac that has an older OpenDisco (another app ID) or another app built with Briefcase (1.5.0) |
 | 1.4.1 | Android release-signed, with a three-column list. Windows fixes: Keep addresses, adapter names with spaces, the About version, the data folder. CSV exports open right in Excel | macOS, Windows, Linux, Android | | "Probe listed networks" stays on after Direct or Trunk VLANs, so the next scan adds temporary addresses (1.4.2). Android: a second export in the same minute is reported under the first one's file name (1.4.2) |
 | 1.4.0 | Renamed OpenDisco, Apache 2.0 license. Windows sniffs, probes VLANs and adds temporary addresses (Npcap). First Android release. The Windows app opens again | macOS, Windows, Linux, Android | | Windows: Keep addresses fails, and a Port whose adapter name has a space (Ethernet 2) isn't the one scanned. Android: Export does nothing (1.4.1). "Probe listed networks" stays on after Direct or Trunk VLANs (1.4.2) |
 | 1.3.2 | First Linux release (.deb, .rpm, portable). A UCG Fiber's HTTPS port is read correctly | macOS, Windows, Linux | | Windows: the app doesn't open (1.4.0). Mac and Linux: "Probe listed networks" stays on after Direct or Trunk VLANs (1.4.2) |
-| 1.3.1 | Popup windows open over the app. Open Web UI uses the port the device reports | macOS, Windows | Linux, without the right-click menu | Windows: the app doesn't open (1.4.0). A UCG Fiber's port 7080 is shown as its HTTPS port (1.3.2). Mac and Linux: "Probe listed networks" stays on after Direct or Trunk VLANs (1.4.2) |
-| 1.3.0 | Right-click menu and Terminal tab (SSH and ping sessions). HTTPS and SSH ports from what each device reports, with typo checks. Hidden devices | macOS, Windows | Linux, without the right-click menu | Same as 1.3.1 |
-| 1.2.0 | Packets tab with each device's packets, decoded and checked for damage. Missed-reply and error counters. The unicast sweep finds UniFi OS gear | macOS, Windows | Linux | Windows: the table's columns open too narrow to read (1.4.0). UCG Fiber port 7080 (1.3.2). Mac and Linux: "Probe listed networks" stays on after Direct or Trunk VLANs (1.4.2) |
-| 1.1.0 | First app release, for macOS and Windows: a window over the command-line scanner, with Touch ID for sudo and HTTPS and SSH port columns | macOS, Windows | Linux | Same as 1.2.0, and the unicast sweep misses UniFi OS gear (1.2.0) |
+| 1.3.1 | Popup windows open over the app. Open Web UI uses the port the device reports | macOS, Windows | Windows: the app doesn't open (1.4.0). A UCG Fiber's port 7080 is shown as its HTTPS port (1.3.2). Mac and Linux: "Probe listed networks" stays on after Direct or Trunk VLANs (1.4.2) |
+| 1.3.0 | Right-click menu and Terminal tab (SSH and ping sessions). HTTPS and SSH ports from what each device reports, with typo checks. Hidden devices | macOS, Windows | Same as 1.3.1 |
+| 1.2.0 | Packets tab with each device's packets, decoded and checked for damage. Missed-reply and error counters. The unicast sweep finds UniFi OS gear | macOS, Windows | Windows: the table's columns open too narrow to read (1.4.0). UCG Fiber port 7080 (1.3.2). Mac and Linux: "Probe listed networks" stays on after Direct or Trunk VLANs (1.4.2) |
+| 1.1.0 | First app release, for macOS and Windows: a window over the command-line scanner, with Touch ID for sudo and HTTPS and SSH port columns | macOS, Windows | Same as 1.2.0, and the unicast sweep misses UniFi OS gear (1.2.0) |
 
 - **Rebuilds:** every installer before 1.4.0 was rebuilt in October 2026 from that version's
   own source, under the current name, license and app ID, with the default networks list cut
@@ -165,7 +165,7 @@ warns about any device that isn't on one of them.
 tag VLANs, so the app only offers the modes the platform supports:
 
 | | Quick / Full scan | Sniff the wire | Temporary addresses | Trunk VLANs, Direct |
-|---|---|---|---|---|
+|---|---|---|---|
 | macOS, Linux | yes | yes | yes | yes |
 | Windows | yes | yes, with Npcap | yes, as administrator (Windows 10 2004 or later) | listens for VLANs; probes untagged only |
 | Android | yes: broadcast, multicast, subnet sweep, mDNS, SSDP | no | no | no |
