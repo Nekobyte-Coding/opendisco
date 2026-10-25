@@ -37,6 +37,8 @@ MODES = [
 ]
 COLUMNS = list(core.EXPORT_COLUMNS)
 ACCESSORS = [c.lower() for c in COLUMNS]
+# The columns that stay whole longest when the list is too narrow for them all (fit_columns)
+WHOLE = ("IP", "MAC")
 # Phones: Android's table doesn't scroll sideways, so twelve columns ran off the screen. Three
 # larger ones instead; tapping a device shows the rest in Details.
 PHONE_COLUMNS = ["IP", "Model", "Name"]
@@ -108,11 +110,20 @@ def _menu_target_class():
     return _MENU_TARGET
 
 
-def fit_columns(need: list, least: list, width: float) -> list:
+def fit_columns(need: list, least: list, width: float, keep=()) -> list:
     """Column widths for a table `width` wide, too narrow for what its columns hold (`need`): the
     widest columns give up width first, down to a common width, so addresses, MACs and the narrow
-    columns stay whole as long as they can. None goes below its heading (`least`) unless even
-    the headings don't fit, when they all shrink alike."""
+    columns stay whole as long as they can. The columns in `keep` (IP and MAC, by index) stay
+    whole while the others can give up width instead: a common width under an address's or a
+    MAC's (a small screen at 150%) cut them otherwise. None goes below its heading (`least`)
+    unless even the headings don't fit, when they all shrink alike."""
+    kept = sum(need[i] for i in keep)
+    rest = [i for i in range(len(need)) if i not in keep]
+    if keep and kept + sum(least[i] for i in rest) < width:
+        sizes = list(need)
+        for i, size in zip(rest, fit_columns([need[i] for i in rest], [least[i] for i in rest], width - kept)):
+            sizes[i] = size
+        return sizes
     if sum(least) >= width:
         return [w * width / sum(least) for w in least]
     low, high = 0.0, float(max(need))
@@ -493,7 +504,10 @@ class OpenDiscoApp(toga.App):
 
     def _first_frame(self) -> dict:
         """The main window's size, 1250×780: on Windows and Linux wider when the screen has room
-        (up to 1500, centred), since 1250 cut a scan's names, firmware and statuses short there."""
+        (up to 1500, centred), since 1250 cut a scan's names, firmware and statuses short there.
+        On a screen too small for 1250 (Windows at 150% on a 1512×949 one), at its top left: placed
+        where the system puts new windows, its right edge, with I agree and the close button, was
+        off the screen."""
         frame = {"size": (1250, 780)}
         if self.caps["platform"] not in ("windows", "linux"):
             return frame
@@ -505,6 +519,8 @@ class OpenDiscoApp(toga.App):
         if width > 1250:
             frame = {"size": (width, 780),
                      "position": ((screen.width - width) // 2, max(40, (screen.height - 780) // 3))}
+        else:
+            frame["position"] = (max(0, (screen.width - 1250) // 2), max(0, (screen.height - 780) // 3))
         return frame
 
     def _column_texts(self, titles) -> list:
@@ -560,7 +576,7 @@ class OpenDiscoApp(toga.App):
                 spare = width - sum(need)
                 sizes = [n + spare * w / sum(weights) for n, w in zip(need, weights)]
             else:
-                sizes = fit_columns(need, least, width)
+                sizes = fit_columns(need, least, width, [i for i, c in enumerate(view.Columns) if c.Text in WHOLE])
             for column, size in zip(view.Columns, sizes):
                 column.Width = int(size)
         except Exception:
@@ -602,7 +618,7 @@ class OpenDiscoApp(toga.App):
                 spare = width - sum(need)
                 widths = [n + spare * share / sum(shares) for n, share in zip(need, shares)]
             else:
-                widths = fit_columns(need, least, width)
+                widths = fit_columns(need, least, width, [i for i, t in enumerate(titles) if t in WHOLE])
             for column, w in zip(columns, widths):
                 column.set_expand(False)
                 column.set_sizing(Gtk.TreeViewColumnSizing.FIXED)
