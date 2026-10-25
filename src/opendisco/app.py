@@ -493,7 +493,10 @@ class OpenDiscoApp(toga.App):
 
     def _first_frame(self) -> dict:
         """The main window's size, 1250×780: on Windows and Linux wider when the screen has room
-        (up to 1500, centred), since 1250 cut a scan's names, firmware and statuses short there."""
+        (up to 1500, centred), since 1250 cut a scan's names, firmware and statuses short there.
+        On a screen too small for 1250 (Windows at 150% on a 1512×949 one), at its top left: placed
+        where the system puts new windows, its right edge, with I agree and the close button, was
+        off the screen."""
         frame = {"size": (1250, 780)}
         if self.caps["platform"] not in ("windows", "linux"):
             return frame
@@ -505,6 +508,8 @@ class OpenDiscoApp(toga.App):
         if width > 1250:
             frame = {"size": (width, 780),
                      "position": ((screen.width - width) // 2, max(40, (screen.height - 780) // 3))}
+        else:
+            frame["position"] = (max(0, (screen.width - 1250) // 2), max(0, (screen.height - 780) // 3))
         return frame
 
     def _column_texts(self, titles) -> list:
