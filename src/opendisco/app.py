@@ -6,9 +6,7 @@ Windows can't capture traffic, add addresses or tag VLANs. The iOS app doesn't u
 (Apple allows installs from the App Store, TestFlight or Xcode only) and has no SSH tools.
 """
 import asyncio
-import hashlib
 import json
-import re
 import shutil
 import textwrap
 import threading
@@ -21,7 +19,7 @@ import toga
 from toga.style import Pack
 from toga.style.pack import COLUMN, ROW
 
-from opendisco import FULL_NAME, __version__, core, health, phone, records, vulns
+from opendisco import FULL_NAME, __version__, core, health, phone, records, terms, vulns
 
 if core.platform_name() != "ios":  # left out of the iOS app (packaging/ios/build_ios.py)
     from opendisco import update
@@ -70,16 +68,8 @@ SETTINGS = {"check_app_updates": "Check for OpenDisco updates when opening",
 # What settings.json keeps; "update" remembers an update while the app restarts into it,
 # "deep_checks" is iOS's Deep checks switch (in Settings there) and "sweep_subnets" Settings' list
 # of subnets every scan also sweeps (records.SWEEP_KEY).
-# The terms of use, agreed to the first time each version opens: kept as the version, when (UTC)
-# and the SHA-256 of the text shown. TERMS.md at the top of the repository is the same file.
-TERMS_KEY = "terms_accepted"
-TERMS_FILE = Path(__file__).parent / "resources" / "TERMS.md"
-TERMS_TITLE = "OpenDisco Terms of Use"
-TERMS_PROMPT = 'Selecting "I agree" accepts these terms, including the sections on risk, liability, indemnity and release.'
-TERMS_IOS = "Anyone who does not agree must close OpenDisco and delete it from this device."
-TERMS_AGREE, TERMS_QUIT = "I agree", "Quit"
 SAVED_SETTINGS = ("hidden", "ssh_user", "skip_port_warning", "device_logins", *SETTINGS, "update", "deep_checks",
-                  records.SWEEP_KEY, TERMS_KEY)
+                  records.SWEEP_KEY)
 # Where earlier versions kept their data, by the parts of the data folder's path that changed:
 # folder name now -> patterns for its earlier names. macOS names the folder after the app ID
 # (earlier IDs ended .opendisco or .ubnt-discover); Windows after the publisher (until 1.4.1,
@@ -116,14 +106,6 @@ def _menu_target_class():
 
         _MENU_TARGET = OpenDiscoDeviceMenuTarget
     return _MENU_TARGET
-
-
-def terms_text() -> str:
-    """The terms of use as plain text, for this version: TERMS.md without its title (the window
-    shows it) and its Markdown headings' #."""
-    text = TERMS_FILE.read_text(encoding="utf-8").replace("{version}", __version__)
-    text = re.sub(r"\A#[^\n]*\n+", "", text)
-    return re.sub(r"^#+\s*", "", text, flags=re.MULTILINE)
 
 
 def fit_columns(need: list, least: list, width: float) -> list:
@@ -179,6 +161,7 @@ class OpenDiscoApp(toga.App):
         self._panels = []  # Android: (page, what Back does, title, subtitle) over the device list, newest last
         self.back_callback = None  # Android: takes Back while a page is open
         self._move_old_data()
+        self._private_data()
         self.networks_path = self._networks_file()
         self.settings_path = Path(self.paths.data) / "settings.json"
         self.known_hosts = Path(self.paths.data) / "known_hosts"  # SSH host keys, filed by MAC
@@ -334,7 +317,7 @@ class OpenDiscoApp(toga.App):
         self._watch_tab_labels()
         self.loop.call_later(0.3, self._align_tab_labels)
         self.loop.call_later(0.3, self._fit_safe_area)
-        if (self.settings.get(TERMS_KEY) or {}).get("version") == __version__:
+        if terms.agreed(self.paths.data):
             self._opened()
         else:
             self._ask_terms()
@@ -347,8 +330,8 @@ class OpenDiscoApp(toga.App):
 
     # -- terms of use -------------------------------------------------------
     def _ask_terms(self):
-        """The first time each version opens, its terms of use, to be agreed to before anything
-        else: in place of the main window's content, the app's own menu items and title-bar
+        """The first time each version opens (or its terms change), the terms of use, to be agreed
+        to before anything else (terms.py keeps the record): in place of the main window's content, the app's own menu items and title-bar
         buttons off meanwhile (closing the window, Quit or Android's Back leaves); on iOS over
         everything, with I agree only, as an iOS app can't quit itself."""
         ios = self.caps["platform"] == "ios"
@@ -360,13 +343,11 @@ class OpenDiscoApp(toga.App):
             command.enabled = False
         close = []
 
-        text = terms_text()
-
         def agreed(widget, **kwargs):
-            self.settings[TERMS_KEY] = {"version": __version__,
-                                        "agreed": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
-                                        "sha256": hashlib.sha256(text.encode("utf-8")).hexdigest()}
-            self._save_settings()
+            try:
+                terms.record(self.paths.data, "app", self.caps["platform"], "beta" if ios else "github")
+            except OSError as e:  # accepted all the same: asked again next time
+                self._append_log(f"The terms' acceptance couldn't be saved: {e}", False)
             self.terms_waiting = False
             for command, enabled in held.items():
                 command.enabled = enabled
@@ -378,17 +359,17 @@ class OpenDiscoApp(toga.App):
             self.loop.call_later(0.3, self._align_tab_labels)
             self.loop.call_later(0.3, self._fit_safe_area)
 
-        agree = toga.Button(TERMS_AGREE, on_press=agreed)
+        agree = toga.Button(terms.AGREE, on_press=agreed)
         buttons = [agree]
         if not ios:  # in each system's order: Windows puts going ahead first
-            leave = toga.Button(TERMS_QUIT, on_press=lambda widget, **kwargs: self.request_exit())
+            leave = toga.Button(terms.QUIT, on_press=lambda widget, **kwargs: self.request_exit())
             buttons = [agree, leave] if self.caps["platform"] == "windows" else [leave, agree]
         buttons.insert(0, toga.Box(style=Pack(flex=1)))
         width = 46 if self.caps["mobile"] else 110
         page = toga.Box(style=Pack(direction=COLUMN, flex=1, margin=14, gap=10), children=[
-            toga.Label(TERMS_TITLE, style=Pack(font_weight="bold", font_size=18)),
-            toga.MultilineTextInput(value=text, readonly=True, style=Pack(flex=1)),
-            toga.Label(textwrap.fill(TERMS_PROMPT + (f" {TERMS_IOS}" if ios else ""), width)),
+            toga.Label(terms.TITLE, style=Pack(font_weight="bold", font_size=18)),
+            toga.MultilineTextInput(value=terms.shown(), readonly=True, style=Pack(flex=1)),
+            toga.Label(textwrap.fill(terms.PROMPT + (f" {terms.IOS_NOTE}" if ios else ""), width)),
             toga.Box(style=Pack(direction=ROW, gap=8), children=buttons)])
         if self.phone_ui:
             phone.fit_panel(self, page)
@@ -398,13 +379,21 @@ class OpenDiscoApp(toga.App):
         else:
             self.main_window.content = page
 
-    def terms(self, *args, **kwargs):
-        """Help > Terms of use… (phones: in Settings): the terms agreed to, to read again."""
-        text = toga.MultilineTextInput(value=terms_text(), readonly=True, style=Pack(flex=1))
-        done = toga.Button("Done", on_press=lambda widget, **kwargs: closing())
+    def show_terms(self, *args, **kwargs):
+        """Terms of Use… beside About (phones: in Settings): the terms agreed to, to read again."""
+        self._show_text(terms.TITLE, terms.shown())
+
+    def show_licenses(self, *args, **kwargs):
+        """Open-source licenses… beside About (phones: in Settings): OpenDisco's notice, and the
+        licenses of what each build bundles."""
+        self._show_text("Open-source licenses", terms.licenses())
+
+    def _show_text(self, title, value):
+        text = toga.MultilineTextInput(value=value, readonly=True, style=Pack(flex=1))
+        done = toga.Button("Close", on_press=lambda widget, **kwargs: closing())
         content = toga.Box(style=Pack(direction=COLUMN, flex=1, margin=14, gap=10), children=[
             text, toga.Box(style=Pack(direction=ROW), children=[toga.Box(style=Pack(flex=1)), done])])
-        closing = self._show_panel(TERMS_TITLE, content, (760, 640), resizable=True)
+        closing = self._show_panel(title, content, (760, 640), resizable=True)
 
     # -- set-up helpers -----------------------------------------------------
     def _load_settings(self) -> dict:
@@ -418,6 +407,18 @@ class OpenDiscoApp(toga.App):
             self.settings_path.parent.mkdir(parents=True, exist_ok=True)
             self.settings_path.write_text(json.dumps({k: v for k, v in self.settings.items()
                                                       if k in SAVED_SETTINGS}, indent=1), encoding="utf-8")
+        except OSError:
+            pass
+
+    def _private_data(self):
+        """macOS and Linux: the data folder (config backups with password hashes and secrets,
+        remembered device lists, notes) readable by this account only. Windows' is per-user."""
+        if self.caps["platform"] not in ("macos", "linux"):
+            return
+        try:
+            data = Path(self.paths.data)
+            data.mkdir(parents=True, exist_ok=True)
+            data.chmod(0o700)
         except OSError:
             pass
 
@@ -1990,8 +1991,11 @@ class OpenDiscoApp(toga.App):
                              text="Check for OpenDisco updates…", group=group, section=-1 if platform == "macos" else 0,
                              order=1)
         self.commands.add(check)
-        if not self.caps["mobile"]:
-            self.commands.add(toga.Command(self.terms, text="Terms of Use…", group=toga.Group.HELP, order=2))
+        if not self.caps["mobile"]:  # beside About (phones: in Settings)
+            section = -1 if platform == "macos" else 0
+            self.commands.add(
+                toga.Command(self.show_terms, text="Terms of Use…", group=group, section=section, order=2),
+                toga.Command(self.show_licenses, text="Open-source licenses…", group=group, section=section, order=3))
         if not self.phone_ui:
             settings = toga.Command.standard(self, toga.Command.PREFERENCES, text="Settings…")
             self.commands.add(settings or toga.Command(lambda command, **kwargs: self.preferences(), text="Settings…"))
@@ -2183,8 +2187,10 @@ class OpenDiscoApp(toga.App):
         options = [*switches, toga.Label(textwrap.fill(vulns.NVD_NOTICE, 60), style=Pack(font_size=10)), *lists]
         finish = toga.Box(style=Pack(direction=ROW), children=[toga.Box(style=Pack(flex=1)),
                                                               toga.Button("Done", on_press=done)])
-        if self.caps["mobile"]:  # (desktops: Help > Terms of Use…)
-            finish.insert(0, toga.Button("Terms of Use", on_press=self.terms))
+        if self.caps["mobile"]:  # (desktops: beside About)
+            options.append(toga.Box(style=Pack(direction=ROW, gap=8), children=[
+                toga.Button("Terms of Use", on_press=self.show_terms),
+                toga.Button("Open-source licenses", on_press=self.show_licenses)]))
         size = (760, 740) if self.caps["aliases"] else (560, 480)
         room = self._screen_height()
         scrolls = bool(room) and room < size[1] + 40
@@ -2286,6 +2292,7 @@ class OpenDiscoApp(toga.App):
         heading = f"OpenDisco {release.version} is out; this is {__version__}."
         if release.title not in (release.version, f"v{release.version}", f"OpenDisco {release.version}"):
             heading += f"\n{release.title}"
+        heading += f"\nOpenDisco {release.version} shows its terms of use for acceptance when it first opens."
         notes = toga.MultilineTextInput(readonly=True, value=update.excerpt(release.notes) or "No release notes.",
                                         style=Pack(flex=1, font_size=12 if self.caps["mobile"] else 11))
 
@@ -2305,6 +2312,8 @@ class OpenDiscoApp(toga.App):
             buttons = [toga.Button("Release notes", on_press=lambda w, **kwargs: webbrowser.open(release.page)),
                        not_now, toga.Button("Update", on_press=lambda w, **kwargs: finish("update"))]
         if not self.caps["mobile"]:  # the answers on the right
+            online = terms.ONLINE.format(version=release.version)
+            buttons.insert(0, toga.Button("Read the terms", on_press=lambda w, **kwargs: webbrowser.open(online)))
             buttons.insert(len(buttons) - 2, toga.Box(style=Pack(flex=1)))
         content = toga.Box(style=Pack(direction=COLUMN, flex=1, gap=10, margin=0 if self.caps["mobile"] and not self.phone_ui else 14),
                            children=[toga.Label(self._wrap(heading)), notes,

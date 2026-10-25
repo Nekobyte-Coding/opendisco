@@ -51,7 +51,7 @@ from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
 
 from opendisco import __version__  # one version for the app, the CLI and the installers
-from opendisco import vulns
+from opendisco import terms, vulns
 from opendisco import health  # the latest firmware and latency (it imports core back)
 
 UBNT_PORT = 10001
@@ -4953,6 +4953,10 @@ def parse_args(argv=None):
                         "and used when it's newer than the built-in list), then exit")
     o.add_argument("--debug", action="store_true", help=argparse.SUPPRESS)
     o.add_argument("--version", action="version", version=f"%(prog)s {__version__}")
+    o.add_argument("--terms", action="store_true", help="print OpenDisco's terms of use and exit")
+    o.add_argument("--accept-terms", action="store_true",
+                   help="accept OpenDisco's terms of use (read them first with --terms); for scripts and other "
+                        "runs without a terminal")
     a = p.add_argument_group("temporary IP aliases (sudo on macOS/Linux; on Windows, run as administrator)",
                              "Newer firmware only answers discovery from its own subnet. These options "
                              "briefly give each active interface an address in the networks listed in the "
@@ -5601,6 +5605,11 @@ def main(argv=None) -> int:
         os.system("")  # turns on ANSI escape handling in the Windows console
     Style.on = sys.stdout.isatty() and not opts.no_color and not opts.json and "NO_COLOR" not in os.environ
     log = (lambda msg: print(msg, file=sys.stderr, flush=True))
+    if opts.terms:
+        print(terms.text())
+        return 0
+    if not terms.cli_gate(vulns.default_data_dir(), opts.accept_terms):  # the app's record: accepted once for both
+        return 2
     vulns.CACHE_DIR = vulns.CACHE_DIR or vulns.default_data_dir()  # the app's data folder: one list for both
     if opts.update_cves:
         log("Downloading the CVE list from the NVD...")

@@ -24,7 +24,7 @@ import toga
 from toga.style import Pack
 from toga.style.pack import COLUMN, ROW
 
-from opendisco import core, credstore, devicetools, sshrun, terminal
+from opendisco import core, credstore, devicetools, sshrun, terminal, terms
 
 ACTIONS = ("scan_from", "fw_check", "fw_update", "config", "login", "backup", "backups", "upload", "reboot", "locate",
            "forget_login")
@@ -615,6 +615,7 @@ async def update_flow(app, d, check=None):
         if devicetools.family(d) in ("unifi", "unifi-os"):
             message += ("\n\nUbiquiti's help center describes updating over SSH as a last resort, for when the UniFi "
                         "app can't update the device.")
+        message += "\n\n" + terms.risk("firmware")
         if not await app.main_window.dialog(toga.QuestionDialog("Install firmware?", message)):
             return
         await _install(app, d, check, login)
@@ -802,7 +803,7 @@ class ConfigEditor:
         what = ("Apply the config on" if apply else f"Save the config to {boot} on") + f" {_label(self.d)}?"
         detail = (f"{changed} line(s) changed. " if changed else "Nothing changed in the editor. ") + (
             f"It's applied now and saved to {boot}; the device restarts what the changes affect." if apply
-            else "It takes effect at the next reboot.")
+            else "It takes effect at the next reboot.") + "\n\n" + terms.risk("apply" if apply else "save")
         if not await self.window.dialog(toga.QuestionDialog(what, detail)):
             return
         self._enable(False)
@@ -864,6 +865,7 @@ async def login_flow(app, d):
         if pending:
             message += ("\n\nIts config also has changes that aren't applied yet (made in its web UI, or saved "
                         "without applying): they're applied with it.")
+        message += "\n\n" + terms.risk("login")
         if not await app.main_window.dialog(toga.QuestionDialog("Change login?", message)):
             return
         new = sshrun.Login(login.ip, login.port, new_user, new_password, login.alias, login.known_hosts,
@@ -1205,6 +1207,7 @@ async def _diff_window(app, d, kind, current, text, source, tools):
     note = (f"Save writes it to {boot}: it takes effect at the next reboot. Apply now also applies it: the device "
             "restarts what the changes affect, and the connection to it can drop for a moment. Either way the "
             "device's current config is kept as a backup first.")
+    note += f"\n{terms.RISKS['upload']} {terms.RISKS['apply' if tools['apply'] else 'save']} {terms.TESTED}"
     if tools["why"]:
         note += f"\n{tools['why']}"
 
@@ -1250,6 +1253,7 @@ async def reboot_flow(app, d):
             "through it stops meanwhile.")
     if hops:
         text += f" It's reached through {_through(hops)}."
+    text += "\n\n" + terms.risk("reboot")
     if not await app.main_window.dialog(toga.QuestionDialog(f"Reboot {d.ip}?", text)):
         return
     login = await ask_route(app, d, "Log in to reboot it.")

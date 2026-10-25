@@ -19,7 +19,7 @@ import toga
 from toga.style import Pack
 from toga.style.pack import COLUMN, ROW
 
-from opendisco import core, devicetools, phone, phonessh
+from opendisco import core, devicetools, phone, phonessh, terms
 
 
 def _label(d) -> str:
@@ -142,6 +142,7 @@ async def _update(app, d, check):
     if devicetools.family(d) in ("unifi", "unifi-os"):
         message += ("\n\nUbiquiti's help center describes updating over SSH as a last resort, for when the UniFi app "
                     "can't update the device.")
+    message += "\n\n" + terms.risk("firmware")
     if not await _alert(app, "Install firmware?", message, question=True):
         return
     stop = threading.Event()
@@ -327,7 +328,7 @@ class ConfigPage:
         what = ("Apply the config on" if apply else f"Save the config to {boot} on") + f" {_label(self.d)}?"
         detail = (f"{changed} line(s) changed. " if changed else "Nothing changed here. ") + (
             f"It's applied now and saved to {boot}; the device restarts what the changes affect." if apply
-            else "It takes effect at the next reboot.")
+            else "It takes effect at the next reboot.") + "\n\n" + terms.risk("apply" if apply else "save")
         if not await _alert(app, what, detail, question=True):
             return
         self._enable(False)
@@ -378,6 +379,7 @@ async def change_login(app):
     if pending:
         message += ("\n\nIts config also has changes that aren't applied yet (made in its web UI, or saved without "
                     "applying): they're applied with it.")
+    message += "\n\n" + terms.risk("login")
     if not await _alert(app, "Change login?", message, question=True):
         _say(app, "The login wasn't changed.")
         return
@@ -672,7 +674,8 @@ async def _changes_page(app, d, kind, current, text, source, tools):
                else f"{source}: no differences, the device has this config already.")
     note = (f"Save writes it to {boot}, for the next reboot. Apply now also applies it: the device restarts what the "
             "changes affect, and the connection can drop for a moment. Either way its current config is kept as a "
-            "backup first.") + (f" {tools['why']}" if tools["why"] else "")
+            "backup first.") + (f" {terms.RISKS['upload']} {terms.RISKS['apply' if tools['apply'] else 'save']} "
+                                f"{terms.TESTED}") + (f" {tools['why']}" if tools["why"] else "")
     view = toga.MultilineTextInput(readonly=True, value=diff or "(no differences)",
                                    style=Pack(flex=1, font_family="monospace", font_size=10))
 
@@ -712,6 +715,7 @@ async def reboot(app):
             "through it stops meanwhile.")
     if hops:
         text += f" It's reached through {', '.join(h.ip or h.mac for h in hops)}."
+    text += "\n\n" + terms.risk("reboot")
     if not await _alert(app, f"Reboot {d.ip}?", text, question=True):
         return
     login = await phone.ask_route(app, d, "Log in to reboot it.")
