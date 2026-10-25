@@ -13,8 +13,10 @@ import argparse
 import plistlib
 import re
 import shutil
+import struct
 import subprocess
 import sys
+import uuid
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -37,6 +39,41 @@ def mac_cpus() -> str:
     archs = set(subprocess.run(["lipo", "-archs", str(binary)], capture_output=True, text=True,
                                check=True).stdout.split())
     return "universal" if {"arm64", "x86_64"} <= archs else "apple-silicon" if "arm64" in archs else "intel"
+
+
+LC_UUID = 0x1B
+FAT_MAGIC, MH_MAGIC_64 = 0xCAFEBABE, 0xFEEDFACF
+
+
+def give_own_uuid(binary: Path, bundle_id: str) -> list:
+    """Give the app's launcher its own Mach-O UUID, one per CPU, the same in every version.
+
+    Briefcase builds every macOS app from one prebuilt launcher, so they all carry the same UUID,
+    and macOS's Local Network privacy finds apps by it: with an older OpenDisco (another app ID) or
+    any other Briefcase app on the Mac, it applied that app's setting to OpenDisco, showed no
+    prompt, and blocked its traffic, so scans found nothing. Returns the new UUIDs."""
+    data = bytearray(binary.read_bytes())
+    if struct.unpack_from(">I", data, 0)[0] == FAT_MAGIC:  # universal: one Mach-O per CPU
+        count = struct.unpack_from(">I", data, 4)[0]
+        slices = [struct.unpack_from(">iiIII", data, 8 + 20 * n)[2] for n in range(count)]
+    else:
+        slices = [0]
+    done = []
+    for start in slices:
+        magic, cputype, _sub, _type, ncmds = struct.unpack_from("<IiiII", data, start)
+        if magic != MH_MAGIC_64:
+            raise SystemExit(f"error: {binary} isn't a 64-bit Mach-O")
+        at = start + 32  # load commands follow the 64-bit header
+        for _ in range(ncmds):
+            cmd, size = struct.unpack_from("<II", data, at)
+            if cmd == LC_UUID:
+                new = uuid.uuid5(uuid.NAMESPACE_DNS, f"{bundle_id}.launcher.{cputype}")
+                data[at + 8:at + 24] = new.bytes
+                done.append(str(new).upper())
+                break
+            at += size
+    binary.write_bytes(bytes(data))
+    return done
 
 
 def main() -> int:
@@ -72,6 +109,12 @@ def main() -> int:
             # folders) on their first line; the app doesn't use them. Drop them before signing.
             for scripts in (MIRROR / "build").glob("*/macos/app/*.app/Contents/Resources/app_packages/bin"):
                 shutil.rmtree(scripts)
+            for app in (MIRROR / "build").glob("*/macos/app/*.app"):  # before signing, which covers it
+                with open(app / "Contents" / "Info.plist", "rb") as f:
+                    info = plistlib.load(f)
+                uuids = give_own_uuid(app / "Contents" / "MacOS" / info["CFBundleExecutable"],
+                                      info["CFBundleIdentifier"])
+                print(f"Launcher UUIDs: {', '.join(uuids)}")
         subprocess.run([str(briefcase), step[0], "macOS", *step[1:], "--no-input"], cwd=MIRROR, check=True)
 
     dmg = max((MIRROR / "dist").glob("*.dmg"), key=lambda p: p.stat().st_mtime)
