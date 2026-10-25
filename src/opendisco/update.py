@@ -12,7 +12,6 @@ import platform
 import plistlib
 import re
 import shutil
-import ssl
 import subprocess
 import tarfile
 import tempfile
@@ -22,7 +21,7 @@ import urllib.request
 from dataclasses import dataclass
 from pathlib import Path
 
-from opendisco import __version__, core
+from opendisco import __version__, core, tls
 
 REPO = "Nekobyte-Coding/opendisco"
 API_URL = os.environ.get("OPENDISCO_UPDATE_URL") or f"https://api.github.com/repos/{REPO}/releases/latest"
@@ -66,52 +65,12 @@ def version_key(text: str) -> tuple:
 
 
 # -- talking to GitHub ---------------------------------------------------------------
-_TLS = None
-
-
-def _tls() -> ssl.SSLContext:
-    """Certificate-checked TLS. Briefcase's Python on macOS finds no root certificates of its own,
-    so it uses the system's. (Chaquopy on Android loads its own bundle; Android's folder is only
-    a fallback.)"""
-    global _TLS
-    if _TLS is None:
-        ctx = ssl.create_default_context()
-        if not ctx.cert_store_stats()["x509_ca"]:
-            for pem in _system_roots():
-                try:
-                    ctx.load_verify_locations(cadata=pem)
-                except (ssl.SSLError, ValueError):
-                    pass
-        _TLS = ctx
-    return _TLS
-
-
-def _system_roots() -> list:
-    """The system's root certificates as PEM text, where Python doesn't find them itself."""
-    plat = core.platform_name()
-    if plat == "macos":
-        try:
-            r = subprocess.run(["/usr/bin/security", "find-certificate", "-a", "-p",
-                                "/System/Library/Keychains/SystemRootCertificates.keychain"],
-                               capture_output=True, text=True, timeout=20)
-            return [r.stdout] if r.stdout else []
-        except (OSError, subprocess.SubprocessError):
-            return []
-    if plat == "android":
-        folder = Path("/system/etc/security/cacerts")
-        try:
-            return [p.read_text(encoding="ascii", errors="ignore") for p in folder.iterdir() if p.is_file()]
-        except OSError:
-            return []
-    return []
-
-
 def _get(url: str, timeout: float, accept: str = ""):
     headers = {"User-Agent": USER_AGENT}
     if accept:
         headers["Accept"] = accept
     request = urllib.request.Request(url, headers=headers)
-    opener = urllib.request.build_opener(urllib.request.HTTPSHandler(context=_tls()))
+    opener = urllib.request.build_opener(urllib.request.HTTPSHandler(context=tls.context()))
     return opener.open(request, timeout=timeout)
 
 

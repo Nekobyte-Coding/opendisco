@@ -1511,11 +1511,26 @@ class OpenDiscoApp(toga.App):
             self._refresh_cves()
 
     def _refresh_cves(self):
-        """STUB, connected when the CVE check (opendisco.vulns) is merged: call vulns.refresh()
-        in a worker thread to fetch fresh NVD data, and stay quiet when offline (a Log line),
-        like the update check. Runs at launch when Settings has "Check for new CVEs when
-        opening" on."""
-        self._append_log("CVE check: refreshing its data isn't connected yet.", status=False)  # STUB
+        """Fetch fresh CVE data from the NVD in the background (Settings: "Check for new CVEs when
+        opening"), so newly published CVEs are flagged without a new release. Offline, it's a Log
+        line; a newer list re-checks the devices on screen."""
+        def work():
+            updated = vulns.refresh(self.paths.data, lambda m: self._from_worker(self._append_log, m, False))
+            if updated:
+                self._from_worker(self._recheck_cves)
+
+        threading.Thread(target=work, daemon=True).start()
+
+    def _recheck_cves(self):
+        res = self.result
+        if res is None or self.running or not res.diag_args:
+            return
+        core.diagnose(res.inv, *res.diag_args)
+        res.devices = core.sorted_devices(res.inv)
+        self._show_devices(res.devices)
+        d = self._selected_device()
+        if d is not None:
+            self.details.value = core.render_details(d)
 
     def _check_for_update(self, quiet: bool):
         """Ask GitHub for the latest release, in the background. quiet (the launch check): only a
