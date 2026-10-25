@@ -265,10 +265,12 @@ class OpenDiscoApp(toga.App):
         # macOS re-centres the tab labels whenever it re-tiles the tab view (window resizes,
         # dragging the divider, tab changes, moving to another display), so snap a moment later.
         self.main_window.on_resize = lambda *args, **kwargs: (self.loop.call_later(0.05, self._align_tab_labels),
-                                                              self.loop.call_later(0.05, self._size_columns))
+                                                              self.loop.call_later(0.05, self._size_columns),
+                                                              self.loop.call_later(0.05, self._fit_safe_area))
         self.tabs.on_select = lambda *args, **kwargs: self.loop.call_later(0.05, self._align_tab_labels)
         self._watch_tab_labels()
         self.loop.call_later(0.3, self._align_tab_labels)
+        self.loop.call_later(0.3, self._fit_safe_area)
         self.loop.call_later(0.5, self._size_columns)
         self.loop.call_later(1.0, self._launch_checks)
 
@@ -462,6 +464,20 @@ class OpenDiscoApp(toga.App):
                 image = UIImage.systemImageNamed(self.TAB_SYMBOLS.get(str(tab.controller.tabBarItem.title), ""))
                 if image:
                     tab.controller.tabBarItem.image = image
+        except Exception:
+            pass  # cosmetic
+
+    def _fit_safe_area(self, *args, **kwargs):
+        """iOS: keep the content inside the screen's rounded corners and clear of the home bar
+        (and, turned sideways, the camera cutout). Toga lays it out to the very edges, where the
+        corners cut off Export and the status line."""
+        if self.caps["platform"] != "ios":
+            return
+        try:
+            inset = self.main_window._impl.native.safeAreaInsets
+            style = self.main_content.style
+            style.margin_bottom = max(10, int(inset.bottom))
+            style.margin_left, style.margin_right = max(10, int(inset.left)), max(10, int(inset.right))
         except Exception:
             pass  # cosmetic
 
