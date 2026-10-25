@@ -749,8 +749,11 @@ class Device:
     def fw_platform(self) -> str:
         """The platform its firmware is built for, as Ubiquiti's firmware server names it: the start
         of the firmware string ("XC" in XC.qca955x.v8.7.11..., "UXMAX" in UXMAX.ipq5322.v5.2.10...,
-        "e50" in e50.v2.0.9-hotfix.7...), else the platform field consoles send ("UCGF")."""
-        m = re.match(r"([A-Za-z0-9-]+)(?:\.[A-Za-z0-9_-]+)?\.v\d", self.info.get("firmware") or "")
+        "e50" in e50.v2.0.9-hotfix.7... and in EdgeRouter.ER-e50.v2.0.9-hotfix.7..., the way
+        EdgeOS names its own firmware), else the platform field consoles send ("UCGF")."""
+        firmware = self.info.get("firmware") or ""
+        m = (re.match(r"(?:EdgeRouter\.)?ER-(e\d{2,4})\.v\d", firmware)
+             or re.match(r"([A-Za-z0-9-]+)(?:\.[A-Za-z0-9_-]+)?\.v\d", firmware))
         return m.group(1) if m else (self.info.get("platform") or "")
 
     def merge(self, other: "Device") -> None:
