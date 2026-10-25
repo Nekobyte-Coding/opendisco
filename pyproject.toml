@@ -144,6 +144,8 @@ requires = [
 info."NSLocalNetworkUsageDescription" = "OpenDisco finds network devices on the local network by discovery broadcasts, multicast and a sweep of the subnet, and checks which ports they answer on."
 # Only standard HTTPS (the CVE list): no export compliance paperwork.
 info."ITSAppUsesNonExemptEncryption" = false
+# iPad: the app runs beside others (Split View, Stage Manager) at any width, not only full screen.
+info."UIRequiresFullScreen" = false
 # UBNT discovery's broadcasts and multicast (and mDNS, SSDP). Apple granted it for the app ID
 # com.michaelfroehlke.opendisco (team DGUTLQN548).
 entitlement."com.apple.developer.networking.multicast" = true

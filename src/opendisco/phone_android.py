@@ -430,6 +430,11 @@ def wide(app) -> bool:
         return False
 
 
+def side_by_side(app) -> bool:
+    """True on a tablet: the list stays in view beside the device page."""
+    return app.wide
+
+
 def _fit_list(app):
     """The device list as the iPhone shows it: the address over the model and name, a line
     between devices, no space for an icon, a ripple where it's tapped rather than a row that

@@ -34,8 +34,11 @@ This module is what both phones share. What each does natively is in phone_<plat
                                 new_password: no password manager taking it over
     end_editing(app)            finish typing, so a field's value has its last character
     done_bar(app, widget)       a way to put the keyboard away from a many-line text view
-    wide(app)                   True on a tablet: the list and the device page side by side
-    clear_selection(app)        a tablet: no row marked as the one beside the list (the scan's
+    side_by_side(app)           True while the device list stays in view beside the pages (a tablet)
+    wide(app)                   True on a tablet where this module lays out the list and the device
+                                page side by side (Detail; Android). iOS splits natively instead
+                                (side_by_side) and leaves this False
+    clear_selection(app)        with wide: no row marked as the one beside the list (the scan's
                                 Notes and Log are showing there)
 app.py makes the widgets every platform shares and calls in here; it all runs on the UI thread.
 """
@@ -84,8 +87,8 @@ def _nothing(*args, **kwargs):
 
 
 FALLBACKS = {"Picker": _SelectionPicker, "watch_keyboard": _nothing, "plain_entry": _nothing,
-             "end_editing": _nothing, "done_bar": _nothing, "wide": lambda app: False,
-             "clear_selection": _nothing}
+             "end_editing": _nothing, "done_bar": _nothing, "side_by_side": _nothing,
+             "wide": lambda app: False, "clear_selection": _nothing}
 
 
 def hook(app, name: str):
@@ -543,8 +546,8 @@ def _ssh_ended(app, key, reason: str):
 # -- Scan from device ------------------------------------------------------------------
 async def scan_from(app):
     """What the device knows of its neighbours (its stations on airOS, LLDP neighbours and ARP
-    table), added to the scan as on the desktop, then back to the list, where the devices found
-    through it are listed under it."""
+    table), added to the scan as on the desktop, then back to the list (unless it's in view
+    beside the page already), where the devices found through it are listed under it."""
     from opendisco import devicetools
     d, result = app._selected_device(), app.result
     if d is None or not result:
@@ -584,7 +587,7 @@ async def scan_from(app):
     app._tool_said(lines[0])
     if lines[1:]:
         say(app, "\n".join(lines[1:]))
-    if not app.wide:  # (a tablet shows the list already)
+    if not hook(app, "side_by_side")(app):
         app.page.close()  # back to the list
 
 
