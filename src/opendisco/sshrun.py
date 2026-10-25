@@ -28,6 +28,10 @@ IS_WINDOWS = terminal.IS_WINDOWS
 PASSPHRASE_PROMPT = re.compile(rb"(?i)passphrase for key[^\r\n]{0,200}:\s*$")
 PROGRESS = re.compile(rb"(\d{1,3})%")
 ANSI = re.compile(r"\x1b\[[0-9;?]*[ -/]*[@-~]|\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)|\x1b[()][0-9A-Za-z]|\x1b[=>]")
+# Windows' console (ConPTY) paints what it shows: a line can start with a cursor move to its row
+# instead of a line break, and spaces can be cursor moves to the right.
+ROW_MOVE = re.compile(r"\x1b\[\d*(?:;\d*)?[Hf]")
+RIGHT_MOVE = re.compile(r"\x1b\[(\d*)C")
 
 if not IS_WINDOWS:
     import pty
@@ -205,7 +209,15 @@ def run(login: Login, command: str, timeout: float = 60, stop: threading.Event |
     device that refuses to forward, the command runs on the last hop's own SSH client."""
     if login.nested:
         return _run_nested(login, command, timeout, stop)
-    code, out, err = _spawn(ssh_command(login, command, "-T"), login.passwords, timeout, timeout, stop=stop,
+    extra = []
+    if IS_WINDOWS:
+        # Windows' console draws what arrives a moment later, and can report the end before it has
+        # drawn the last line: the device stays on half a second, keeping the command's exit code.
+        command += (" " if command.rstrip().endswith("&") else "; ") + "rc=$?; sleep 0.5; exit $rc"
+        # -n: with its input a console, Windows' ssh can hang after the command has ended (about one
+        # run in five); the password is read from the console either way.
+        extra = ["-n"]
+    code, out, err = _spawn(ssh_command(login, command, "-T", *extra), login.passwords, timeout, timeout, stop=stop,
                             capture=True)
     failure = _failure(err, code, login)
     if failure and failure.kind == "forwarding" and login.via:
@@ -338,6 +350,7 @@ def _spawn_windows(argv, password, timeout, idle, on_tty, stop, env) -> tuple:
     watcher = _Watcher(password, lambda data: proc.write(data.decode("utf-8", "replace")), on_tty)
     try:
         start = last = time.monotonic()
+        ended = None
         while True:
             try:
                 data = chunks.get(timeout=0.2)
@@ -348,6 +361,10 @@ def _spawn_windows(argv, password, timeout, idle, on_tty, stop, env) -> tuple:
             if data:
                 last = time.monotonic()
                 watcher.feed(data)
+            elif not proc.isalive():  # ConPTY can keep the reader waiting after the program has ended
+                ended = ended or time.monotonic()
+                if time.monotonic() - ended > 0.6:  # what it printed last has been read by now
+                    break
             _check_limits(proc, stop, start, last, timeout, idle, watcher)
         proc.wait()
     except BaseException:
@@ -372,20 +389,24 @@ class _Watcher:
         if self.on_tty:
             self.on_tty(data)
         self.tail = (self.tail + data)[-400:]
-        if terminal.PASSWORD_PROMPT.search(self.tail):
-            who, password = terminal.prompt_password(self.password, self.tail)
+        shown = terminal.plain(self.tail)  # Windows' console ends a prompt with escapes
+        if terminal.PASSWORD_PROMPT.search(shown):
+            who, password = terminal.prompt_password(self.password, shown)
             self.tail = b""
             if password and self.typed.get(who, 0) < 2:
                 self.typed[who] = self.typed.get(who, 0) + 1
                 self.write((password + "\r").encode("utf-8"))
             else:
                 self.unanswered = True
-        elif PASSPHRASE_PROMPT.search(self.tail):
+        elif PASSPHRASE_PROMPT.search(shown):
             self.tail = b""
             self.write(b"\r")
 
     def text(self) -> str:
-        return ANSI.sub("", self.seen.decode("utf-8", "replace")).replace("\r\n", "\n").replace("\r", "\n")
+        shown = self.seen.decode("utf-8", "replace")
+        if IS_WINDOWS:
+            shown = ROW_MOVE.sub("\n", RIGHT_MOVE.sub(lambda m: " " * int(m.group(1) or 1), shown))
+        return ANSI.sub("", shown).replace("\r\n", "\n").replace("\r", "\n")
 
 
 def _check_limits(proc, stop, start, last, timeout, idle, watcher) -> None:

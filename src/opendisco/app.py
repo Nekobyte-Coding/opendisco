@@ -379,7 +379,10 @@ class OpenDiscoApp(toga.App):
 
     def _size_columns(self, *args, first: bool = False, **kwargs):
         """Windows: toga sizes the table's columns once, before the window has its width, which left
-        them as slivers with no headings. Spread them over the table's width instead. macOS: the
+        them as slivers with no headings. Each column gets the width its heading and longest text
+        need, and what's left of the table's width is shared by weight; when the table is too narrow
+        for that, the columns with long texts give up width first. Runs as the rows change, but
+        measures only when the table's width or a column's longest text has changed. macOS: the
         columns start out equal, which cut the firmware short; weighted once at the start (macOS
         then resizes them evenly with the window, and keeps the widths dragged by hand)."""
         if self.caps["platform"] == "macos" and first:
@@ -402,9 +405,28 @@ class OpenDiscoApp(toga.App):
             width = view.ClientSize.Width
             if width < 200:
                 return
+            rows = list(self.table.data)[:300]
+            texts = [[str(getattr(r, accessor, "") or "") for r in rows] for accessor in ACCESSORS]
+            longest = [max(column, key=len, default="") for column in texts]
+            if getattr(self, "_columns_sized", None) == (width, longest):
+                return
+            self._columns_sized = (width, longest)
+            from System.Windows.Forms import TextRenderer
+            font, pad = view.Font, 16
+            least = [TextRenderer.MeasureText(column.Text, font).Width + pad for column in view.Columns]
+            need = [max(head, max((TextRenderer.MeasureText(t, font).Width  # the few longest stand for all
+                                   for t in sorted(set(column), key=len)[-5:] if t), default=0) + pad)
+                    for head, column in zip(least, texts)]
+            need[0] += 20  # the first column leaves room for an icon
             weights = self.COLUMN_WEIGHTS[:view.Columns.Count]
-            for column, weight in zip(view.Columns, weights):
-                column.Width = int(width * weight / sum(weights))
+            if sum(need) <= width:
+                spare = width - sum(need)
+                sizes = [n + spare * w / sum(weights) for n, w in zip(need, weights)]
+            else:
+                spare, extra = max(0, width - sum(least)), [n - h for n, h in zip(need, least)]
+                sizes = [h + (spare * e / sum(extra) if sum(extra) else 0) for h, e in zip(least, extra)]
+            for column, size in zip(view.Columns, sizes):
+                column.Width = int(size)
         except Exception:
             pass  # cosmetic
 
@@ -724,6 +746,7 @@ class OpenDiscoApp(toga.App):
                         setattr(row, attr, value)
         else:
             self.table.data = [dict(values, key=key) for key, values in rows]
+        self._size_columns()  # Windows: to what the rows hold now
         if self.phone_ui:  # iOS forgets the tapped row whenever a row changes
             phone.keep_selection(self, selected)
 
@@ -1031,11 +1054,12 @@ class OpenDiscoApp(toga.App):
                                        style=Pack(flex=1))
 
         def finish(keep):
+            typed = text.value  # before closing: Windows empties a window's text boxes as it closes it
             close()
             if keep is None:
                 return
             try:
-                self.device_notes.set(d, text.value if keep else "")
+                self.device_notes.set(d, typed if keep else "")
             except OSError as e:
                 self.status.text = f"Couldn't save the note: {e.strerror or e}"
                 return
@@ -1311,9 +1335,11 @@ class OpenDiscoApp(toga.App):
             return bool(ok)
         answer = self.loop.create_future()
         quiet = toga.Switch("Don't warn again")
+        ticked = []  # read before the window closes (Windows empties its widgets as it goes)
 
         def finish(ok):
             if not answer.done():
+                ticked.append(quiet.value)
                 answer.set_result(ok)
                 window.close()
 
@@ -1337,7 +1363,7 @@ class OpenDiscoApp(toga.App):
             ok = await answer
         finally:
             self.cancel_port_warning = None
-        if ok and quiet.value:
+        if ok and ticked and ticked[0]:
             self.settings["skip_port_warning"] = True
             self._save_settings()
         return ok
@@ -1864,6 +1890,18 @@ class OpenDiscoApp(toga.App):
         except Exception:
             pass  # cosmetic
 
+    def _screen_height(self) -> int:
+        """Windows: the height the main window's screen leaves free for windows (the taskbar
+        taken off), in the units window sizes are in; 0 elsewhere, or when it can't be told."""
+        if self.caps["platform"] != "windows":
+            return 0
+        try:
+            from System.Windows.Forms import Screen
+            window = self.main_window._impl
+            return int(Screen.FromControl(window.native).WorkingArea.Height / window.dpi_scale)  # pixels to units
+        except Exception:
+            return 0
+
     def _wrap(self, text: str) -> str:
         """Labels don't wrap by themselves: a long line would run past the window's edge."""
         width = 40 if self.caps["mobile"] else 68
@@ -1956,13 +1994,22 @@ class OpenDiscoApp(toga.App):
                       toga.Box(style=Pack(direction=ROW, align_items="center", gap=8), children=[
                           networks_said, toga.Button("Restore defaults", on_press=self.on_reset_networks),
                           toga.Button("Save", on_press=save_networks)])]
-        content = toga.Box(style=Pack(direction=COLUMN, flex=1, margin=14, gap=8), children=[
-            *switches,
-            toga.Label(textwrap.fill(vulns.NVD_NOTICE, 60), style=Pack(font_size=10)),
-            *lists,
-            toga.Box(style=Pack(direction=ROW), children=[toga.Box(style=Pack(flex=1)),
-                                                          toga.Button("Done", on_press=done)])])
+        options = [*switches, toga.Label(textwrap.fill(vulns.NVD_NOTICE, 60), style=Pack(font_size=10)), *lists]
+        finish = toga.Box(style=Pack(direction=ROW), children=[toga.Box(style=Pack(flex=1)),
+                                                              toga.Button("Done", on_press=done)])
         size = (760, 740) if self.caps["aliases"] else (560, 480)
+        room = self._screen_height()
+        scrolls = bool(room) and room < size[1] + 40
+        if scrolls:
+            # A short screen (or one at 150%) can't show it all: the options scroll, Done stays in view.
+            size = (size[0], room - 40)
+            finish.style.margin = (8, 14, 14, 14)
+            content = toga.Box(style=Pack(direction=COLUMN, flex=1), children=[
+                toga.ScrollContainer(horizontal=False, style=Pack(flex=1), content=toga.Box(
+                    style=Pack(direction=COLUMN, margin=(14, 14, 0, 14), gap=8), children=options)),
+                finish])
+        else:
+            content = toga.Box(style=Pack(direction=COLUMN, flex=1, margin=14, gap=8), children=[*options, finish])
         self.close_settings = self._show_panel("Settings", content, size, on_close=closed, resizable=True)
 
     def _launch_checks(self):
