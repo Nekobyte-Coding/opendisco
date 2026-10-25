@@ -6,6 +6,65 @@ when it came out. The Linux packages of 1.1.0 to 1.3.1 were added then too; thos
 never released for Linux. README.md's "Versions and platforms" lists each version's platforms
 and known issues.
 
+## 1.6.0 (2026-10-25)
+
+**Device configs** (airMAX, airFiber, LTU, GigaBeam and EdgeOS; not UniFi, whose controller owns
+its config, nor EdgeSwitch, whose web UI does)
+- **Back up config** and **Config backups…**: copies of a device's config, kept in the app's
+  data folder by MAC address with the date, address, model and firmware, with Restore…, Save a
+  copy…, Delete… and Show folder.
+- **Upload config…**: a config file from this computer, or a backup, for the same model only.
+  What changes is shown line by line first, then Save or Apply now; the device's current config
+  is backed up before it's replaced.
+- **Edit config…** covers airFiber, LTU, GigaBeam and EdgeOS too. On EdgeOS, Save makes the
+  file the boot config once EdgeOS has checked it loads, and Apply loads, commits and saves it.
+- **Reboot…** (airMAX, airFiber, LTU, GigaBeam, EdgeOS, UniFi access points and switches, UniFi
+  OS consoles), asked first, waiting until the device answers again.
+- **Locate (blink LED)** for UniFi access points and switches, until Stop locating.
+- **Scan from device…** with no device selected (on phones, the title bar's +): log in to a
+  device by its address, one the scan didn't find (over a VPN, say), and list it (Via `ssh`)
+  with what it sees under it.
+
+**Firmware and latency**
+- The Firmware column names a newer release when Ubiquiti's firmware server lists one:
+  "8.7.11 (latest: 8.7.25)". It's looked up during each scan (Settings: **Check firmware
+  versions during scans**, on) and kept about a day. Details gives the release's date, and the
+  CSV export a Latest firmware column.
+- A **Latency** column: every device is pinged when a scan ends, with no administrator rights
+  needed. High latency (100 ms or more on average) and packet loss (20% or more) are flagged; a
+  device that never answers pings isn't. **Measure latency** (right-click) and **Measure latency
+  to all devices** (the Device menu) measure again.
+- Command line: `--no-latency` and `--no-firmware-check`; `-v`, `--json` and `--export` show
+  the latest release.
+
+**Search, notes and exports**
+- **Search** above the device list: IP, MAC (in any spelling), model, name, vendor, firmware,
+  Status, Via and note. A device found through another keeps the devices above it in view.
+- **Note…**: a note per device, kept by MAC address, shown first in Details and as ✎ after its
+  name, searched and exported (the command line's `-v` and exports show it too).
+- **Export device…**: one device's report as HTML, or a .zip with its config backups too.
+- **Export…** offers, after the scan report, a security report (known CVEs and outdated
+  firmware), every config backup (.zip), every device note and the Log.
+
+**The app**
+- **Settings** holds the networks probed through temporary addresses (the Networks tab is gone)
+  and **Also sweep these subnets**: routed or VPN subnets every scan also probes, on every
+  platform, phones included.
+- **Tablets and iPads:** the device list and a device's page side by side, in either
+  orientation (Android tablets; an iPad full screen or on the larger side of Split View).
+- **Phones:** Tools adds Backups, Reboot, Locate, Note and Export device; each row in the list
+  shows a newer firmware release and the latency; Export offers the reports above.
+- The adapter picker is labelled **Interface**, with "Any interface" ("Port" and "Any port"
+  before), and the command line's help and messages say interface for the computer's network
+  adapters. "Port" now means only a TCP/UDP port or a switch port.
+- Notes the app shows name its controls next to the command-line flags: Probe listed networks
+  (-a), Trunk VLANs (--vlans).
+- Status says "Self-assigned IP" for a device on a 169.254.x.x address ("No IP address"
+  before).
+- Fixed: the CVE check didn't recognise EdgeRouters whose firmware string reads
+  `EdgeRouter.ER-e50.v…` (the way EdgeOS names its own firmware), so it didn't check them
+  (1.5.0). The new firmware check and config tools know them too.
+
 ## 1.5.0
 
 **Finding ports**
