@@ -154,3 +154,5 @@ build_gradle_dependencies = [
 # Wi-Fi drops broadcasts in power save unless the app holds a multicast lock.
 permission."android.permission.CHANGE_WIFI_MULTICAST_STATE" = {}
 permission."android.permission.ACCESS_WIFI_STATE" = {}
+# Updates: the app downloads the new .apk and hands it to Android's installer.
+permission."android.permission.REQUEST_INSTALL_PACKAGES" = {}

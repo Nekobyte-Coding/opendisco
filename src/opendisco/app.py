@@ -18,7 +18,7 @@ import toga
 from toga.style import Pack
 from toga.style.pack import COLUMN, ROW
 
-from opendisco import FULL_NAME, __version__, core
+from opendisco import FULL_NAME, __version__, core, update
 
 # (name, description, command-line flags, needs) where needs is a capability from core.capabilities()
 MODES = [
@@ -45,6 +45,11 @@ DEVICE_ACTIONS = [("web", "Open Web UI"), ("ssh", "Open SSH…"), ("ping", "Ping
                   ("forget", "Forget SSH key"), ("hide", "Hide device")]
 FINDS = {"find_https": "https", "find_http": "http", "find_ssh": "ssh", "all_ports": "all"}
 NO_SESSION = "Right-click a device to get started: Open SSH or Ping."
+# The Settings window's checkboxes: settings.json key -> text. Both are on until turned off.
+SETTINGS = {"check_app_updates": "Check for OpenDisco updates when opening",
+            "check_cve_updates": "Check for new CVEs when opening"}
+# What settings.json keeps; "update" remembers an update while the app restarts into it.
+SAVED_SETTINGS = ("hidden", "ssh_user", *SETTINGS, "update")
 # Where earlier versions kept their data, by the parts of the data folder's path that changed:
 # folder name now -> patterns for its earlier names. macOS names the folder after the app ID
 # (earlier IDs ended .opendisco or .ubnt-discover); Windows after the publisher (until 1.4.1,
@@ -107,6 +112,10 @@ class OpenDiscoApp(toga.App):
         self.holding = False
         self.cancel_password = None
         self.cancel_ssh_login = None
+        self.updating = False  # checking for, downloading or installing an update
+        self.update_cancel = None  # stops a download
+        self.close_settings = None
+        self._panels = []  # Android: pages shown in place of the main window's content, newest last
         self._move_old_data()
         self.networks_path = self._networks_file()
         self.settings_path = Path(self.paths.data) / "settings.json"
@@ -213,7 +222,9 @@ class OpenDiscoApp(toga.App):
             body,
             toga.Box(style=row, children=footer),
         ])
+        self.main_content = self.main_window.content
         self.on_exit = self.handle_exit
+        self._add_app_commands()
         if self.caps["platform"] == "android":
             self._fit_phone_table()
         self.on_mode(self.mode)
@@ -230,6 +241,7 @@ class OpenDiscoApp(toga.App):
         self._watch_tab_labels()
         self.loop.call_later(0.3, self._align_tab_labels)
         self.loop.call_later(0.5, self._size_columns)
+        self.loop.call_later(1.0, self._launch_checks)
 
     # -- set-up helpers -----------------------------------------------------
     def _load_settings(self) -> dict:
@@ -242,7 +254,7 @@ class OpenDiscoApp(toga.App):
         try:
             self.settings_path.parent.mkdir(parents=True, exist_ok=True)
             self.settings_path.write_text(json.dumps({k: v for k, v in self.settings.items()
-                                                      if k in ("hidden", "ssh_user")}, indent=1), encoding="utf-8")
+                                                      if k in SAVED_SETTINGS}, indent=1), encoding="utf-8")
         except OSError:
             pass
 
@@ -406,10 +418,10 @@ class OpenDiscoApp(toga.App):
     def _from_worker(self, fn, *args):
         self.loop.call_soon_threadsafe(fn, *args)
 
-    def _append_log(self, msg):
+    def _append_log(self, msg, status=True):
         self.log.value += msg.rstrip("\n") + "\n"
         self.log.scroll_to_bottom()
-        if msg.strip():
+        if msg.strip() and status:
             self.status.text = msg.strip().splitlines()[-1][:140]
 
     def _ask_password(self, reason: str):
@@ -1219,8 +1231,363 @@ class OpenDiscoApp(toga.App):
     def on_reset_networks(self, widget, **kwargs):
         self.networks.value = Path(core.DEFAULT_NETWORKS_FILE).read_text(encoding="utf-8")
 
+    # -- settings and updates -------------------------------------------------------
+    def _add_app_commands(self):
+        """Settings… where each system keeps it (macOS: the app menu; Windows: File; Linux: the
+        app's menu) and a check for updates (macOS: under About; Windows, Linux: Help). Android
+        has no standard place for either: they go in its ⋮ menu."""
+        platform = self.caps["platform"]
+        settings = toga.Command.standard(self, toga.Command.PREFERENCES, text="Settings…")
+        if settings is None:
+            settings = toga.Command(lambda command, **kwargs: self.preferences(), text="Settings…")
+        group = {"macos": toga.Group.APP, "android": toga.Group.COMMANDS}.get(platform, toga.Group.HELP)
+        check = toga.Command(lambda command, **kwargs: self._check_for_update(quiet=False),
+                             text="Check for OpenDisco updates…", group=group, section=-1 if platform == "macos" else 0,
+                             order=1)
+        self.commands.add(settings, check)
+
+    def _show_panel(self, title, content, size, on_close=None, resizable=False):
+        """A small window over the main one; on Android, which has one window, a page shown in
+        place of the main window's content. Returns what closes it. on_close runs when it's
+        closed from its title bar."""
+        if self.caps["platform"] == "android":
+            page = toga.Box(style=Pack(direction=COLUMN, margin=12, gap=10), children=[
+                toga.Label(title, style=Pack(font_weight="bold", font_size=18)), content])
+            self._panels.append(page)
+            self.main_window.content = page
+
+            def close():
+                if page in self._panels:
+                    self._panels.remove(page)
+                    self.main_window.content = self._panels[-1] if self._panels else self.main_content
+            return close
+        closed = []
+
+        def closing(widget, **kwargs):
+            closed.append(True)
+            if on_close:
+                on_close()
+            return True
+
+        def close():
+            if not closed:
+                closed.append(True)
+                window.close()
+
+        window = toga.Window(title=title, size=size, resizable=resizable, on_close=closing,
+                             position=self._over_main(size))
+        window.content = content
+        self._show_over_main(window)
+        self._fit_window(window)
+        return close
+
+    def _fit_window(self, window):
+        """macOS: Toga grows a window to fit its content by comparing the content with the whole
+        window, title bar included, which can leave the bottom of the content under the edge.
+        Make the area inside at least as big as the content needs."""
+        if self.caps["platform"] != "macos":
+            return
+        try:
+            from rubicon.objc import NSSize
+            layout, native = window.content.layout, window._impl.native
+            inside = native.contentView.frame.size
+            width, height = max(inside.width, layout.min_width), max(inside.height, layout.min_height)
+            if (width, height) != (inside.width, inside.height):
+                native.setContentSize(NSSize(width, height))
+        except Exception:
+            pass  # cosmetic
+
+    def _wrap(self, text: str) -> str:
+        """Labels don't wrap by themselves: a long line would run past the window's edge."""
+        width = 40 if self.caps["mobile"] else 68
+        return "\n".join(textwrap.fill(part, width) for part in text.split("\n"))
+
+    def preferences(self, *args, **kwargs):
+        """The Settings window. Toga's standard Settings… command calls this."""
+        if self.close_settings:  # open already: bring it back to the front
+            self.close_settings()
+
+        def done(*args, **kwargs):
+            close, self.close_settings = self.close_settings, None
+            if close:
+                close()
+
+        def changed(widget, key, **kwargs):
+            self.settings[key] = widget.value
+            self._save_settings()
+
+        switches = [toga.Switch(text, value=self.settings.get(key, True),
+                                on_change=lambda widget, key=key, **kwargs: changed(widget, key))
+                    for key, text in SETTINGS.items()]
+        content = toga.Box(style=Pack(direction=COLUMN, margin=14, gap=10), children=[
+            *switches,
+            toga.Box(style=Pack(direction=ROW), children=[toga.Box(style=Pack(flex=1)),
+                                                          toga.Button("Done", on_press=done)])])
+        self.close_settings = self._show_panel("Settings", content, (460, 170),
+                                               on_close=lambda: setattr(self, "close_settings", None))
+
+    def _launch_checks(self):
+        self._after_update()
+        if self.settings.get("check_app_updates", True):
+            self._check_for_update(quiet=True)
+        if self.settings.get("check_cve_updates", True):
+            self._refresh_cves()
+
+    def _refresh_cves(self):
+        """STUB, connected when the CVE check (opendisco.vulns) is merged: call vulns.refresh()
+        in a worker thread to fetch fresh NVD data, and stay quiet when offline (a Log line),
+        like the update check. Runs at launch when Settings has "Check for new CVEs when
+        opening" on."""
+        self._append_log("CVE check: refreshing its data isn't connected yet.", status=False)  # STUB
+
+    def _check_for_update(self, quiet: bool):
+        """Ask GitHub for the latest release, in the background. quiet (the launch check): only a
+        Log line unless there's a newer version; asked from the menu, say what was found."""
+        if self.updating:
+            if not quiet:
+                self.status.text = "An update is already under way."
+            return
+        self.updating = True
+        if not quiet:
+            self.status.text = "Checking for OpenDisco updates…"
+
+        def work():
+            release, error = None, None
+            try:
+                release = update.latest(timeout=5 if quiet else 15)
+            except update.UpdateError as e:
+                error = str(e)
+            except Exception as e:
+                error = f"{type(e).__name__}: {e}"
+            self._from_worker(self._checked, release, error, quiet)
+
+        threading.Thread(target=work, daemon=True).start()
+
+    def _checked(self, release, error, quiet):
+        if error or not release.newer:
+            self.updating = False
+            text = (f"Update check: {error}." if error
+                    else f"Update check: OpenDisco {__version__} is the latest version.")
+            self._append_log(text, status=False)  # the launch check stays in the Log
+            if not quiet:
+                self.status.text = ("Couldn't check for updates." if error
+                                    else f"OpenDisco {__version__} is the latest version.")
+                asyncio.create_task(self.main_window.dialog(
+                    toga.ErrorDialog("Couldn't check for updates", f"{error[0].upper()}{error[1:]}.") if error
+                    else toga.InfoDialog("No update", f"OpenDisco {__version__} is the latest version.")))
+            return
+        self._append_log(f"Update check: OpenDisco {release.version} is out (this is {__version__}).", status=False)
+        self.status.text = f"OpenDisco {release.version} is out."
+        self._offer_update(release)
+
+    def _offer_update(self, release):
+        """Say what's new, with buttons to update or not now. A copy that can't replace itself
+        (run from source, say) links the release instead."""
+        kind, target = update.installed_as()
+        asset = update.pick_asset(release, kind)
+        if kind == "source":
+            why = "This copy runs from source, so it doesn't update itself: the release page has the new version."
+        elif asset is None:
+            why = (f"The release has no {update.asset_names(release.version, kind)[0]}, so this copy can't "
+                   "update itself: the release page has the other installers.")
+        else:
+            why = update.cannot_update(kind, target)
+            why = f"This copy can't update itself: {why}." if why else ""
+        heading = f"OpenDisco {release.version} is out; this is {__version__}."
+        if release.title not in (release.version, f"v{release.version}", f"OpenDisco {release.version}"):
+            heading += f"\n{release.title}"
+        notes = toga.MultilineTextInput(readonly=True, value=update.excerpt(release.notes) or "No release notes.",
+                                        style=Pack(flex=1, font_size=12 if self.caps["mobile"] else 11))
+
+        def finish(choice):
+            close()
+            if choice == "update":
+                asyncio.create_task(self._start_update(release, kind, target, asset))
+                return
+            self.updating = False
+            if choice == "page":
+                webbrowser.open(release.page)
+
+        not_now = toga.Button("Not now", on_press=lambda w, **kwargs: finish(None))
+        if why:
+            buttons = [not_now, toga.Button("Open release page", on_press=lambda w, **kwargs: finish("page"))]
+        else:
+            buttons = [toga.Button("Release notes", on_press=lambda w, **kwargs: webbrowser.open(release.page)),
+                       not_now, toga.Button("Update", on_press=lambda w, **kwargs: finish("update"))]
+        if not self.caps["mobile"]:  # the answers on the right
+            buttons.insert(len(buttons) - 2, toga.Box(style=Pack(flex=1)))
+        content = toga.Box(style=Pack(direction=COLUMN, flex=1, gap=10, margin=0 if self.caps["mobile"] else 14),
+                           children=[toga.Label(self._wrap(heading)), notes,
+                                     *([toga.Label(self._wrap(why))] if why else []),
+                                     toga.Box(style=Pack(direction=ROW, gap=8), children=buttons)])
+        close = self._show_panel("OpenDisco update", content, (620, 440), on_close=lambda: finish(None),
+                                 resizable=True)
+
+    def _busy(self) -> str:
+        """What restarting for an update would end, or "" for nothing."""
+        ending = []
+        if self.running or self.rescanning or self.finding:
+            ending.append("the scan in progress stops")
+        if self.term and self.term.sessions:
+            ending.append("the SSH and ping sessions close")
+        if self.holding:
+            ending.append("the kept addresses are removed")
+        return ", ".join(ending)
+
+    async def _start_update(self, release, kind, target, asset):
+        busy = self._busy()
+        if busy and not await self.main_window.dialog(toga.QuestionDialog(
+                "Update now?", f"Updating restarts OpenDisco: {busy}. Update now?")):
+            self.updating = False
+            return
+        android = kind == "android"
+        try:
+            folder = self._android_download_folder() if android else update.download_folder()
+        except Exception as e:
+            self._update_failed(release, f"no folder to download it to ({e})")
+            return
+        cancel = self.update_cancel = threading.Event()
+        label = toga.Label(self._wrap(f"Downloading {asset.name}"))
+        amount = toga.Label("")
+        bar = toga.ProgressBar(max=1.0, style=Pack(flex=1))
+        stop = toga.Button("Cancel", on_press=lambda w, **kwargs: cancel.set())
+        content = toga.Box(style=Pack(direction=COLUMN, gap=10, margin=0 if self.caps["mobile"] else 14), children=[
+            label, bar, amount, toga.Box(style=Pack(direction=ROW), children=[toga.Box(style=Pack(flex=1)), stop])])
+        close = self._show_panel("Updating OpenDisco", content, (520, 200), on_close=cancel.set)
+
+        def shown(done, total):
+            bar.value = min(1.0, done / total) if total else 0.0
+            amount.text = f"{done / 1e6:.1f} of {total / 1e6:.1f} MB" if total else f"{done / 1e6:.1f} MB"
+
+        def installing(text):
+            stop.enabled = False  # past the point where stopping leaves nothing changed
+            bar.value = 1.0
+            label.text, amount.text = text, ""
+
+        def log(msg):  # the details go to the Log; the status line would cut them off
+            self._from_worker(self._append_log, msg, False)
+
+        def work():
+            path, error = None, None
+            try:
+                path = update.download(asset, folder, lambda done, total: self._from_worker(shown, done, total), cancel)
+                log(f"Downloaded {asset.name}: its SHA-256 matches the one GitHub lists.")
+                if kind in ("macos", "deb", "rpm", "tarball"):
+                    self._from_worker(installing, f"Installing OpenDisco {release.version}…")
+                if kind == "macos":
+                    update.install_macos(path, target, release.version, log)
+                elif kind in ("deb", "rpm"):
+                    update.install_package(path, kind, log)
+                elif kind == "tarball":
+                    update.install_tarball(path, target, release.version, log)
+            except update.UpdateError as e:
+                error = str(e)
+            except Exception as e:
+                error = f"{type(e).__name__}: {e}"
+                log(traceback.format_exc())
+            if error:
+                shutil.rmtree(folder, ignore_errors=True)
+            self._from_worker(self._update_ready, release, kind, target, path, folder, error, close)
+
+        threading.Thread(target=work, daemon=True).start()
+
+    def _update_failed(self, release, error):
+        self.updating = False
+        self._append_log(f"Update to OpenDisco {release.version} failed: {error}.", status=False)
+        self.status.text = f"The update to {release.version} failed: this is still {__version__}."
+        asyncio.create_task(self.main_window.dialog(toga.ErrorDialog(
+            "Update failed", f"{error[0].upper()}{error[1:]}.\n\nNothing was changed: this is still OpenDisco "
+                             f"{__version__}.")))
+
+    def _update_ready(self, release, kind, target, path, folder, error, close):
+        """Downloaded and checked (and on macOS and Linux, installed): restart into it."""
+        close()
+        self.update_cancel = None
+        if error == "cancelled":
+            self.updating = False
+            self.status.text = "Update cancelled."
+            return
+        if error:
+            self._update_failed(release, error)
+            return
+        self.settings["update"] = {"version": release.version, "folder": str(folder)}
+        self._save_settings()
+        try:
+            if kind == "windows":
+                update.start_windows_update(path, target, folder / "update.log")
+            elif kind == "android":
+                self._install_apk(path)
+                self._append_log(f"Android's installer takes over to install OpenDisco {release.version}; it may "
+                                 "first ask to allow installing apps from OpenDisco.", status=False)
+                self.status.text = "Android's installer takes over."
+                return
+            else:
+                update.relaunch_after_exit(update.relaunch_command(kind, target))
+        except Exception as e:
+            if kind in ("windows", "android"):  # nothing was installed
+                self.settings.pop("update", None)
+                self._save_settings()
+                shutil.rmtree(folder, ignore_errors=True)
+                self._update_failed(release, f"the installer didn't start ({e})")
+            else:
+                self.updating = False
+                self.status.text = f"Installed OpenDisco {release.version}: it runs from the next start."
+            return
+        self._append_log(f"Restarting into OpenDisco {release.version}…")
+        self.request_exit()
+
+    def _after_update(self):
+        """The first time the app opens after an update: say whether it took, and delete the
+        download (and Windows' copy of the previous version)."""
+        done = self.settings.pop("update", None)
+        if not isinstance(done, dict):
+            return
+        self._save_settings()
+        folder = Path(str(done.get("folder") or ""))
+        report = ""
+        if folder.name.startswith("opendisco-update"):  # ours: never delete anything else
+            try:
+                report = (folder / "update.log").read_text(encoding="utf-8", errors="replace")
+            except OSError:
+                pass
+            shutil.rmtree(folder, ignore_errors=True)
+        wanted = str(done.get("version") or "")
+        if update.version_key(__version__) >= update.version_key(wanted):
+            self._append_log(f"Updated to OpenDisco {__version__}.")
+            return
+        detail = "\n".join(report.strip().splitlines()[-3:])
+        self._append_log(f"The update to OpenDisco {wanted} didn't install: this is still {__version__}."
+                         + (f"\n{report.strip()}" if report.strip() else ""), status=False)
+        self.status.text = f"OpenDisco {wanted} didn't install."
+        asyncio.create_task(self.main_window.dialog(toga.ErrorDialog(
+            "Update not installed", f"OpenDisco {wanted} didn't install: this is still {__version__}."
+                                    + (f"\n\n{detail}" if detail else ""))))
+
+    def _android_download_folder(self) -> Path:
+        """Android: downloads go in the part of the app's cache that Briefcase's FileProvider
+        shares (shared/), so Android's installer can read them."""
+        context = self._impl.native.getApplicationContext()
+        folder = Path(str(context.getCacheDir().getAbsolutePath())) / "shared" / "opendisco-update"
+        shutil.rmtree(folder, ignore_errors=True)
+        folder.mkdir(parents=True)
+        return folder
+
+    def _install_apk(self, path: Path):
+        """Android: hand the .apk to the system's installer, which asks before installing."""
+        from java import jclass
+        activity = self._impl.native
+        uri = jclass("androidx.core.content.FileProvider").getUriForFile(
+            activity, f"{self.app_id}.fileprovider", jclass("java.io.File")(str(path)))
+        intent_class = jclass("android.content.Intent")
+        intent = intent_class(intent_class.ACTION_VIEW)
+        intent.setDataAndType(uri, "application/vnd.android.package-archive")
+        intent.addFlags(intent_class.FLAG_GRANT_READ_URI_PERMISSION | intent_class.FLAG_ACTIVITY_NEW_TASK)
+        activity.startActivity(intent)
+
     def handle_exit(self, app, **kwargs):
         core.STOP.set()
+        if self.update_cancel:
+            self.update_cancel.set()
         if self.cancel_password:
             self.cancel_password()
         if self.cancel_ssh_login:
