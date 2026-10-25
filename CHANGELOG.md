@@ -61,9 +61,9 @@ its config, nor EdgeSwitch, whose web UI does)
   (-a), Trunk VLANs (--vlans).
 - Status says "Self-assigned IP" for a device on a 169.254.x.x address ("No IP address"
   before).
-- Fixed: EdgeRouters whose firmware string reads `EdgeRouter.ER-e50.v…` (the way EdgeOS names
-  its own firmware) weren't matched to their platform, so the firmware check and the CVE check
-  didn't recognise them (1.5.0).
+- Fixed: the CVE check didn't recognise EdgeRouters whose firmware string reads
+  `EdgeRouter.ER-e50.v…` (the way EdgeOS names its own firmware), so it didn't check them
+  (1.5.0). The new firmware check and config tools know them too.
 
 ## 1.5.0
 
