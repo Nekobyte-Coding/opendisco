@@ -117,6 +117,10 @@ SectionEnd
 !insertmacro MUI_FUNCTION_DESCRIPTION_END
 
 Function .onInit
+  ; A silent install (/S, how the app updates itself) never offers Npcap: its installer isn't silent.
+  ${If} ${Silent}
+    Return
+  ${EndIf}
   ; A 32-bit installer sees the real System32 as Sysnative.
   ${IfNot} ${FileExists} "$WINDIR\Sysnative\Npcap\wpcap.dll"
   ${AndIfNot} ${FileExists} "$WINDIR\System32\Npcap\wpcap.dll"
