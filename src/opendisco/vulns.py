@@ -2,11 +2,14 @@
 
 resources/cves.json lists them: each CVE with the device families and firmware versions it
 affects, the version that fixes it, its CVSS severity and a short summary. build_rules() makes
-that list from two sources: the NVD's CVE records, whose CPE product names map to families here
-(CPE_PRODUCTS), and CURATED, the ranges checked by hand against Ubiquiti's Security Advisory
-Bulletins, which also covers CVEs the NVD has no product data for. refresh() runs the same build
-on current NVD data and saves the result in the app's data folder; check() uses whichever list
-is newer.
+that list from three sources, the first that has a CVE winning:
+- CURATED: the ranges checked by hand against Ubiquiti's Security Advisory Bulletins up to
+  BULLETINS_REVIEWED, which also covers CVEs the NVD has no product data for;
+- newer bulletins, read by parse_bulletin() only where every product, version and fix in a CVE's
+  entry is one it understands (BULLETIN_NAMES);
+- the NVD's CVE records, whose CPE product names map to families here (CPE_PRODUCTS).
+refresh() runs the same build on current data and saves the result in the app's data folder;
+check() uses whichever list is newer.
 
 A device is checked only when its family and firmware version are certain: missing a CVE is
 better than flagging one falsely. So no match is no proof that a device is safe.
@@ -16,6 +19,7 @@ Standard library only, like core.
 from __future__ import annotations
 
 import collections
+import html
 import json
 import os
 import re
@@ -244,6 +248,7 @@ def reload() -> None:
 def list_info() -> dict:
     data, where = current()
     return {"date": data.get("generated") or None, "cves": len(data["cves"]), "from": where,
+            "read_from_advisories": sum(c.get("source") == "advisory" for c in data["cves"]),
             "sources": data.get("sources", SOURCES)}
 
 
@@ -337,7 +342,8 @@ def detail_lines(matches) -> list:
 def to_dict(matches) -> list:
     return [{"id": m.cve["id"], "severity": m.cve.get("severity"), "score": m.cve.get("score"),
              "software": _software(m), "version": m.version, "fixed_in": m.fixed,
-             "summary": m.cve.get("summary"), "published": m.cve.get("published"), "url": nvd_url(m.cve["id"])}
+             "summary": m.cve.get("summary"), "published": m.cve.get("published"), "url": nvd_url(m.cve["id"]),
+             "source": m.cve.get("source"), "advisory": m.cve.get("advisory")}
             for m in matches]
 
 
@@ -731,23 +737,167 @@ def _rules_from_cpe(cve: dict) -> list:
     return list(merged.values())
 
 
-def build_rules(nvd_cves, generated=None) -> dict:
-    """The list from NVD CVE records (the "cve" objects of the API's answers) and CURATED."""
+# The names Ubiquiti's bulletins give products -> what discovery checks them as, in CURATED's
+# notation; "" for what discovery can't see (applications, servers, cameras...): understood, with
+# nothing to check. A bulletin naming any product not here is left for a person to read.
+_BULLETIN_NAMES = [
+    ("unifi-os:UDM", "UDM"), ("unifi-os:UDMPRO", "UDM-Pro", "UDM Pro", "UDM Professional"),
+    ("unifi-os:UDMPROSE", "UDM-SE", "UDM SE"), ("unifi-os:UDMPROMAX", "UDM-Pro-Max"), ("unifi-os:UDMEA4C", "UDM-Beast"),
+    ("unifi-os:UDMENT", "EFG", "Enterprise Fortress Gateway"),
+    ("unifi-os:EFGCORE", "EF-Core", "Enterprise Firewall Core"),
+    ("unifi-os:UDW", "UDW", "Dream Wall"), ("unifi-os:UDR", "UDR"), ("unifi-os:UDR7", "UDR7"),
+    ("unifi-os:UDR5G", "UDR-5G", "UDR-5G-Max"), ("unifi-os:UXMAX", "Express 7", "UX7", "UniFi Express 7"),
+    ("unifi-os:UX", "Express", "UniFi Express", "UX"), ("unifi-os:UDRULT", "UCG-Ultra"), ("unifi-os:UCGMAX", "UCG-Max"),
+    ("unifi-os:UCGF", "UCG-Fiber"), ("unifi-os:UCGA6AD", "UCG-Industrial"), ("unifi-os:UCKG2", "UCK", "Cloud Key Gen2"),
+    ("unifi-os:UCKP", "UCKP", "Cloud Key Gen2 Plus"), ("unifi-os:UCKENT", "UCK-Enterprise"), ("unifi-os:UNVR", "UNVR"),
+    ("unifi-os:UNVRPRO", "UNVR-Pro", "UNVR Pro", "UNVR Professional"), ("unifi-os:UNVRINS", "UNVR-Instant"),
+    ("unifi-os:UNVRAI4", "UNVR-G2"), ("unifi-os:UNVRAI8", "UNVR-G2-Pro"), ("unifi-os:ENVR", "ENVR"),
+    ("unifi-os:ENVRCORE", "ENVR-Core"), ("unifi-os:UNAS2,UNAS2B,UNAS2W", "UNAS-2"),
+    ("unifi-os:UNAS4,UNAS4B,UNAS4W", "UNAS-4"), ("unifi-os:UNASPRO", "UNAS-Pro"), ("unifi-os:UNASPRO4", "UNAS-Pro-4"),
+    ("unifi-os:UNASPRO8", "UNAS-Pro-8"), ("unifi-os:@dm", "Dream Machines"), ("unifi-os:@dr", "Dream Routers"),
+    ("unifi-os:@cg", "Cloud Gateways"), ("unifi-os:@efg", "Enterprise Firewalls"), ("unifi-os:@ck", "Cloud Keys"),
+    ("unifi-os:UNVR,UNVRPRO,UNVRINS,UNVRAI4,UNVRAI8", "Network Video Recorders"),
+    ("unifi-os:ENVR,ENVRCORE", "Enterprise Network Video Recorders"), ("unifi-os:@nas", "Network Attached Storage"),
+    ("unifi-os:ENAS", "Enterprise Network Attached Storage"), ("uxg", "UniFi Gateways"),
+    ("unifi-network", "UniFi Network", "UniFi Network Application"),
+    ("unifi-ap", "UniFi Access Points", "All UniFi Access Points"), ("unifi-ap:UAPL6", "U6+", "UniFi U6+ Access Point"),
+    ("unifi-switch", "UniFi Switches", "All UniFi Switches"), ("unifi-lte", "UniFi LTE Backup"),
+    ("usg", "USG", "USGs", "UniFi Security Gateway", "UniFi Security Gateways"),
+    ("edgeos", "EdgeRouter", "EdgeRouters", "All EdgeRouters", "EdgeMAX EdgeRouter", "EdgeMAX EdgeRouters"),
+    ("edgeswitch", "EdgeSwitch", "EdgeMAX EdgeSwitch"), ("edgepower", "EdgePower"),
+    ("airmax-ac", "airMAX AC"), ("airmax-m", "airMAX M"), ("af60", "airFiber AF60", "airFiber 60/LR"),
+    ("af60-xg", "airFiber AF60-XG", "airFiber 60 XG/HD"), ("gbe", "GBE", "GigaBeam"),
+    ("aircube", "airCube", "Aircubes"),
+    ("ubb:UBB", "UBB"), ("ubb:UBBXG", "UBB-XG"),
+    ("", "UniFi OS Server", "UniFi Network Server", "UniFi Protect Application", "UniFi Access Application",
+     "UniFi Talk Application", "UniFi Connect Application", "UID Enterprise Agent", "UniFi Protect AI Key",
+     "UniFi Protect Floodlight", "UniFi Protect Cameras", "UniFi iOS App", "UniFi Android App"),
+]
+BULLETIN_NAMES = {name.casefold(): spec for spec, *names in _BULLETIN_NAMES for name in names}
+_NAME_LIST = re.compile(r",\s*(?:and\s+)?|\s+and\s+")
+_AFFECTED = re.compile(r"(?P<names>[^()]+?)\s*\((?:Version\s*|v)(?P<version>\d[\w.-]*) and earlier\)\.?")
+_FIX = re.compile(r"Update (?P<names>.+?) (?:firmware )?(?:to )?(?:Version |v)?(?P<version>\d[\w.-]*?) "
+                  r"or (?:later|newer)(?: version)?\.?", re.I)
+_HEADERS = re.compile(r"(?:Summary \d+ of \d+|Overview|Published:.*|Updated:.*|First Published:.*|Version: [\d.]+|"
+                      r"Revision: [\d.]+)$", re.I)
+
+
+def _named(text: str):
+    """[(name, spec)] for a list of product names, or None if any isn't in BULLETIN_NAMES."""
+    found = []
+    for name in _NAME_LIST.split(text.strip().rstrip(".")):
+        name = re.sub(r"^(?:your|the|affected)\s+", "", name.strip(), flags=re.I)
+        spec = BULLETIN_NAMES.get(name.casefold())
+        if spec is None:
+            return None
+        found.append((name, spec))
+    return found
+
+
+def _advisory_rules(block: list) -> tuple:
+    """(affects, "") for one summary of a bulletin, or ([], why not) unless every product,
+    version and fix in it is understood."""
+    starts = [n for n, line in enumerate(block) if re.fullmatch(r"Affected Products\s*:?", line, re.I)]
+    ends = [n for n, line in enumerate(block) if re.fullmatch(r"Mitigation\s*:?", line, re.I)]
+    if len(starts) != 1 or len(ends) != 1 or ends[0] < starts[0]:
+        return [], "not in the usual layout"
+    tail = next((n for n in range(ends[0] + 1, len(block))
+                 if re.match(r"(?:Impact|CVSS|Base Score|CVE)\b", block[n], re.I)), len(block))
+    description = " ".join(line for line in block[:starts[0]] if not _HEADERS.match(line))
+    fixes = {}
+    for line in block[ends[0] + 1:tail]:
+        m = _FIX.fullmatch(line)
+        for name, spec in (_named(m["names"]) or []) if m and version_key(m["version"]) else []:
+            fixes[name.casefold()] = fixes[spec] = m["version"]
+    rules = []
+    for line in block[starts[0] + 1:ends[0]]:
+        line = re.sub(r"^Official Release:\s*", "", line, flags=re.I)
+        if re.match(r"Release Candidate:", line, re.I):
+            continue  # release candidates aren't checked
+        m = _AFFECTED.fullmatch(line)
+        if not m and re.search(r"[():]", line):
+            return [], f"not understood: {line}"
+        names, last = (m["names"], m["version"]) if m else (line, None)
+        products = _named(names)
+        if products is None:
+            return [], f"a product isn't known: {line}"
+        for name, spec in products:
+            if not spec or (spec == "unifi-network" and re.search(r"self-hosted|network server", description, re.I)):
+                continue  # nothing discovery can see
+            fixed = fixes.get(name.casefold()) or fixes.get(spec)
+            if last and (not version_key(last) or (fixed and version_key(fixed) <= version_key(last))):
+                return [], f"versions not understood: {line}"
+            if not last and not fixed:
+                return [], f"no version for {name}"
+            rules += _expand(f"{spec} <={last} fix {fixed or '?'}" if last else f"{spec} <{fixed}")
+    return rules, "" if rules else "nothing discovery can check"
+
+
+def parse_bulletin(text: str, url: str = "", published: str = "") -> tuple:
+    """A Security Advisory Bulletin's text -> (list entries for the CVEs whose products and versions
+    are all understood, [(CVE ids, why not)] for the others)."""
+    lines = [line.strip() for line in text.splitlines() if line.strip()]
+    m = re.search(r"Published:\s*([A-Za-z]+)\.? (\d+),? (\d{4})", text)
+    if m:
+        try:
+            published = time.strftime("%Y-%m-%d", time.strptime(f"{m[1][:3]} {m[2]} {m[3]}", "%b %d %Y"))
+        except ValueError:
+            pass
+    blocks, block = [], []
+    for line in lines:
+        if re.fullmatch(r"Summary \d+ of \d+", line, re.I) and block:
+            blocks.append(block)
+            block = []
+        block.append(line)
+    blocks.append(block)
+    entries, skipped = [], []
+    for block in blocks:
+        ids = sorted(set(re.findall(r"CVE-\d{4}-\d{4,}", " ".join(line for line in block
+                                                                 if re.match(r"CVE\s*:", line)))))
+        if not ids:
+            continue
+        affects, why = _advisory_rules(block)
+        if not affects:
+            skipped.append((ids, why))
+            continue
+        score = re.search(r"Base Score:\s*(\d+(?:\.\d)?)", " ".join(block))
+        score = float(score[1]) if score else None
+        start = next((n for n, line in enumerate(block) if re.fullmatch(r"Affected Products\s*:?", line, re.I)), 0)
+        description = " ".join(line for line in block[:start] if not _HEADERS.match(line))
+        summary = re.split(r"(?<=\.)\s", description.strip(), maxsplit=1)[0][:240]
+        for cid in ids:
+            entries.append({"id": cid, "published": published, "severity": _severity(score), "score": score,
+                            "summary": summary, "affects": affects, "source": "advisory", "advisory": url})
+    return entries, skipped
+
+
+def build_rules(nvd_cves, advisories=(), generated=None, carried=()) -> dict:
+    """The list from NVD CVE records (the "cve" objects of the API's answers), entries
+    parse_bulletin() made from Ubiquiti's bulletins, and CURATED, which wins over both. carried:
+    entries from bulletins kept from an earlier list (when the bulletins can't be read now)."""
     by_id = {c["id"]: c for c in nvd_cves if c.get("id")}
+    from_advisories = {}
+    for entry in list(advisories) + list(carried):  # the newest bulletin first
+        from_advisories.setdefault(entry["id"], entry)
     out = []
-    for cid in sorted(set(by_id) | set(CURATED), key=lambda i: [int(x) for x in i.split("-")[1:]]):
+    every = set(by_id) | set(CURATED) | set(from_advisories)
+    for cid in sorted(every, key=lambda i: [int(x) for x in i.split("-")[1:]]):
         if cid in SKIPPED:
             continue
-        cve, curated = by_id.get(cid), CURATED.get(cid)
+        cve, curated, advisory = by_id.get(cid), CURATED.get(cid), from_advisories.get(cid)
+        extra = {}
         if curated:
             published, score, spec, summary = curated
-            affects = _expand(spec)
+            affects, source = _expand(spec), "curated"
+        elif advisory:
+            published, score, summary, affects = (advisory[k] for k in ("published", "score", "summary", "affects"))
+            source, extra = "advisory", {"advisory": advisory.get("advisory", "")}
         else:
             desc = _description(cve)
             affects = [a for a in _rules_from_cpe(cve)
                        if not (a["family"] == "unifi-network"
                                and re.search(r"self-hosted|network server|running on linux", desc, re.I))]
-            published, score = cve.get("published", "")[:10], None
+            published, score, source = cve.get("published", "")[:10], None, "nvd"
             summary = re.split(r"(?<=\.)\s", desc.strip(), maxsplit=1)[0][:240]
         if not affects:
             continue
@@ -755,7 +905,7 @@ def build_rules(nvd_cves, generated=None) -> dict:
         if nvd_score is not None:
             score = nvd_score
         out.append({"id": cid, "published": published, "severity": severity or _severity(score), "score": score,
-                    "summary": summary, "affects": affects, "curated": bool(curated)})
+                    "summary": summary, "affects": affects, "source": source, **extra})
     return {"format": FORMAT, "generated": generated or time.strftime("%Y-%m-%d"), "built_by": __version__,
             "sources": SOURCES, "cves": out}
 
@@ -826,16 +976,85 @@ def fetch_nvd(log=None, timeout: float = 60.0, request_timeout: float = 15.0) ->
     return list(found.values())
 
 
+# The community site's own API, not a documented one: the list of bulletins, then each one's text
+BULLETIN_FEED = "https://community.svc.ui.com/api/v1/feed/threads?threadType=RELEASE&sort=LATEST&tags=security&limit=50"
+BULLETIN_API = "https://community.svc.ui.com/"
+# Bulletins published up to this day were read by hand into CURATED; fetch_bulletins() reads newer ones.
+BULLETINS_REVIEWED = "2026-10-24"
+_BULLETIN_QUERY = ("query GetRelease($id: ID!) { release(id: $id) { "
+                   "content { ... on TextContent { content } } importantNotes { ... on TextContent { content } } } }")
+
+
+def _html_text(markup: str) -> str:
+    text = re.sub(r"<(?:br|/p|/li|/h\d|/div|/tr)\b[^>]*>", "\n", markup or "", flags=re.I)
+    return html.unescape(re.sub(r"<[^>]+>", "", text)).replace("\xa0", " ")
+
+
+def fetch_bulletins(timeout: float = 30.0, request_timeout: float = 15.0, since: str | None = None) -> tuple:
+    """Ubiquiti's Security Advisory Bulletins published after since (a date: BULLETINS_REVIEWED when
+    None, every bulletin when ""), parsed: (parse_bulletin()'s entries for all of them,
+    [(CVE ids, why not, bulletin)] for the CVEs left out). Raises OSError, ValueError or
+    TimeoutError when they can't be read."""
+    deadline = time.monotonic() + timeout
+    since = BULLETINS_REVIEWED if since is None else since
+
+    def get(req):
+        left = deadline - time.monotonic()
+        if left <= 0:
+            raise TimeoutError("ran out of time")
+        with tls.urlopen(req, timeout=min(request_timeout, left)) as resp:
+            return json.load(resp)
+
+    headers = {"User-Agent": f"OpenDisco/{__version__}"}
+    new, cursor = [], None
+    while True:
+        page = get(urllib.request.Request(BULLETIN_FEED + (f"&cursor={cursor}" if cursor else ""), headers=headers))
+        items = page.get("items")
+        if not isinstance(items, list):
+            raise ValueError("the list of bulletins has changed shape")
+        fresh = [i for i in items if not since or str((i.get("stats") or {}).get("createdAt", ""))[:10] > since]
+        new += fresh
+        cursor = page.get("nextCursor")
+        if not cursor or len(fresh) < len(items):
+            break
+    entries, skipped = [], []
+    for item in new:
+        body = json.dumps({"query": _BULLETIN_QUERY, "variables": {"id": item["id"]}}).encode()
+        data = get(urllib.request.Request(BULLETIN_API, body, dict(headers, **{"content-type": "application/json"})))
+        release = (data.get("data") or {}).get("release")
+        if not isinstance(release, dict):
+            raise ValueError(f"no text for {item.get('title')}")
+        text = "\n".join(_html_text(part.get("content", "")) for key in ("content", "importantNotes")
+                         for part in release.get(key) or [] if isinstance(part, dict))
+        url = f"https://community.ui.com/releases/{item.get('slug', '')}/{item['id']}"
+        found, left_out = parse_bulletin(text, url, str((item.get("stats") or {}).get("createdAt", ""))[:10])
+        entries += found
+        skipped += [(ids, why, item.get("title", "")) for ids, why in left_out]
+    return entries, skipped
+
+
 def refresh(cache_dir, log=None, timeout: float = 60.0) -> bool:
     """Rebuild the list from current NVD data and save it in cache_dir (the app's data folder),
     then use it if it's newer than the bundled one. Takes a few seconds; returns False, keeping
     the list in use, when the NVD can't be reached in time. Safe to run in a background thread."""
     say = log or (lambda msg: None)
+    started = time.monotonic()
     try:
-        data = build_rules(fetch_nvd(timeout=timeout))
+        nvd = fetch_nvd(timeout=timeout)
     except (OSError, ValueError, TimeoutError) as e:
         say(f"Couldn't update the CVE list from the NVD: {e}")
         return False
+    advisories, carried = [], []
+    try:
+        advisories, skipped = fetch_bulletins(timeout=max(10.0, timeout - (time.monotonic() - started)))
+        for ids, why, title in skipped:
+            say(f"Left out {', '.join(ids)} ({title}): {why}")
+    except (OSError, ValueError, KeyError, TimeoutError) as e:
+        before = _read(Path(cache_dir) / CACHE_NAME) or current()[0]  # what the last refresh read from them
+        carried = [c for c in before["cves"] if c.get("source") == "advisory"]
+        say(f"Couldn't read Ubiquiti's security advisories ({e}); keeping the {len(carried)} CVE(s) read from "
+            "them before.")
+    data = build_rules(nvd, advisories, carried=carried)
     path = Path(cache_dir) / CACHE_NAME
     try:
         path.parent.mkdir(parents=True, exist_ok=True)
@@ -848,5 +1067,7 @@ def refresh(cache_dir, log=None, timeout: float = 60.0) -> bool:
     global CACHE_DIR
     CACHE_DIR = cache_dir
     reload()
-    say(f"CVE list updated: {len(data['cves'])} CVEs as of {data['generated']}, saved in {path}")
+    found = sum(c.get("source") == "advisory" for c in data["cves"])
+    say(f"CVE list updated: {len(data['cves'])} CVEs as of {data['generated']}"
+        + (f" ({found} from advisories newer than the built-in list)" if found else "") + f", saved in {path}")
     return True

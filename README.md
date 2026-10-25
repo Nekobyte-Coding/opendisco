@@ -693,14 +693,16 @@ A device with a match gets a `CVE` diagnostic naming each CVE and the version th
 and its Status starts with a red ❗. Details lists every match with its CVSS severity, what
 fixes it and a short summary; the JSON export has them too, with links to the NVD.
 
-The list comes from the NVD and Ubiquiti's Security Advisory Bulletins, and every range was
-checked against the bulletin. Where the two disagree, only the versions both call affected are
+The list comes from the NVD and Ubiquiti's Security Advisory Bulletins, and every range in the
+built-in list was checked against the bulletin. Where the two disagree, only the versions both call affected are
 flagged. Models are recognised by the platform names in Ubiquiti's own device list and firmware
 server. A device is only checked when its model and firmware version are certain, so **no
 match isn't proof a device is safe**. Notes says how old the list is.
 `opendisco.py --update-cves` downloads current NVD data (a few seconds, within the NVD's limit
-for use without an API key) into the app's data folder, and the newer of that and the built-in
-list is used. `packaging/update_cves.py` regenerates the built-in list.
+for use without an API key) and Ubiquiti's bulletins newer than the built-in list into the app's
+data folder, and the newer of that and the built-in list is used. A new bulletin's CVE is added
+only when every product, version and fix it names is understood; the others wait for a new
+release. If the bulletins can't be read, the CVEs read from them before are kept. `packaging/update_cves.py` regenerates the built-in list.
 
 ## Platform notes
 
@@ -771,9 +773,7 @@ a packet for decoding.
   new prefixes.
 - The CVE check doesn't cover cameras and other UniFi Protect, Access, Talk and Connect gear,
   or server software (UISP, self-hosted UniFi Network or UniFi OS Server). Firmware 4.x on
-  legacy access points isn't checked against advisories written for 5.x and later. A refresh adds new CVEs only when the
-  NVD has product data for them; the newest UniFi advisories often lack it for weeks, until a
-  new release adds them by hand.
+  legacy access points isn't checked against advisories written for 5.x and later.
 
 ## Building from source
 
