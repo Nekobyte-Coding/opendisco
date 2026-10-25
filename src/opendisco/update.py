@@ -70,8 +70,9 @@ _TLS = None
 
 
 def _tls() -> ssl.SSLContext:
-    """Certificate-checked TLS. Briefcase's Python on macOS and Chaquopy's on Android bring no
-    root certificates of their own: those use the system's."""
+    """Certificate-checked TLS. Briefcase's Python on macOS finds no root certificates of its own,
+    so it uses the system's. (Chaquopy on Android loads its own bundle; Android's folder is only
+    a fallback.)"""
     global _TLS
     if _TLS is None:
         ctx = ssl.create_default_context()
