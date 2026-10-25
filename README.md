@@ -22,7 +22,7 @@ works with.
 
 It comes two ways:
 - **A native app** for macOS, Windows, Linux and Android (see [The app](#the-app)). The
-  iPhone and iPad version is in the source too, but isn't released yet.
+  iPhone and iPad version is in beta from 1.5.0: it's being tested, with no public download yet.
 - **The command-line tool,** which needs only Python 3.8 or newer with no packages to
   install, and runs on macOS, Linux and Windows.
 
@@ -32,7 +32,7 @@ Installers are on the [Releases](https://github.com/Nekobyte-Coding/opendisco/re
 
 | Version | What's new | Released for | Builds added later | Known issues (fixed in) |
 |---|---|---|---|---|
-| 1.5.0 | Find HTTP/HTTPS/SSH port and Scan all ports for one device, and an HTTP column. Status in plain words with an issue list. A CVE check of each device's firmware, updated from the NVD. TFTP recovery detection. Device tools over SSH: firmware updates, config editor, change login, Scan from device, devices behind other devices. Settings and self-update. A new phone layout | macOS, Windows, Linux, Android | | |
+| 1.5.0 | Find HTTP/HTTPS/SSH port and Scan all ports for one device, and an HTTP column. Status in plain words with an issue list. A CVE check of each device's firmware, updated from the NVD. TFTP recovery detection. Device tools over SSH: firmware updates, config editor, change login, Scan from device, devices behind other devices. Settings and self-update. A new phone layout | macOS, Windows, Linux, Android; iOS (beta, no public download yet) | | |
 | 1.4.2 | "Probe listed networks" no longer stays on after Direct or Trunk VLANs. Start waits for Keep addresses. Android names the export file it saved. Clearer networks-file errors | macOS, Windows, Linux, Android | | macOS: a scan can find nothing on a Mac that has an older OpenDisco (another app ID) or another app built with Briefcase (1.5.0) |
 | 1.4.1 | Android release-signed, with a three-column list. Windows fixes: Keep addresses, adapter names with spaces, the About version, the data folder. CSV exports open right in Excel | macOS, Windows, Linux, Android | | "Probe listed networks" stays on after Direct or Trunk VLANs, so the next scan adds temporary addresses (1.4.2). Android: a second export in the same minute is reported under the first one's file name (1.4.2) |
 | 1.4.0 | Renamed OpenDisco, Apache 2.0 license. Windows sniffs, probes VLANs and adds temporary addresses (Npcap). First Android release. The Windows app opens again | macOS, Windows, Linux, Android | | Windows: Keep addresses fails, and a Port whose adapter name has a space (Ethernet 2) isn't the one scanned. Android: Export does nothing (1.4.1). "Probe listed networks" stays on after Direct or Trunk VLANs (1.4.2) |
@@ -169,7 +169,7 @@ tag VLANs, so the app only offers the modes the platform supports:
 | macOS, Linux | yes | yes | yes | yes |
 | Windows | yes | yes, with Npcap | yes, as administrator (Windows 10 2004 or later) | listens for VLANs; probes untagged only |
 | Android | yes: broadcast, multicast, subnet sweep, mDNS, SSDP | no | no | no |
-| iPhone, iPad (not released yet) | yes, the same as Android (Apple's multicast entitlement) | no | no | no |
+| iPhone, iPad (beta) | yes, the same as Android (Apple's multicast entitlement) | no | no | no |
 
 **Windows details:**
 - **Npcap** captures packets for Sniff, Trunk VLANs and Direct. Its license doesn't allow
@@ -214,7 +214,7 @@ ticked. The command line's `--all-ports 192.168.1.20` does the same for the addr
 
 ### On phones
 
-The Android app and the iPhone/iPad app (not released yet) share one layout. Quick Scan, Full
+The Android app and the iPhone/iPad app (beta, no public download yet) share one layout. Quick Scan, Full
 Scan and Stop sit above the device list, with Export, Notes, Log and Settings in the title bar.
 Tapping a device opens its page, titled with its name and address, with tabs along the
 bottom: **Details**, **Packets**, **Tools**, **Notes** and **Log**. **Tools** has:
