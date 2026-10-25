@@ -623,6 +623,9 @@ class Device:
     service_info: dict = field(default_factory=dict)  # port -> what answered there (banner, page title...)
     port_search: dict = field(default_factory=dict)  # the last search of its TCP ports (find_ports)
     tftp: bool = False  # a TFTP server answered on it: TFTP recovery mode
+    # Found through another device's own tools (Scan from device): {"key", "ip", "how"}. The table
+    # lists it under that device, indented.
+    found_by: dict = field(default_factory=dict)
     port_hints: dict = field(default_factory=dict)  # "https"/"ssh" -> {source: port}, beyond discovery
     alias: dict = field(default_factory=dict)  # the temporary alias it was reached through
     direct: bool = False  # answered without an alias (old firmware answers other subnets)
@@ -764,6 +767,7 @@ class Device:
             self.ports = sorted(set(self.ports or []) | set(other.ports))
         self.port_search = self.port_search or other.port_search
         self.tftp = self.tftp or other.tftp
+        self.found_by = self.found_by or other.found_by
         self.mdns = self.mdns or other.mdns
         self.ssdp = self.ssdp or other.ssdp
         self.api = self.api or other.api
@@ -4264,8 +4268,39 @@ def _ip_sort_key(d: Device):
         return (1, 0)
 
 
+def tree_order(devices) -> list:
+    """[(device, depth)] in table order: by IP, each device followed by the ones found through it
+    (Scan from device), a level deeper."""
+    devs = sorted(devices, key=_ip_sort_key)
+    keys = {d.key for d in devs}
+    children, roots = {}, []
+    for d in devs:
+        parent = d.found_by.get("key")
+        if parent in keys and parent != d.key:
+            children.setdefault(parent, []).append(d)
+        else:
+            roots.append(d)
+    out, placed = [], set()
+
+    def walk(d, depth):
+        if d.key not in placed:
+            placed.add(d.key)
+            out.append((d, depth))
+            for child in children.get(d.key, ()):
+                walk(child, depth + 1)
+
+    for d in roots + devs:  # then any loop (each found through the next) from its first device
+        walk(d, 0)
+    return out
+
+
 def sorted_devices(inv: Inventory) -> list:
-    return sorted(inv.devices.values(), key=_ip_sort_key)
+    return [d for d, _ in tree_order(inv.devices.values())]
+
+
+def nested_ip(d: Device, depth: int) -> str:
+    """The IP as the table shows it: indented under the device it was found through."""
+    return f"{'    ' * (depth - 1)}└ {d.ip or d.mac or '-'}" if depth else d.ip
 
 
 # What the Status column says for each finding, in a word or two; Diagnostics say the rest.
@@ -4308,11 +4343,11 @@ def issue_links(d: Device) -> list:
 
 
 def render_table(devs) -> str:
-    cols = [("IP", 15), ("VLAN", 4), ("VENDOR", 9), ("MAC", 17), ("MODEL", 22), ("NAME", 22), ("FIRMWARE", 16),
+    cols = [("IP", 23), ("VLAN", 4), ("VENDOR", 9), ("MAC", 17), ("MODEL", 22), ("NAME", 22), ("FIRMWARE", 16),
             ("UPTIME", 7), ("VIA", 24)]
     rows = []
-    for d in devs:
-        vals = [d.ip or "-", d.vlan_label or "?", d.vendor or "?", d.mac or "-", d.model or "?", d.name, d.firmware,
+    for d, depth in tree_order(devs):
+        vals = [nested_ip(d, depth) or "-", d.vlan_label or "?", d.vendor or "?", d.mac or "-", d.model or "?", d.name, d.firmware,
                 fmt_uptime(d.info.get("uptime")), ",".join(v for v in VIA_ORDER if v in d.via)]
         rows.append(([_trunc(v, w) for v, (_, w) in zip(vals, cols)], status_cell(d)))
     widths = [max([len(h)] + [len(r[0][i]) for r in rows]) for i, (h, _) in enumerate(cols)]
@@ -4383,6 +4418,8 @@ def render_details(d: Device) -> str:
         row("VLAN", f"{d.vlan_label} ({how})")
     if d.seen_on:
         row("Answered on", ", ".join(sorted(d.seen_on)))
+    if d.found_by:
+        row("Found through", f"{d.found_by.get('ip', '?')}" + (f" ({d.found_by['how']})" if d.found_by.get("how") else ""))
     if d.lldp:
         bits = [d.lldp.get(k) for k in ("system", "description") if d.lldp.get(k)]
         if d.lldp.get("mgmt_ip"):
@@ -4419,7 +4456,7 @@ def render_details(d: Device) -> str:
             row("Console API", "  ".join(bits))
         if d.api.get("apps"):
             row("Console apps", ", ".join(d.api["apps"]))
-    for kind, label in (("https", "HTTPS port"), ("http", "HTTP port"), ("ssh", "SSH port")):
+    for kind, label in (("http", "HTTP port"), ("https", "HTTPS port"), ("ssh", "SSH port")):
         said = d.said_ports(kind)
         if said:
             row(label, "; ".join(f"{port} ({PORT_SOURCES[source]})" for source, port in said.items()))
@@ -4570,6 +4607,7 @@ def device_to_dict(d: Device) -> dict:
         "https_port": d.said_port("https"), "http_port": d.said_port("http"), "ssh_port": d.said_port("ssh"),
         "port_sources": {kind: d.said_ports(kind) for kind in ("https", "http", "ssh") if d.said_ports(kind)} or None,
         "alias": d.alias or None, "answered_without_alias": d.direct,
+        "found_through": {k: v for k, v in d.found_by.items() if k != "key"} or None,
         "vlan": int(d.vlan_label) if d.vlan_label.isdigit() else None,
         "vlan_tagged": bool(d.vlan), "vlan_parent": d.vlan_parent or None, "answered_on": sorted(d.seen_on), "lldp": d.lldp or None, "wifi_ap": d.wifi or None,
         "issues": [{"level": lv, "tag": t, "message": m} for lv, t, m in d.issues],
@@ -4912,12 +4950,12 @@ def result_to_dict(res: ScanResult) -> dict:
     }
 
 
-EXPORT_COLUMNS = ("IP", "VLAN", "Vendor", "MAC", "Model", "Name", "Firmware", "HTTPS", "HTTP", "SSH", "Uptime",
+EXPORT_COLUMNS = ("IP", "VLAN", "Vendor", "MAC", "Model", "Name", "Firmware", "HTTP", "HTTPS", "SSH", "Uptime",
                   "Via", "Status")
 
 
 def port_cell(d: Device, kind: str) -> str:
-    """The HTTPS, HTTP or SSH column: the port the device reports, with a deep check's verdict
+    """The HTTP, HTTPS or SSH column: the port the device reports, with a deep check's verdict
     (✓ that service answers there, ✗ nothing does), then any other port it was found on."""
     reported = d.said_port(kind)
     elsewhere = [f"{p} ✓" for p, k in sorted(d.services.items()) if k == kind and p != reported]
@@ -4933,7 +4971,7 @@ def port_cell(d: Device, kind: str) -> str:
 def device_row(d: Device) -> list:
     """The values the table, CSV and HTML exports show for a device."""
     return [d.ip or "", d.vlan_label, d.vendor, d.mac or "", d.model, d.name, d.firmware,
-            port_cell(d, "https"), port_cell(d, "http"), port_cell(d, "ssh"), fmt_uptime(d.info.get("uptime")),
+            port_cell(d, "http"), port_cell(d, "https"), port_cell(d, "ssh"), fmt_uptime(d.info.get("uptime")),
             ",".join(v for v in VIA_ORDER if v in d.via), status_cell(d)[0]]
 
 
@@ -4942,9 +4980,10 @@ def export_csv(res: ScanResult) -> str:
     import io
     out = io.StringIO()
     writer = csv.writer(out)
-    writer.writerow(EXPORT_COLUMNS + ("Diagnostics",))
+    writer.writerow(EXPORT_COLUMNS + ("Diagnostics", "Found through"))
     for d in res.devices:
-        writer.writerow(device_row(d) + [" | ".join(f"[{tag}] {msg}" for _, tag, msg in d.issues)])
+        writer.writerow(device_row(d) + [" | ".join(f"[{tag}] {msg}" for _, tag, msg in d.issues),
+                                         d.found_by.get("ip", "")])
     return out.getvalue()
 
 
@@ -4953,8 +4992,11 @@ def export_html(res: ScanResult) -> str:
     from html import escape
     colors = {"error": "#c62828", "warn": "#b26a00", "note": "#1565c0"}
     rows = []
-    for d in res.devices:
-        cells = "".join(f"<td>{escape(str(v))}</td>" for v in device_row(d)[:-1])
+    for d, depth in tree_order(res.devices):
+        values = device_row(d)[:-1]
+        values[0] = nested_ip(d, depth)
+        cells = "".join(f"<td>{escape(str(v)).replace(' ', '&nbsp;') if n == 0 else escape(str(v))}</td>"
+                        for n, v in enumerate(values))
         tags = ", ".join(f'<span style="color:{colors.get(lv, "#2e7d32")}">{escape(status_label(tag))}</span>'
                          for lv, tag, _ in d.issues) or '<span style="color:#2e7d32">OK</span>'
         links = dict(issue_links(d))

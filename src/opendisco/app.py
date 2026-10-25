@@ -40,11 +40,11 @@ ANY_PORT = "Any port"
 # What a device's right-click menu (and the Device menu) offers; None separates groups.
 DEVICE_ACTIONS = [("web", "Open Web UI"), ("ssh", "Open SSH…"), ("ping", "Ping"), ("rescan", "Rescan device"),
                   ("issues", "Show issues…"), None,
-                  ("find_https", "Find HTTPS port"), ("find_http", "Find HTTP port"), ("find_ssh", "Find SSH port"),
+                  ("find_http", "Find HTTP port"), ("find_https", "Find HTTPS port"), ("find_ssh", "Find SSH port"),
                   ("all_ports", "Scan all ports"), None,
                   ("copy_ip", "Copy IP address"), ("copy_mac", "Copy MAC address"), None,
                   ("forget", "Forget SSH key"), ("hide", "Hide device")]
-FINDS = {"find_https": "https", "find_http": "http", "find_ssh": "ssh", "all_ports": "all"}
+FINDS = {"find_http": "http", "find_https": "https", "find_ssh": "ssh", "all_ports": "all"}
 # Said before a port search, until switched off: to intrusion prevention it looks like a port scan.
 PORT_SEARCH_WARNING = ("A port search connects to {ip}'s TCP ports: all 65,535 of them when the service isn't on a "
                        "usual one. Intrusion prevention on the network (UniFi's IPS / Threat Management, a "
@@ -154,7 +154,7 @@ class OpenDiscoApp(toga.App):
             # No right-click on a phone: the port finder's buttons act on the device last tapped.
             self.find_buttons = [toga.Button(text, id=action, on_press=self.on_find_button, enabled=False,
                                              style=Pack(flex=1))
-                                 for action, text in (("find_https", "HTTPS"), ("find_http", "HTTP"),
+                                 for action, text in (("find_http", "HTTP"), ("find_https", "HTTPS"),
                                                       ("find_ssh", "SSH"), ("all_ports", "All ports"))]
         else:
             self.table = toga.Table(columns=COLUMNS, on_select=self.on_select, on_activate=self.on_activate,
@@ -317,7 +317,7 @@ class OpenDiscoApp(toga.App):
         except Exception:
             pass  # purely cosmetic
 
-    COLUMN_WEIGHTS = (1.1, 0.5, 0.9, 1.3, 1.0, 1.4, 0.9, 0.7, 0.6, 0.6, 0.7, 1.1, 1.3)  # IP ... Status
+    COLUMN_WEIGHTS = (1.1, 0.5, 0.9, 1.3, 1.0, 1.4, 0.9, 0.6, 0.7, 0.6, 0.7, 1.1, 1.3)  # IP ... Status
 
     def _size_columns(self, *args, **kwargs):
         """Windows: toga sizes the table's columns once, before the window has its width, which left
@@ -595,7 +595,12 @@ class OpenDiscoApp(toga.App):
         """Fill the table, minus hidden devices. Rows change in place when the same devices are
         listed, so the selection stays put while a scan or a rescan updates them."""
         row = self._phone_row if self.caps["mobile"] else (lambda d: dict(zip(ACCESSORS, core.device_row(d))))
-        rows = [(d.key, row(d)) for d in devices if d.key not in self.hidden]
+        rows = []
+        for d, depth in core.tree_order(devices):  # found through another device: indented under it
+            if d.key not in self.hidden:
+                values = row(d)
+                values["ip"] = core.nested_ip(d, depth)
+                rows.append((d.key, values))
         data = self.table.data
         if [key for key, _ in rows] == [getattr(row, "key", None) for row in data]:
             for row, (_, values) in zip(data, rows):
