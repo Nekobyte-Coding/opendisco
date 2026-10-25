@@ -14,7 +14,7 @@ import traceback
 
 import toga
 from toga.style import Pack
-from toga.style.pack import COLUMN
+from toga.style.pack import COLUMN, ROW
 
 # The iPhone's system colours (light mode), as Android colour ints (ARGB)
 BLUE, RED, GREEN = 0xFF007AFF, 0xFFFF3B30, 0xFF34C759
@@ -25,6 +25,7 @@ DISABLED_FILL, DISABLED_TEXT = 0xFFF0F0F2, 0xFFB4B4B9
 SEPARATOR = 0xFFD8D8DC
 SELECTED = 0x24007AFF  # a tablet's list: the row of the device beside it
 SEARCH_FILL = 0xFFEEEEF0  # the search field
+PAGE_WIDTH = 720  # a tablet's pages over the list and device (config backups, the config editor), in the middle
 COLORS = {"systemBlueColor": BLUE, "systemRedColor": RED, "systemGreenColor": GREEN}
 BAR_ICONS = {"Export": "ios_share", "Notes and Log": "list_alt", "Settings": "settings"}  # bar_button adds more
 SYMBOL_NAMES = {"plus": "add"}  # the iPhone's SF Symbol -> its Material Symbol
@@ -242,6 +243,10 @@ class Page:
     showing its title and subtitle with the Up arrow. Up, Back and the back gesture return."""
 
     def __init__(self, app, content, on_back=None):
+        if app.wide:  # a tablet: a column in the middle, not lines and buttons across the screen
+            content.style.update(flex=0, width=PAGE_WIDTH)
+            content = toga.Box(style=Pack(direction=ROW, flex=1), children=[
+                toga.Box(style=Pack(flex=1)), content, toga.Box(style=Pack(flex=1))])
         self.app, self.content, self.on_back = app, content, on_back
 
     def show(self, title: str, subtitle: str = ""):
@@ -295,8 +300,8 @@ def fit(app, export, notes, settings):
     export_command.enabled = False
     app.main_window.toolbar.add(export_command, command("Notes and Log", notes, 2), command("Settings", settings, 3))
     app.export_button = CommandButton(export_command)
-    for fitting in (_take_up_and_menu, _fit_system_bars, _fit_tabs, _fit_list, _fit_wide,
-                    lambda app: _plain_widgets(), _sized_already, _keep_above_keyboard):
+    for fitting in (_take_up_and_menu, _fit_system_bars, _fit_tabs, _fit_list, _fit_status,
+                    lambda app: _plain_widgets(), lambda app: _fit_lists(), _sized_already, _keep_above_keyboard):
         try:
             fitting(app)
         except Exception:
@@ -444,6 +449,51 @@ def side_by_side(app) -> bool:
     return app.wide
 
 
+def _style_row(view, icon: bool):
+    """A list row (Toga's DetailedList) as the iPhone draws one: its title and subtitle in the
+    iPhone's sizes and colours, one line each, cut short with …, no space for an icon unless it
+    has one, a thin line under it."""
+    from java import jclass
+    View, RelativeLayout = jclass("android.view.View"), jclass("android.widget.RelativeLayout")
+    margin = _dp(16)
+    picture, texts = view.getChildAt(0), view.getChildAt(1)
+    if not icon:
+        picture.setVisibility(View.GONE)
+    params = texts.getLayoutParams()
+    params.setMargins(margin, 0, margin, 0)
+    texts.setLayoutParams(params)
+    texts.getChildAt(0).setTextSize(17.0)
+    texts.getChildAt(0).setTextColor(_int(LABEL))
+    texts.getChildAt(1).setTextSize(15.0)
+    texts.getChildAt(1).setTextColor(_int(SECONDARY))
+    for line_number in (0, 1):  # (the row's height is fixed)
+        texts.getChildAt(line_number).setMaxLines(1)
+        texts.getChildAt(line_number).setEllipsize(jclass("android.text.TextUtils$TruncateAt").END)
+    line = View(view.getContext())
+    line.setBackgroundColor(_int(SEPARATOR))
+    line_params = RelativeLayout.LayoutParams(RelativeLayout.LayoutParams.MATCH_PARENT, max(1, _dp(0.5)))
+    line_params.addRule(RelativeLayout.ALIGN_PARENT_BOTTOM)
+    line_params.setMargins(margin, 0, 0, 0)
+    view.addView(line, line_params)
+
+
+def _fit_lists():
+    """The other lists (a device's config backups) drawn like the device list; the one picked
+    stays gray, as Toga marks it."""
+    from toga_android.widgets.detailedlist import DetailedList
+    toga_make_row = DetailedList._make_row
+
+    def make_row(self, container, i, row):
+        toga_make_row(self, container, i, row)
+        try:
+            icon = getattr(row, self.interface.accessors[2], None) is not None
+            _style_row(container.getChildAt(container.getChildCount() - 1), icon)
+        except Exception:
+            traceback.print_exc()
+
+    DetailedList._make_row = make_row
+
+
 def _fit_list(app):
     """The device list as the iPhone shows it: the address over the model and name, a line
     between devices, no space for an icon, a ripple where it's tapped rather than a row that
@@ -451,11 +501,9 @@ def _fit_list(app):
     selection, every second of a scan). On a tablet the device beside the list keeps its row
     tinted."""
     from java import jarray, jclass, jint
-    View, RelativeLayout = jclass("android.view.View"), jclass("android.widget.RelativeLayout")
     TypedValue, ripple = jclass("android.util.TypedValue"), jclass("android.R$attr").selectableItemBackground
     impl = app.table._impl
     toga_make_row = impl._make_row
-    margin = _dp(16)
 
     def make_row(container, i, row):
         toga_make_row(container, i, row)
@@ -471,24 +519,7 @@ def _fit_list(app):
                 view.setForeground(view.getContext().getDrawable(value.resourceId))
             else:
                 view.setBackground(view.getContext().getDrawable(value.resourceId))
-            icon, texts = view.getChildAt(0), view.getChildAt(1)
-            icon.setVisibility(View.GONE)
-            params = texts.getLayoutParams()
-            params.setMargins(margin, 0, margin, 0)
-            texts.setLayoutParams(params)
-            texts.getChildAt(0).setTextSize(17.0)
-            texts.getChildAt(0).setTextColor(_int(LABEL))
-            texts.getChildAt(1).setTextSize(15.0)
-            texts.getChildAt(1).setTextColor(_int(SECONDARY))
-            for line_number in (0, 1):  # one line each, cut short with … (the row's height is fixed)
-                texts.getChildAt(line_number).setMaxLines(1)
-                texts.getChildAt(line_number).setEllipsize(jclass("android.text.TextUtils$TruncateAt").END)
-            line = View(view.getContext())
-            line.setBackgroundColor(_int(SEPARATOR))
-            line_params = RelativeLayout.LayoutParams(RelativeLayout.LayoutParams.MATCH_PARENT, max(1, _dp(0.5)))
-            line_params.addRule(RelativeLayout.ALIGN_PARENT_BOTTOM)
-            line_params.setMargins(margin, 0, 0, 0)
-            view.addView(line, line_params)
+            _style_row(view, False)
         except Exception:
             traceback.print_exc()
 
@@ -523,12 +554,10 @@ def _fit_list(app):
     impl._load_data()
 
 
-def _fit_wide(app):
-    """A tablet: the status line under the list wraps at the list's edge, and the device page's
-    title and subtitle end in … at the screen's, rather than run on (Toga makes a label as wide
-    as its text on one line, and the layout with it)."""
-    if not app.wide:
-        return
+def _fit_status(app):
+    """The status lines (under the list, in Tools) wrap at the screen's edge, and a tablet's
+    device page's title and subtitle end in …, rather than run on (Toga makes a label as wide as
+    its text on one line, and the layout with it)."""
     from decimal import ROUND_UP
 
     from java import jclass
@@ -550,9 +579,11 @@ def _fit_wide(app):
         impl.rehint = rehint
         label.refresh()
 
-    narrow(app.status.widgets[0], False)
-    narrow(app.page.title, True)
-    narrow(app.page.subtitle, True)
+    for label in app.status.widgets:  # (the list's, Tools')
+        narrow(label, False)
+    if app.wide:
+        narrow(app.page.title, True)
+        narrow(app.page.subtitle, True)
 
 
 def keep_selection(app, key):
@@ -623,6 +654,8 @@ def search_field(app, widget):
     underline, typed without capitals or corrections; the keyboard's key reads Search and puts
     the keyboard away (the list changes as it's typed)."""
     plain_entry(widget)
+    if wide(app):  # the list's column is narrow: what fits of what it looks through (no … on a field's hint)
+        widget.placeholder = "Search: IP, MAC, name, note…"
     try:
         from java import dynamic_proxy, jclass
         EditorInfo = jclass("android.view.inputmethod.EditorInfo")
@@ -684,8 +717,8 @@ def bar_button(app, symbol, title, action):
 
 
 def menu_button(app, title, items):
-    """A button that opens a menu under it (Copy: the IP or MAC address): items() lists (title,
-    enabled, action) when it's tapped."""
+    """A gray button that opens a menu under it (Copy: the IP or MAC address): items() lists
+    (title, enabled, action) when it's tapped."""
     def press(widget, **kwargs):
         try:
             from java import dynamic_proxy, jclass
@@ -707,7 +740,9 @@ def menu_button(app, title, items):
         except Exception:
             traceback.print_exc()
 
-    return toga.Button(title, on_press=press, style=Pack(flex=1))
+    button = toga.Button(title, on_press=press, style=Pack(flex=1))
+    style_button(button, "gray")
+    return button
 
 
 async def open_file(app):
