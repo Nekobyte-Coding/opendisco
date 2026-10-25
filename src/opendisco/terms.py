@@ -98,6 +98,20 @@ def record(folder, via: str, platform: str, channel: str = "github") -> dict:
     return entry
 
 
+def private(folder) -> None:
+    """The data folder (config backups with password hashes and secrets, remembered device lists,
+    notes) readable by this account only, whether the app or the command line made it. Windows'
+    is per-user already."""
+    if sys.platform == "win32":
+        return
+    try:
+        folder = Path(folder)
+        folder.mkdir(parents=True, exist_ok=True)
+        folder.chmod(0o700)
+    except OSError:
+        pass
+
+
 def licenses() -> str:
     """OpenDisco's own notice and the bundled components' licenses (THIRD-PARTY-NOTICES.md)."""
     try:

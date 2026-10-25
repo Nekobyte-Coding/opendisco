@@ -5610,6 +5610,7 @@ def main(argv=None) -> int:
         return 0
     if not terms.cli_gate(vulns.default_data_dir(), opts.accept_terms):  # the app's record: accepted once for both
         return 2
+    terms.private(vulns.default_data_dir())  # (made by the command line, it was readable by everyone)
     vulns.CACHE_DIR = vulns.CACHE_DIR or vulns.default_data_dir()  # the app's data folder: one list for both
     if opts.update_cves:
         log("Downloading the CVE list from the NVD...")

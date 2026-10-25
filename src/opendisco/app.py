@@ -447,14 +447,8 @@ class OpenDiscoApp(toga.App):
     def _private_data(self):
         """macOS and Linux: the data folder (config backups with password hashes and secrets,
         remembered device lists, notes) readable by this account only. Windows' is per-user."""
-        if self.caps["platform"] not in ("macos", "linux"):
-            return
-        try:
-            data = Path(self.paths.data)
-            data.mkdir(parents=True, exist_ok=True)
-            data.chmod(0o700)
-        except OSError:
-            pass
+        if self.caps["platform"] in ("macos", "linux"):
+            terms.private(self.paths.data)
 
     def _move_old_data(self):
         """Earlier versions kept the networks file, hidden devices and SSH keys in a folder named
