@@ -376,9 +376,18 @@ class OpenDiscoApp(toga.App):
 
     COLUMN_WEIGHTS = (1.1, 0.5, 0.9, 1.3, 1.0, 1.4, 1.3, 0.8, 0.6, 0.7, 0.6, 0.7, 1.1, 1.3)  # IP ... Status
 
+    # Linux: what each column typically holds, for its width (the heading's when wider). Names,
+    # models and Via are free text: they share what's left, names the most.
+    GTK_COLUMN_SAMPLES = {"IP": "192.168.10.200", "VLAN": "4094", "Vendor": "Ubiquiti", "MAC": "00:00:00:00:00:00",
+                          "Firmware": "8.7.11 (latest: 8.7.25)", "Latency": "12 ms, 25%", "HTTP": "8080 ✓",
+                          "HTTPS": "8443 ✓", "SSH": "2222 ✓", "Uptime": "100d23h", "Status": "Multiple issues (3)"}
+    GTK_FLEXIBLE = {"Name": 1.4, "Model": 1.0, "Via": 0.6}
+
     def _size_columns(self, *args, **kwargs):
         """Windows: toga sizes the table's columns once, before the window has its width, which left
         them as slivers with no headings. Spread them over the table's width instead."""
+        if self.caps["platform"] == "linux":
+            self._size_columns_gtk()
         if self.caps["platform"] != "windows":
             return
         try:
@@ -389,6 +398,44 @@ class OpenDiscoApp(toga.App):
             weights = self.COLUMN_WEIGHTS[:view.Columns.Count]
             for column, weight in zip(view.Columns, weights):
                 column.Width = int(width * weight / sum(weights))
+        except Exception:
+            pass  # cosmetic
+
+    def _size_columns_gtk(self):
+        """Linux: GTK sizes each column to what it holds and the table doesn't scroll sideways, so
+        the last columns (Status among them) ended past the window's edge. Each column gets the
+        width its heading or typical contents take in the table's font, scaled to the table's
+        width (the free-text ones share what's left), and longer text ends in "…". Toga makes the
+        columns again whenever the rows change (keeping only their widths), so _show_devices calls
+        this again then."""
+        if self.caps["platform"] != "linux":
+            return
+        try:
+            from gi.repository import Gtk, Pango
+            scroller, view = self.table._impl.native, self.table._impl.native_table
+            width = scroller.get_allocated_width() - 24  # room for the vertical scroll bar
+            if width < 200:
+                return
+            columns = view.get_columns()
+
+            def measure(text):
+                return view.create_pango_layout(text).get_pixel_size()[0]
+
+            titles = [c.get_title() for c in columns]
+            wanted = [max(measure(t) + 16, measure(self.GTK_COLUMN_SAMPLES.get(t, "")) + 14) for t in titles]
+            shares = [self.GTK_FLEXIBLE.get(t, 0) for t in titles]
+            left = width - sum(w for w, share in zip(wanted, shares) if not share)
+            if sum(shares) and left >= 50 * sum(1 for share in shares if share):  # the free-text ones share it
+                widths = [left * share / sum(shares) if share else w for w, share in zip(wanted, shares)]
+            else:  # too narrow even for that: everything shrinks alike
+                widths = [w * width / sum(wanted) for w in wanted]
+            for column, w in zip(columns, widths):
+                column.set_expand(False)
+                column.set_sizing(Gtk.TreeViewColumnSizing.FIXED)
+                column.set_fixed_width(max(16, int(w)))
+                for cell in column.get_cells():
+                    if isinstance(cell, Gtk.CellRendererText):
+                        cell.set_property("ellipsize", Pango.EllipsizeMode.END)
         except Exception:
             pass  # cosmetic
 
@@ -706,6 +753,7 @@ class OpenDiscoApp(toga.App):
                         setattr(row, attr, value)
         else:
             self.table.data = [dict(values, key=key) for key, values in rows]
+            self._size_columns_gtk()  # new columns: sized again
         if self.phone_ui:  # iOS forgets the tapped row whenever a row changes
             phone.keep_selection(self, selected)
 
