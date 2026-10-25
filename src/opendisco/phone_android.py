@@ -7,8 +7,8 @@ button and gesture go back like Up (app._android_back), and the tabs are Materia
 navigation bar. Colours and button shapes follow the iPhone's. A tablet (wide) shows the
 device page beside the list, and the list marks the device showing there.
 
-Everything here runs on the UI thread, and all of it is cosmetic except Page, Up and Back: when
-a native call fails the plain Toga widget is left as it was.
+Everything here runs on the UI thread, and all of it is cosmetic except Page, Up, Back and Quit:
+when a native call fails the plain Toga widget is left as it was.
 """
 import traceback
 
@@ -151,8 +151,8 @@ def style_button(button, kind="filled", color=None):
 def _plain_widgets():
     """Toga's buttons that aren't styled (Settings' Done, an update's answers) as the iPhone's
     plain ones: blue text, no box, a ripple where tapped (style_button restyles the others); no
-    underline under text that's only read (an update's notes); labels and switches in the
-    iPhone's text size, not Android's smaller one."""
+    underline or caret in text that's only read (an update's notes); labels and switches in the
+    iPhone's text size, not Android's smaller one; headings in the text colour."""
     from toga_android.colors import native_color
     from toga_android.widgets.button import Button
     from toga_android.widgets.label import Label
@@ -192,6 +192,7 @@ def _plain_widgets():
 
     def set_readonly(self, readonly):
         toga_readonly(self, readonly)
+        self.native.setCursorVisible(not readonly)  # a tap or scroll left a caret in text that's only read
         if readonly:
             _no_underline(self.native)
 
@@ -201,12 +202,15 @@ def _plain_widgets():
 
 
 def _text_size(impl):
-    """The iPhone's text size for a label or switch whose style doesn't give one."""
+    """The iPhone's text size for a label or switch whose style doesn't give one; a heading's colour."""
     from java import jclass
     from toga.fonts import SYSTEM_DEFAULT_FONT_SIZE
     if impl.interface.style.font_size == SYSTEM_DEFAULT_FONT_SIZE:
         impl.native.setTextSize(jclass("android.util.TypedValue").COMPLEX_UNIT_SP, 16)
         impl._default_text_size = impl.native.getTextSize()  # what Toga sets when no size is given
+    if impl.interface.style.font_weight == "bold":  # a heading (the terms', Settings' sections)
+        impl.native.setTextColor(_int(LABEL))  # Android's gray is for the text under it
+        impl._default_text_color = impl.native.getCurrentTextColor()  # what Toga sets when no colour is given
 
 
 def _sized_already(app):
@@ -300,13 +304,27 @@ def fit(app, export, notes, settings):
     export_command.enabled = False
     app.main_window.toolbar.add(export_command, command("Notes and Log", notes, 2), command("Settings", settings, 3))
     app.export_button = CommandButton(export_command)
-    for fitting in (_take_up_and_menu, _fit_system_bars, _fit_tabs, _fit_list, _fit_status,
+    for fitting in (_take_up_and_menu, _fit_system_bars, _fit_tabs, _fit_list, _fit_status, _fit_exit,
                     lambda app: _plain_widgets(), lambda app: _fit_lists(), _sized_already, _keep_above_keyboard):
         try:
             fitting(app)
         except Exception:
             traceback.print_exc()
     show_bar(app)
+
+
+def _fit_exit(app):
+    """Quit (the terms of use's) leaves: Toga's Android app can't exit (its exit() does nothing),
+    so the app stayed open after on_exit had already stopped the scans and let go of the
+    multicast lock. Its task closes and the process ends, so the next start is a fresh one."""
+    from java import jclass
+    process = jclass("android.os.Process")
+
+    def leave():
+        app._impl.native.finishAndRemoveTask()
+        process.killProcess(process.myPid())  # (a timer set here never ran once the activity had gone)
+
+    app._impl.exit = leave
 
 
 def _take_up_and_menu(app):

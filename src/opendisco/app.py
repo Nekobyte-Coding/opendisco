@@ -388,7 +388,7 @@ class OpenDiscoApp(toga.App):
         if ios:  # once the window is on screen
             self.loop.call_later(0.1, lambda: close.append(phone.hook(self, "present")(self, page)))
         else:
-            self.main_window.content = page
+            self.main_window.content = phone.middle(self, page) if self.phone_ui else page
 
     def show_terms(self, *args, **kwargs):
         """Terms of Use… beside About (phones: in Settings): the terms agreed to, to read again."""

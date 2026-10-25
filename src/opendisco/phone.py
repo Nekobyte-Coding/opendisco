@@ -233,14 +233,20 @@ def push_panel(app, title: str, content, on_back=None, fit=False):
     (fit_panel). (A tablet's is a phone's width, in the middle of the screen.)"""
     if fit:
         fit_panel(app, content)
-    column = toga.Box(style=Pack(direction=COLUMN, flex=1), children=[content])
-    if app.wide:
-        column.style.update(flex=0, width=PANEL_WIDTH)
-        column = toga.Box(style=Pack(direction=ROW, flex=1), children=[
-            toga.Box(style=Pack(flex=1)), column, toga.Box(style=Pack(flex=1))])
-    page = native(app).Page(app, column, on_back)
+    page = native(app).Page(app, middle(app, toga.Box(style=Pack(direction=COLUMN, flex=1), children=[content])),
+                            on_back)
     page.show(title, "")
     return page.close
+
+
+def middle(app, content):
+    """On a tablet, content as a phone-wide column in the middle of the screen (a small page, the
+    terms of use), not lines and buttons across it; on a phone, content as it is."""
+    if not app.wide:
+        return content
+    content.style.update(flex=0, width=PANEL_WIDTH)
+    return toga.Box(style=Pack(direction=ROW, flex=1), children=[
+        toga.Box(style=Pack(flex=1)), content, toga.Box(style=Pack(flex=1))])
 
 
 EDITOR_HEIGHT = 170  # a panel's many-line text box (a note, the subnets to sweep)
