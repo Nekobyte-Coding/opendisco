@@ -197,8 +197,19 @@ Right-click a device in the table (or select it and use the **Device** menu):
 - **Rescan device** probes just that device again (discovery sent straight to it from both
   source ports, then its ports, web redirect and console API), and updates its row, Details
   and Packets.
+- **Check for firmware update** asks Ubiquiti's public firmware server for the latest release
+  for the device's platform and says whether it's newer, with its date and size, and whether
+  known vulnerabilities make updating advisable.
+- **Update firmware…** (airMAX, UniFi access points and switches, UniFi OS consoles on 2.x and
+  later) downloads that release, checks its size and SHA-256, copies it to the device with
+  scp, starts the family's installer and waits for the device to come back. It asks first,
+  naming the device and both versions. See [Device tools over SSH](#device-tools-over-ssh).
+- **Edit config…** (airMAX) opens `/tmp/system.cfg`, airOS's whole configuration, in an
+  editor. **Save** writes it to flash for the next reboot; **Apply** saves it and applies it
+  now, as the web UI's Apply does.
+- **Change login…** (airMAX) sets a new username and password.
 - **Copy IP address**, **Copy MAC address**.
-- **Forget SSH key**: see below.
+- **Forget SSH key**: see below. **Forget saved login** removes a remembered device login.
 - **Hide device** takes it out of the table, by MAC address, in every scan until it's
   unhidden under **Hidden devices…**. Exports still include it.
 
@@ -216,6 +227,34 @@ or CBC ciphers is allowed, as far as the computer's ssh still supports them.
 
 **Windows:** sessions run in the app through pywinpty (bundled), using Windows' built-in
 OpenSSH client (Settings > Optional features > OpenSSH Client, if it's missing).
+
+### Device tools over SSH
+
+Firmware updates, the config editor and Change login log in with the computer's own `ssh` and
+`scp`, the same known-hosts file and host keys as the Terminal tab. Their login window can
+**remember the login for that device** (by MAC address) in the operating system's credential
+store: the macOS Keychain, Windows Credential Manager, or a Secret Service keyring on Linux
+(through `secret-tool`, from libsecret-tools). Where there's no such store, nothing is
+remembered; passwords are never written to a file.
+
+Each action is offered only for the device families whose steps Ubiquiti documents:
+
+| Family | Firmware update | Config | Login |
+|---|---|---|---|
+| airMAX (airOS 6 and 8: XM, XW, TI, XC, WA, 2XC, 2WA) | `/tmp/fwupdate.bin`, `/sbin/fwupdate -c` to check it, `/sbin/fwupdate -m` to install | `/tmp/system.cfg`; Save: `cfgmtd -w -p /etc/`; Apply: `/usr/etc/rc.d/rc.softrestart save` | `users.N.name` and `users.N.password` |
+| UniFi access points and switches | `/tmp/fwupdate.bin`, `syswrapper.sh upgrade2` | Set by the UniFi controller | Set by the UniFi controller |
+| UniFi OS consoles (2.x and later) | `/tmp/fwupdate.bin`, `ubnt-systool fwupdate /tmp/fwupdate.bin` | In the console's settings | In the console's settings |
+
+Other gear (EdgeRouters, airFiber, LTU, UISP) gets the firmware check only. Ubiquiti's help
+center describes the UniFi steps as a last resort, for when the UniFi app can't update a
+device. The installer runs on the device detached from the SSH session, so a dropped
+connection doesn't stop it halfway. The download is deleted once it's installed.
+
+**A new login** goes into `/tmp/system.cfg` the way airOS stores it: the password as a crypt
+hash in the same format as the current one (MD5-crypt, `$1$`, on airOS). Before writing it,
+the app hashes the password just used to log in and checks it matches the stored hash, so it
+never writes a hash the device can't read. It's applied at once, then the app logs in with
+the new login to confirm it, and updates the remembered login.
 
 ## Quick start (command line)
 

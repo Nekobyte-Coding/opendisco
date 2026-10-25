@@ -41,8 +41,10 @@ ANY_PORT = "Any port"
 DEVICE_ACTIONS = [("web", "Open Web UI"), ("ssh", "Open SSH…"), ("ping", "Ping"), ("rescan", "Rescan device"), None,
                   ("find_https", "Find HTTPS port"), ("find_http", "Find HTTP port"), ("find_ssh", "Find SSH port"),
                   ("all_ports", "Scan all ports"), None,
+                  ("fw_check", "Check for firmware update"), ("fw_update", "Update firmware…"),
+                  ("config", "Edit config…"), ("login", "Change login…"), None,
                   ("copy_ip", "Copy IP address"), ("copy_mac", "Copy MAC address"), None,
-                  ("forget", "Forget SSH key"), ("hide", "Hide device")]
+                  ("forget", "Forget SSH key"), ("forget_login", "Forget saved login"), ("hide", "Hide device")]
 FINDS = {"find_https": "https", "find_http": "http", "find_ssh": "ssh", "all_ports": "all"}
 NO_SESSION = "Right-click a device to get started: Open SSH or Ping."
 # Where earlier versions kept their data, by the parts of the data folder's path that changed:
@@ -242,7 +244,8 @@ class OpenDiscoApp(toga.App):
         try:
             self.settings_path.parent.mkdir(parents=True, exist_ok=True)
             self.settings_path.write_text(json.dumps({k: v for k, v in self.settings.items()
-                                                      if k in ("hidden", "ssh_user")}, indent=1), encoding="utf-8")
+                                                      if k in ("hidden", "ssh_user", "device_logins")}, indent=1),
+                                          encoding="utf-8")
         except OSError:
             pass
 
@@ -781,6 +784,7 @@ class OpenDiscoApp(toga.App):
                 item.title, item.enabled = title, enabled
 
     def _menu_state(self, d) -> dict:
+        from opendisco import devicegui
         titles = dict(entry for entry in DEVICE_ACTIONS if entry)
         if d is None:
             return {name: (title, False) for name, title in titles.items()}
@@ -802,6 +806,7 @@ class OpenDiscoApp(toga.App):
             "copy_mac": (f"Copy MAC address  ({d.mac})" if d.mac else titles["copy_mac"], bool(d.mac)),
             "forget": (titles["forget"], ip),
             "hide": (titles["hide"], True),
+            **devicegui.menu_state(self, d, titles),  # firmware, config and login over SSH
         }
 
     def _device_action(self, name):
@@ -826,6 +831,9 @@ class OpenDiscoApp(toga.App):
             self._rescan(d)
         elif name in FINDS:
             self._find(d, FINDS[name])
+        elif name in ("fw_check", "fw_update", "config", "login", "forget_login"):
+            from opendisco import devicegui
+            devicegui.act(self, d, name)
         elif name == "copy_ip":
             self._copy(d.ip, "IP address")
         elif name == "copy_mac":
