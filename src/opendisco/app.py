@@ -1442,7 +1442,7 @@ class OpenDiscoApp(toga.App):
             return
         android = kind == "android"
         try:
-            folder = self._android_download_folder() if android else update.download_folder()
+            folder = self._android_download_folder(asset.name) if android else update.download_folder()
         except Exception as e:
             self._update_failed(release, f"no folder to download it to ({e})")
             return
@@ -1517,6 +1517,7 @@ class OpenDiscoApp(toga.App):
                 update.start_windows_update(path, target, folder / "update.log")
             elif kind == "android":
                 self._install_apk(path)
+                self.updating = False  # the install is Android's now; backing out of it allows another try
                 self._append_log(f"Android's installer takes over to install OpenDisco {release.version}; it may "
                                  "first ask to allow installing apps from OpenDisco.", status=False)
                 self.status.text = "Android's installer takes over."
@@ -1565,13 +1566,16 @@ class OpenDiscoApp(toga.App):
                                     + (f"\n\n{detail}" if detail else ""))))
         return True
 
-    def _android_download_folder(self) -> Path:
+    def _android_download_folder(self, keep: str) -> Path:
         """Android: downloads go in the part of the app's cache that Briefcase's FileProvider
-        shares (shared/), so Android's installer can read them."""
+        shares (shared/), so Android's installer can read them. The file named keep stays: if
+        the installer was left without installing it, another try needn't download it again."""
         context = self._impl.native.getApplicationContext()
         folder = Path(str(context.getCacheDir().getAbsolutePath())) / "shared" / "opendisco-update"
-        shutil.rmtree(folder, ignore_errors=True)
-        folder.mkdir(parents=True)
+        folder.mkdir(parents=True, exist_ok=True)
+        for item in folder.iterdir():
+            if item.name != keep:
+                shutil.rmtree(item) if item.is_dir() else item.unlink()
         return folder
 
     def _install_apk(self, path: Path):

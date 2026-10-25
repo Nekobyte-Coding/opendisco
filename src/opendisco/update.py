@@ -253,6 +253,10 @@ def download(asset: Asset, folder: Path, progress=None, cancel=None, timeout: fl
     if not re.fullmatch(r"[0-9a-f]{64}", asset.sha256):
         raise UpdateError(f"GitHub lists no SHA-256 checksum for {asset.name}, so it can't be checked")
     dest = Path(folder) / asset.name
+    if dest.is_file() and _sha256(dest) == asset.sha256:  # downloaded and checked already
+        if progress:
+            progress(dest.stat().st_size, dest.stat().st_size)
+        return dest
     part = dest.with_name(dest.name + ".part")
     digest, done, shown = hashlib.sha256(), 0, 0.0
     try:
@@ -284,6 +288,14 @@ def download(asset: Asset, folder: Path, progress=None, cancel=None, timeout: fl
                           f"{digest.hexdigest()[:16]}…, not {asset.sha256[:16]}…), so it wasn't used")
     part.replace(dest)
     return dest
+
+
+def _sha256(path: Path) -> str:
+    digest = hashlib.sha256()
+    with open(path, "rb") as f:
+        while chunk := f.read(1 << 20):
+            digest.update(chunk)
+    return digest.hexdigest()
 
 
 def download_folder() -> Path:
