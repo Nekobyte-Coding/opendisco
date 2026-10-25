@@ -197,8 +197,9 @@ class _Split:
         self.split = split
 
     def arrange(self):
-        """Side by side at a regular width, the iPhone's layout at a compact one (iPad only)."""
-        if not _pad():
+        """Side by side at a regular width, the iPhone's layout at a compact one (iPad only). Not
+        while a page is up over everything (present): asked again once it's gone."""
+        if not _pad() or getattr(self.app, "_presented", None) is not None:
             return
         size_class = self.app.main_window._impl.native.traitCollection.horizontalSizeClass
         if not size_class:  # not known before the window is on screen: asked again then
@@ -640,9 +641,15 @@ def fit_safe_area(app):
         pass  # cosmetic
 
 
+READABLE_WIDTH = 640  # a page over everything gets no wider (an iPad, a phone turned sideways)
+
+
 def present(app, content):
     """A page over everything, which can't be swiped away (the terms of use, until they're agreed
-    to), laid out inside the safe area. Returns what takes it away."""
+    to), laid out inside the safe area, in the middle and at most READABLE_WIDTH wide. An iPad's
+    layout waits while it's up (_Split.arrange): a new root controller for the window would take
+    it away, leaving the app usable without it. Returns what takes it away."""
+    from rubicon.objc import Block
     from toga_iOS.container import ControlledContainer
     laid_out = []
 
@@ -652,8 +659,9 @@ def present(app, content):
                 insets.top, insets.left, insets.right, insets.bottom)
         if [size] != laid_out:
             laid_out[:] = [size]
-            container.top_inset, container.left_inset = insets.top, insets.left
-            container.right_inset, container.bottom_inset = insets.right, insets.bottom
+            spare = max(0.0, (size[0] - insets.left - insets.right - READABLE_WIDTH) / 2)
+            container.top_inset, container.left_inset = insets.top, insets.left + spare
+            container.right_inset, container.bottom_inset = insets.right + spare, insets.bottom
             content.refresh()
 
     container = ControlledContainer(on_refresh=lambda container: None, on_native_layout=layout)
@@ -662,13 +670,19 @@ def present(app, content):
     controller = container.controller
     controller.view.backgroundColor = _class_value(_objc("UIColor"), "systemBackgroundColor")
     controller.modalPresentationStyle = 0  # full screen
-    controller.modalInPresentation = True  # no swiping it away
+    controller.setModalInPresentation(True)  # no swiping it away (as a property, rubicon kept it to itself)
     shown = app.main_window._impl.native.rootViewController
     while shown.presentedViewController:
         shown = shown.presentedViewController
     shown.presentViewController(controller, animated=False, completion=None)
     app._presented = container  # kept alive while it's up
-    return lambda: controller.dismissViewControllerAnimated(True, completion=None)
+
+    def dismissed() -> None:
+        app._presented = None
+        fit_safe_area(app)  # an iPad's layout for the window's width now
+
+    app._ios_dismissed = Block(dismissed, None)
+    return lambda: controller.dismissViewControllerAnimated(True, completion=app._ios_dismissed)
 
 
 def export(app, name: str):
