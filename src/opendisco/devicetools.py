@@ -71,7 +71,15 @@ NOT_OFFERED = {
                "edgeos": "not for EdgeOS yet", "": "not for this device"},
     "login": {"unifi": "set by its UniFi controller", "unifi-os": "UniFi OS: in its own settings",
               "edgeos": "not for EdgeOS yet", "": "not for this device"},
+    "scan": {"": "not for this device"},
 }
+# Scan from device: every family's Linux has the kernel's ARP table; airOS lists the stations
+# associated with it (wstalist, the web UI's station list, JSON); lldpd's lldpcli, where the
+# device runs lldpd, lists its LLDP neighbours.
+SCAN_FAMILIES = {"airos", "unifi", "unifi-os", "edgeos"}
+SCAN_FILE = "/tmp/opendisco-scan.txt"
+SCAN_HOW = {"stations": "its station list", "lldp": "its LLDP neighbours", "arp": "its ARP table"}
+FROM_DEVICE = "from-device"
 
 
 class ToolError(Exception):
@@ -99,10 +107,12 @@ def family(d) -> str:
 
 
 def offers(d, action: str) -> tuple:
-    """(offered, why not) for "update", "config" or "login"."""
+    """(offered, why not) for "update", "config", "login" or "scan"."""
     fam = family(d)
     if action == "update":
         ok = fam in UPDATE_STEPS
+    elif action == "scan":
+        ok = fam in SCAN_FAMILIES
     else:
         ok = fam == "airos"
     return ok, "" if ok else NOT_OFFERED[action].get(fam, NOT_OFFERED[action][""])
@@ -545,6 +555,164 @@ def write_config(login: sshrun.Login, text: str, apply: bool, report=None, stop=
                 raise ToolError("Applying failed" + (f": {said[-300:]}" if said else "."))
             return "Applied and saved to flash."
     raise ToolError("The device hasn't said whether applying worked (4 minutes). Check it in its web UI.")
+
+
+# ---------------------------------------------------------------------------
+# Scan from a device
+# ---------------------------------------------------------------------------
+
+@dataclass
+class Sighting:
+    """One device that another device knows of."""
+    how: str  # "stations", "lldp" or "arp" (SCAN_HOW)
+    mac: str = ""
+    ip: str = ""
+    name: str = ""
+    model: str = ""
+    firmware: str = ""
+    port: str = ""  # the finder's interface it's on
+
+
+def scan_command(fam: str) -> str:
+    """One command that writes everything the device can tell about its neighbours to SCAN_FILE,
+    which then travels by scp (Windows' console would wrap long JSON lines)."""
+    parts = ["echo @@arp", "cat /proc/net/arp"]
+    if fam == "airos":
+        parts += ["echo @@stations", "wstalist"]
+    parts += ["echo @@lldp",
+              "if command -v lldpcli >/dev/null; then lldpcli -f keyvalue show neighbors details 2>/dev/null"
+              " || sudo -n lldpcli -f keyvalue show neighbors details; fi", "echo @@end"]
+    return "sh -c '" + "; ".join(f"{p} 2>/dev/null" if not p.startswith(("echo", "if")) else p for p in parts) + \
+           f"' >{SCAN_FILE} 2>/dev/null"
+
+
+def read_scan(login: sshrun.Login, fam: str, stop=None) -> str:
+    sshrun.run(login, scan_command(fam), timeout=90, stop=stop)
+    try:
+        return _fetch(login, SCAN_FILE, stop)
+    finally:
+        try:
+            sshrun.run(login, f"rm -f {SCAN_FILE}", stop=stop)
+        except sshrun.SSHError:
+            pass
+
+
+def parse_scan(text: str) -> list:
+    sections, name = {}, None
+    for line in text.replace("\r", "").split("\n"):
+        if line.startswith("@@"):
+            name = line[2:].strip()
+            sections[name] = []
+        elif name:
+            sections[name].append(line)
+    found = _arp_sightings(sections.get("arp", []))
+    found += _station_sightings("\n".join(sections.get("stations", [])))
+    found += _lldp_sightings(sections.get("lldp", []))
+    return found
+
+
+_MAC = re.compile(r"(?:[0-9a-fA-F]{2}:){5}[0-9a-fA-F]{2}")
+
+
+def _arp_sightings(lines) -> list:
+    """/proc/net/arp: IP address, HW type, Flags, HW address, Mask, Device. Flag 0x2: complete."""
+    found = []
+    for line in lines[1:]:
+        f = line.split()
+        if len(f) >= 6 and _MAC.fullmatch(f[3]) and f[3] != "00:00:00:00:00:00":
+            try:
+                complete = int(f[2], 16) & 0x2
+            except ValueError:
+                continue
+            if complete:
+                found.append(Sighting("arp", f[3].lower(), f[0], port=f[5]))
+    return found
+
+
+def _station_sightings(text: str) -> list:
+    """wstalist: a JSON list of stations, each with mac, lastip and name, and on airOS 8 a
+    "remote" object with what the station says about itself (hostname, platform, version)."""
+    try:
+        stations = json.loads(text) if text.strip() else []
+    except ValueError:
+        return []
+    if isinstance(stations, dict):
+        stations = stations.get("stations") or stations.get("sta") or []
+    found = []
+    for s in stations if isinstance(stations, list) else []:
+        if not isinstance(s, dict) or not _MAC.fullmatch(str(s.get("mac", ""))):
+            continue
+        remote = s.get("remote") if isinstance(s.get("remote"), dict) else {}
+        ip = str(s.get("lastip") or "")
+        found.append(Sighting("stations", str(s["mac"]).lower(), "" if ip == "0.0.0.0" else ip,
+                              str(remote.get("hostname") or s.get("name") or ""), str(remote.get("platform") or ""),
+                              str(remote.get("version") or ""), str(s.get("ifname") or "")))
+    return found
+
+
+def _lldp_sightings(lines) -> list:
+    """lldpcli -f keyvalue: lldp.<port>.via=LLDP starts each neighbour, then chassis.mac,
+    chassis.name, chassis.descr, chassis.mgmt-ip (IPv4 and IPv6), port.descr..."""
+    found, current = [], None
+    for line in lines:
+        m = re.match(r"lldp\.([^.=]+)\.([^=]+)=(.*)", line)
+        if not m:
+            continue
+        port, key, value = m.groups()
+        if key == "via" or current is None:
+            current = Sighting("lldp", port=port)
+            found.append(current)
+        if key == "chassis.mac" or (key == "chassis.id" and _MAC.fullmatch(value)):
+            current.mac = current.mac or value.lower()
+        elif key == "chassis.name":
+            current.name = value
+        elif key == "chassis.descr":
+            current.model = value
+        elif key == "chassis.mgmt-ip" and re.fullmatch(r"\d+\.\d+\.\d+\.\d+", value) and not current.ip:
+            current.ip = value
+    return [s for s in found if s.mac or s.ip]
+
+
+def merge_scan(res, finder, sightings: list, local: set = frozenset()) -> tuple:
+    """Add what the finder knows of to the scan's inventory, seen via "from-device". A device
+    this computer hadn't found itself is listed under the finder (found_by), and so is one
+    attached to it directly (a station or an LLDP neighbour); one this computer found that is
+    merely in the finder's ARP table isn't, or a gateway would collect the whole network.
+    local: this computer's MACs (core.local_macs()). Returns (devices it knows of, the ones that
+    were new)."""
+    from opendisco import core
+    above, up = {finder.key}, finder  # the finder's own chain, so no loop is made
+    while up and up.found_by.get("key") and up.found_by["key"] not in above:
+        above.add(up.found_by["key"])
+        up = res.inv.devices.get(up.found_by["key"])
+    order = {"stations": 0, "lldp": 1, "arp": 2}  # the most telling first
+    seen, new = [], []
+    for s in sorted(sightings, key=lambda s: order[s.how]):
+        mac = core.norm_mac(s.mac) if s.mac else None
+        ip = s.ip if s.ip and core._usable_ip(s.ip) else ""
+        if (not mac and not ip) or mac in local or mac == finder.mac or (ip and ip in finder.ips):
+            continue
+        dev = (res.inv.find(mac=mac) if mac else None) or (res.inv.find(ip=ip) if ip else None)
+        known = dev is not None and bool(dev.via - {FROM_DEVICE})
+        if dev is None:
+            dev = res.inv.lookup(mac=mac, ip=ip or None)
+            new.append(dev)
+        dev.add_ip(ip)
+        dev.via.add(FROM_DEVICE)
+        if (not dev.found_by and dev.key not in above and (not known or s.how != "arp")):
+            dev.found_by = {"key": finder.key, "ip": finder.ip, "how": SCAN_HOW[s.how]}
+        if s.how == "lldp" and not dev.lldp:
+            dev.lldp = {k: v for k, v in (("system", s.name), ("description", s.model), ("chassis_mac", mac)) if v}
+        elif s.how == "stations":
+            for key, value in (("hostname", s.name), ("platform", s.model), ("firmware", s.firmware)):
+                if value:
+                    dev.info.setdefault(key, value)
+        if dev not in seen:
+            seen.append(dev)
+    res.devices = core.sorted_devices(res.inv)
+    if res.diag_args:
+        core.diagnose(res.inv, *res.diag_args)
+    return seen, new
 
 
 # ---------------------------------------------------------------------------

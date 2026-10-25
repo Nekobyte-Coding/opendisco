@@ -197,6 +197,12 @@ Right-click a device in the table (or select it and use the **Device** menu):
 - **Rescan device** probes just that device again (discovery sent straight to it from both
   source ports, then its ports, web redirect and console API), and updates its row, Details
   and Packets.
+- **Scan from device…** (airMAX, UniFi, UniFi OS, EdgeOS) logs in to the device and adds what
+  it knows of its neighbours to the table: the stations associated with it (airMAX
+  `wstalist`), its LLDP neighbours (where it runs lldpd: `lldpcli`) and its ARP table
+  (`/proc/net/arp`). They show **via** `from-device`. A device this computer hadn't found
+  itself, and a station or LLDP neighbour attached to it, is listed under it, indented; one
+  this computer found that's merely in its ARP table isn't.
 - **Check for firmware update** asks Ubiquiti's public firmware server for the latest release
   for the device's platform and says whether it's newer, with its date and size, and whether
   known vulnerabilities make updating advisable.
@@ -230,7 +236,7 @@ OpenSSH client (Settings > Optional features > OpenSSH Client, if it's missing).
 
 ### Device tools over SSH
 
-Firmware updates, the config editor and Change login log in with the computer's own `ssh` and
+Scan from device, firmware updates, the config editor and Change login log in with the computer's own `ssh` and
 `scp`, the same known-hosts file and host keys as the Terminal tab. Their login window can
 **remember the login for that device** (by MAC address) in the operating system's credential
 store: the macOS Keychain, Windows Credential Manager, or a Secret Service keyring on Linux

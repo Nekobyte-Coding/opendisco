@@ -254,7 +254,7 @@ UBNT_HINT = re.compile(
     re.I,
 )
 
-VIA_ORDER = ("ubnt", "mcast", "announce", "sniff", "wifi", "mdns", "ssdp", "arp")
+VIA_ORDER = ("ubnt", "mcast", "announce", "sniff", "wifi", "mdns", "ssdp", "arp", "from-device")
 
 
 # ---------------------------------------------------------------------------
@@ -4680,6 +4680,7 @@ VIA column:  ubnt = answered UBNT discovery (broadcast/unicast)   mcast = answer
 multicast probe   announce = sent an unsolicited announcement   sniff = heard in traffic on a
 port (--sniff, --vlans, --direct)   wifi = the access point this computer's Wi-Fi is joined to
 mdns / ssdp = found by mDNS / UPnP   arp = known vendor's MAC in the ARP table
+from-device = known to another device (the app's Scan from device: its stations, LLDP, ARP)
 VLAN column: the VLAN it was found on; untagged shows the port's native VLAN (1 unless LLDP
 from the switch says otherwise)
 """

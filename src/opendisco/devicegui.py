@@ -17,7 +17,7 @@ from toga.style.pack import COLUMN, ROW
 
 from opendisco import core, credstore, devicetools, sshrun, terminal
 
-ACTIONS = ("fw_check", "fw_update", "config", "login", "forget_login")
+ACTIONS = ("scan_from", "fw_check", "fw_update", "config", "login", "forget_login")
 _busy: dict = {}  # device key -> what's running on it
 _in_use: dict = {}  # downloaded firmware path -> updates using it
 
@@ -29,7 +29,7 @@ def menu_state(app, d, titles: dict) -> dict:
     busy = _busy.get(d.key)
     ubiquiti = bool(d.info.get("firmware") or d.info.get("platform"))
     state["fw_check"] = (titles["fw_check"], ubiquiti and not busy)
-    for name, action in (("fw_update", "update"), ("config", "config"), ("login", "login")):
+    for name, action in (("scan_from", "scan"), ("fw_update", "update"), ("config", "config"), ("login", "login")):
         offered, why = devicetools.offers(d, action)
         title = titles[name]
         if busy:
@@ -39,12 +39,16 @@ def menu_state(app, d, titles: dict) -> dict:
         elif not tools:
             title += "  (needs ssh and scp)"
         state[name] = (title, bool(d.ip) and offered and tools and not busy)
+    idle = bool(app.result) and not (app.running or app.rescanning or app.finding)
+    if state["scan_from"][1] and not idle:  # it adds to the scan's results
+        state["scan_from"] = (titles["scan_from"], False)
     state["forget_login"] = (titles["forget_login"], bool(d.mac and _remembered(app, d)))
     return state
 
 
 def act(app, d, name: str) -> None:
-    flow = {"fw_check": check_flow, "fw_update": update_flow, "config": config_flow, "login": login_flow}.get(name)
+    flow = {"scan_from": scan_flow, "fw_check": check_flow, "fw_update": update_flow, "config": config_flow,
+            "login": login_flow}.get(name)
     if flow:
         asyncio.create_task(_guarded(app, d, flow))
     elif name == "forget_login":
@@ -238,6 +242,57 @@ class Progress:
     def finish(self, text: str) -> None:
         self._show(text, None)
         self.button.text, self.button.enabled = "Close", True
+
+
+# ---------------------------------------------------------------------------
+# Scan from a device
+# ---------------------------------------------------------------------------
+
+async def scan_flow(app, d):
+    """What the device knows of its neighbours, added to the table: its stations (airOS), LLDP
+    neighbours and ARP table."""
+    result = app.result
+    if not result or _busy.get(d.key):
+        return
+    fam = devicetools.family(d)
+    tools = "its ARP table and LLDP neighbours" + (" and the stations associated with it" if fam == "airos" else "")
+    login = await ask_login(app, d, f"Log in to read what it sees: {tools}.")
+    if not login:
+        return
+    _busy[d.key] = "scanning"
+    app.spinner.start()
+    app.status.text = f"Reading what {d.ip} sees…"
+    try:
+        def work():
+            return devicetools.parse_scan(devicetools.read_scan(login, fam)), core.local_macs()
+
+        try:
+            sightings, local = await _work(work)
+        except sshrun.SSHError as e:
+            app.status.text = f"Scan from {d.ip}: {e}"
+            return
+    finally:
+        _busy.pop(d.key, None)
+        app.spinner.stop()
+    if result is not app.result:  # a new scan started meanwhile
+        app.status.text = f"Scan from {d.ip} finished after a new scan started: start it again."
+        return
+    seen, new = devicetools.merge_scan(result, d, sightings, local)
+    app._show_devices(result.devices)
+    counts = ", ".join(f"{devicetools.SCAN_HOW[how]} {n}" for how in devicetools.SCAN_HOW
+                       if (n := sum(1 for s in sightings if s.how == how)))
+    lines = [f"Scan from {d.ip} ({d.name or d.model or d.mac}): {counts or 'nothing listed'}; "
+             f"{len(seen)} device(s), {len(new)} new."]
+    for dev in seen:
+        how = sorted({devicetools.SCAN_HOW[s.how] for s in sightings
+                      if (s.mac and dev.mac == core.norm_mac(s.mac)) or (s.ip and s.ip in dev.ips)})
+        lines.append(f"  {dev.ip or '-':15} {dev.mac or '-':17} {dev.name or dev.model or dev.vendor or '':24} "
+                     f"{', '.join(how)}{'  (new)' if dev in new else ''}")
+    app._append_log("\n".join(lines))
+    app.status.text = lines[0]
+    selected = app._selected_device()
+    if selected is not None:
+        app.details.value = core.render_details(selected)
 
 
 # ---------------------------------------------------------------------------

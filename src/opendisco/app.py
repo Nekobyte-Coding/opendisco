@@ -39,7 +39,7 @@ PHONE_COLUMNS = ["IP", "Model", "Name"]
 ANY_PORT = "Any port"
 # What a device's right-click menu (and the Device menu) offers; None separates groups.
 DEVICE_ACTIONS = [("web", "Open Web UI"), ("ssh", "Open SSH…"), ("ping", "Ping"), ("rescan", "Rescan device"),
-                  ("issues", "Show issues…"), None,
+                  ("scan_from", "Scan from device…"), ("issues", "Show issues…"), None,
                   ("find_http", "Find HTTP port"), ("find_https", "Find HTTPS port"), ("find_ssh", "Find SSH port"),
                   ("all_ports", "Scan all ports"), None,
                   ("fw_check", "Check for firmware update"), ("fw_update", "Update firmware…"),
@@ -834,7 +834,8 @@ class OpenDiscoApp(toga.App):
             return
         title, enabled = self._menu_state(d)[name]
         if not enabled:
-            self.status.text = ("Works once a scan has finished, one device at a time." if name == "rescan" or name in FINDS
+            waits = name == "rescan" or name in FINDS or (name == "scan_from" and "(" not in title)
+            self.status.text = ("Works once a scan has finished, one device at a time." if waits
                                 else f"{title}: not available for this device.")
             return
         if name == "web":
@@ -851,7 +852,7 @@ class OpenDiscoApp(toga.App):
             asyncio.create_task(self._find_after_warning(d, FINDS[name]))
         elif name == "issues":
             self._show_issues(d)
-        elif name in ("fw_check", "fw_update", "config", "login", "forget_login"):
+        elif name in ("scan_from", "fw_check", "fw_update", "config", "login", "forget_login"):
             from opendisco import devicegui
             devicegui.act(self, d, name)
         elif name == "copy_ip":
