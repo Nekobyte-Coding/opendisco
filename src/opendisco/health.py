@@ -204,18 +204,26 @@ def _day(at: float) -> str:
     return time.strftime("%Y-%m-%d", time.localtime(at))
 
 
+def _firmware(d) -> dict | None:
+    """d.health["firmware"] with every key Firmware gives it: what other code (or a test) puts
+    there may leave some out, and Details mustn't fail on that."""
+    fw = d.health.get("firmware")
+    return {"platform": "", "current": "", "latest": "", "date": "", "newer": False, "ahead": False, "listed": "",
+            **fw} if fw else None
+
+
 def firmware_cell(d) -> str:
     """The Firmware column: "8.7.11 (latest: 8.7.25)" when a newer release is out (the version
     compared, without the build number the column shows otherwise), else the version as before."""
-    fw = d.health.get("firmware")
-    if fw and fw["newer"]:
-        return f"{fw['current']} (latest: {fw['latest']})"
+    fw = _firmware(d)
+    if fw and fw["newer"] and fw["latest"]:
+        return f"{fw['current'] or d.firmware} (latest: {fw['latest']})"
     return d.firmware
 
 
 def latest_version(d) -> str:
     """The latest release for its platform ("" when not looked up, or none is listed)."""
-    return (d.health.get("firmware") or {}).get("latest", "")
+    return (_firmware(d) or {}).get("latest", "")
 
 
 # ---------------------------------------------------------------------------
@@ -486,9 +494,21 @@ def _loss(lat: dict) -> int:
     return round((lat["sent"] - lat["received"]) * 100 / lat["sent"]) if lat.get("sent") else 0
 
 
+def _latency(d) -> dict | None:
+    """d.health["latency"] with every key measure() gives it (see _firmware)."""
+    lat = d.health.get("latency")
+    if not lat:
+        return None
+    lat = {"sent": 0, "received": 0, "at": 0.0, "how": "", "replies_ms": [], **lat}
+    if lat["received"]:
+        replies = lat["replies_ms"] or [0.0]
+        lat = {"avg_ms": sum(replies) / len(replies), "min_ms": min(replies), "max_ms": max(replies), **lat}
+    return lat
+
+
 def latency_cell(d) -> str:
     """The Latency column: "3 ms", "12 ms, 25% loss", "no reply" ("" when not measured)."""
-    lat = d.health.get("latency")
+    lat = _latency(d)
     if not lat:
         return ""
     if not lat["received"]:
@@ -501,7 +521,7 @@ def latency_cell(d) -> str:
 def issues(d) -> list:
     """Diagnostics from its latency (core.diagnose adds them): packet loss and high latency.
     A device that doesn't answer pings at all isn't flagged: many block them (Windows does)."""
-    lat = d.health.get("latency") or {}
+    lat = _latency(d) or {}
     got, sent = lat.get("received", 0), lat.get("sent", 0)
     if not got:
         return []
@@ -525,7 +545,7 @@ def summary(devices) -> str:
     if len(devices) == 1:
         d = devices[0]
         return f"Latency to {d.ip}: {latency_cell(d) or 'not measured'}."
-    lats = [d.health.get("latency") or {} for d in devices]
+    lats = [_latency(d) or {} for d in devices]
     flagged = Counter(tag for d in devices for _, tag, _ in issues(d))
     bits = [f"{sum(1 for lat in lats if lat.get('received'))} of {len(devices)} devices answered"]
     bits += [f"{flagged[tag]} with {what}" for tag, what in (("PING-LOSS", "packet loss"),
@@ -541,11 +561,12 @@ def summary(devices) -> str:
 def detail_rows(d) -> list:
     """[(label, text)] for Details."""
     rows = []
-    fw = d.health.get("firmware")
+    fw = _firmware(d)
     if fw:
-        listed = "" if fw["listed"] == _day(time.time()) else f"; Ubiquiti's list of {fw['listed']}"
+        listed = "" if fw["listed"] in ("", _day(time.time())) else f"; Ubiquiti's list of {fw['listed']}"
         if not fw["latest"]:
-            rows.append(("Latest firmware", f"none listed for {fw['platform']} on Ubiquiti's firmware server{listed}"))
+            rows.append(("Latest firmware", f"none listed for {fw['platform'] or 'its platform'} on Ubiquiti's "
+                                            f"firmware server{listed}"))
         else:
             if fw["newer"]:
                 state = f"newer than the {fw['current']} it runs"
@@ -555,8 +576,9 @@ def detail_rows(d) -> list:
                 state = "it runs the latest"
             else:
                 state = "the version it runs is unknown"
-            rows.append(("Latest firmware", f"{fw['latest']} (released {fw['date']}): {state}{listed}"))
-    lat = d.health.get("latency")
+            released = f" (released {fw['date']})" if fw["date"] else ""
+            rows.append(("Latest firmware", f"{fw['latest']}{released}: {state}{listed}"))
+    lat = _latency(d)
     if lat:
         when = time.strftime("%H:%M:%S", time.localtime(lat["at"]))
         if lat["received"]:
@@ -575,13 +597,13 @@ def detail_rows(d) -> list:
 
 def to_dict(d) -> dict:
     """The JSON export's part."""
-    fw, lat = d.health.get("firmware"), d.health.get("latency")
+    fw, lat = _firmware(d), _latency(d)
     return {
         "latest_firmware": {"platform": fw["platform"], "version": fw["latest"] or None, "released": fw["date"] or None,
-                            "newer": fw["newer"], "listed": fw["listed"]} if fw else None,  # None: not looked up
+                            "newer": fw["newer"], "listed": fw["listed"] or None} if fw else None,  # None: not looked up
         "latency": {"sent": lat["sent"], "received": lat["received"], "loss_percent": _loss(lat),
                     "avg_ms": lat.get("avg_ms"), "min_ms": lat.get("min_ms"), "max_ms": lat.get("max_ms"),
-                    "replies_ms": lat.get("replies_ms", []), "method": lat["how"],
+                    "replies_ms": lat["replies_ms"], "method": lat["how"] or None,
                     "measured_at": time.strftime("%Y-%m-%dT%H:%M:%S", time.localtime(lat["at"]))} if lat else None,
     }
 
