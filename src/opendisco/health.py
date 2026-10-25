@@ -510,8 +510,8 @@ def issues(d) -> list:
     if lost * 100 >= LOSS_PERCENT * sent:
         found.append(("warn", "PING-LOSS",
                       f"{lost} of {sent} pings went unanswered ({_loss(lat)}% loss). On a wired link that points to a "
-                      "bad cable, connector or port, or a speed/duplex mismatch; on a wireless hop, to interference, "
-                      "a weak signal or a busy channel; or the device is too busy to answer."))
+                      "bad cable, connector or switch port, or a speed/duplex mismatch; on a wireless hop, to "
+                      "interference, a weak signal or a busy channel; or the device is too busy to answer."))
     if lat["avg_ms"] >= HIGH_LATENCY_MS:
         found.append(("warn", "HIGH-LATENCY",
                       f"Pings take {lat['avg_ms']:.0f} ms on average ({_ms(lat['min_ms'])}-{_ms(lat['max_ms'])} ms "
