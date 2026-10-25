@@ -4888,6 +4888,7 @@ multicast probe   announce = sent an unsolicited announcement   sniff = heard in
 an interface (--sniff, --vlans, --direct)   wifi = the access point this computer's Wi-Fi is
 joined to   mdns / ssdp = found by mDNS / UPnP   arp = known vendor's MAC in the ARP table
 from-device = known to another device (the app's Scan from device: its stations, LLDP, ARP)
+ssh = logged in to by its address (the app's Scan from device, with no device selected)
 VLAN column: the VLAN it was found on; untagged shows the switch port's native VLAN (1 unless
 LLDP from the switch says otherwise)
 """

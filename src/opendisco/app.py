@@ -297,7 +297,7 @@ class OpenDiscoApp(toga.App):
         self._watch_tab_labels()
         self.loop.call_later(0.3, self._align_tab_labels)
         self.loop.call_later(0.3, self._fit_safe_area)
-        self.loop.call_later(0.5, self._size_columns)
+        self.loop.call_later(0.5, lambda: self._size_columns(first=True))
         self.loop.call_later(1.0, self._launch_checks)
 
     # -- set-up helpers -----------------------------------------------------
@@ -374,7 +374,8 @@ class OpenDiscoApp(toga.App):
         except Exception:
             pass  # purely cosmetic
 
-    COLUMN_WEIGHTS = (1.1, 0.5, 0.9, 1.3, 1.0, 1.4, 1.3, 0.8, 0.6, 0.7, 0.6, 0.7, 1.1, 1.3)  # IP ... Status
+    # IP ... Status. Firmware is the widest: it fits "8.7.11 (latest: 8.7.25)" at the window's first size.
+    COLUMN_WEIGHTS = (1.1, 0.45, 0.8, 1.5, 1.0, 1.2, 1.9, 1.0, 0.55, 0.6, 0.5, 0.7, 0.7, 1.3)
 
     # Linux: what each column typically holds, for its width (the heading's when wider). Names,
     # models and Via are free text: they share what's left, names the most.
@@ -383,11 +384,28 @@ class OpenDiscoApp(toga.App):
                           "HTTPS": "8443 ✓", "SSH": "2222 ✓", "Uptime": "100d23h", "Status": "Multiple issues (3)"}
     GTK_FLEXIBLE = {"Name": 1.4, "Model": 1.0, "Via": 0.6}
 
-    def _size_columns(self, *args, **kwargs):
+    def _size_columns(self, *args, first: bool = False, **kwargs):
         """Windows: toga sizes the table's columns once, before the window has its width, which left
-        them as slivers with no headings. Spread them over the table's width instead."""
+        them as slivers with no headings. Spread them over the table's width instead. macOS: the
+        columns start out equal, which cut the firmware short; weighted once at the start (macOS
+        then resizes them evenly with the window, and keeps the widths dragged by hand). Linux:
+        _size_columns_gtk."""
         if self.caps["platform"] == "linux":
             self._size_columns_gtk()
+            return
+        if self.caps["platform"] == "macos" and first:
+            try:
+                view = self.table._impl.native_table
+                width = self.table._impl.native.contentSize.width
+                columns = list(view.tableColumns)
+                weights = self.COLUMN_WEIGHTS[:len(columns)]
+                if width >= 200 and len(weights) == len(columns):
+                    spacing = view.intercellSpacing.width * len(columns)
+                    for column, weight in zip(columns, weights):
+                        column.width = (width - spacing) * weight / sum(weights)
+            except Exception:
+                pass  # cosmetic
+            return
         if self.caps["platform"] != "windows":
             return
         try:
@@ -738,6 +756,8 @@ class OpenDiscoApp(toga.App):
         for d, depth in records.filter_tree(listed, self.search.value or ""):
             values = row(d)
             values["ip"] = core.nested_ip(d, depth)
+            if self.caps["mobile"] and health.latency_cell(d):  # "192.168.1.20 · 8 ms"
+                values["ip"] += f" · {health.latency_cell(d)}"
             if d.note:
                 for attr in ("name", "summary"):
                     if attr in values:
@@ -763,13 +783,12 @@ class OpenDiscoApp(toga.App):
     @staticmethod
     def _phone_row(d) -> dict:
         """A device as a phone lists it: address, model and name (Details has the rest). iOS
-        lists the model and name under the address, then the newer firmware that's out and its
-        latency, once known (what doesn't fit ends in …)."""
+        lists the model and name under the address, and the newer firmware that's out ("↑ 8.7.25")
+        once the check has answered; _show_devices adds the latency to the address's line."""
         model, name = d.model or "?", d.name or d.mac or ""
         fw = d.health.get("firmware") or {}
-        extra = [f"update {fw['latest']}" if fw.get("newer") else "", health.latency_cell(d)]
         return {"ip": d.ip or "-", "model": model, "name": name,
-                "summary": " · ".join(x for x in (model, name, *extra) if x)}
+                "summary": " · ".join(x for x in (model, name, f"↑ {fw['latest']}" if fw.get("newer") else "") if x)}
 
     def _all_devices(self) -> list:
         if self.result:

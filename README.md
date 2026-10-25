@@ -21,8 +21,9 @@ works with.
 | UniFi Network app / controller | multicast probe to 233.89.188.1, **passive listening** for adoption announcements, mDNS + SSDP, UniFi OS console API | unadopted devices, consoles, other controllers on the LAN |
 
 It comes two ways:
-- **A native app** for macOS, Windows, Linux and Android (see [The app](#the-app)). The
-  iPhone and iPad version is in beta from 1.5.0: it's being tested, with no public download yet.
+- **A native app** for macOS, Windows, Linux and Android phones and tablets (see
+  [The app](#the-app)). The iPhone and iPad version is in beta from 1.5.0: it's being tested,
+  with no public download yet.
 - **The command-line tool,** which needs only Python 3.8 or newer with no packages to
   install, and runs on macOS, Linux and Windows.
 
@@ -32,6 +33,7 @@ Installers are on the [Releases](https://github.com/Nekobyte-Coding/opendisco/re
 
 | Version | What's new | Released for | Known issues (fixed in) |
 |---|---|---|---|
+| 1.6.0 | Config backups, Upload config… with what changes shown first, and Apply (airMAX, airFiber, LTU, GigaBeam, EdgeOS). Reboot, and Locate for UniFi access points and switches. Scan from a device given by its address, over a VPN too. Each device's latest firmware during scans, and a Latency column. Search, a note per device, Export device…, and a security report, all config backups, all notes and the Log. Settings holds the networks list and "Also sweep these subnets", on every platform. Tablets and iPads show the device list and a device's page side by side. The adapter picker is called Interface | macOS, Windows, Linux, Android; iOS (beta, no public download yet) |  |
 | 1.5.0 | Find HTTP/HTTPS/SSH port and Scan all ports for one device, and an HTTP column. Status in plain words with an issue list. A CVE check of each device's firmware, updated from the NVD. TFTP recovery detection. Device tools over SSH: firmware updates, config editor, change login, Scan from device, devices behind other devices. Settings and self-update. A new phone layout | macOS, Windows, Linux, Android; iOS (beta, no public download yet) |  |
 | 1.4.2 | "Probe listed networks" no longer stays on after Direct or Trunk VLANs. Start waits for Keep addresses. Android names the export file it saved. Clearer networks-file errors | macOS, Windows, Linux, Android | macOS: a scan can find nothing on a Mac that has an older OpenDisco (another app ID) or another app built with Briefcase (1.5.0) |
 | 1.4.1 | Android release-signed, with a three-column list. Windows fixes: Keep addresses, adapter names with spaces, the About version, the data folder. CSV exports open right in Excel | macOS, Windows, Linux, Android | "Probe listed networks" stays on after Direct or Trunk VLANs, so the next scan adds temporary addresses (1.4.2). Android: a second export in the same minute is reported under the first one's file name (1.4.2) |
@@ -65,9 +67,9 @@ Installers are on the [Releases](https://github.com/Nekobyte-Coding/opendisco/re
 
 ## The app
 
-- **Mac:** open `OpenDisco-1.5.0-macos-universal.dmg` (Apple silicon and Intel Macs) and drag
+- **Mac:** open `OpenDisco-1.6.0-macos-universal.dmg` (Apple silicon and Intel Macs) and drag
   the app to Applications.
-- **Windows:** run `OpenDisco-1.5.0-windows-x64-setup.exe` (64-bit; Windows on ARM runs it
+- **Windows:** run `OpenDisco-1.6.0-windows-x64-setup.exe` (64-bit; Windows on ARM runs it
   too). It installs for the current user without administrator rights, with Start menu and
   desktop shortcuts and an uninstaller in Apps.
   - **SmartScreen:** the installer isn't code-signed, so the first time Windows shows
@@ -79,26 +81,27 @@ Installers are on the [Releases](https://github.com/Nekobyte-Coding/opendisco/re
     (`%LOCALAPPDATA%\Programs\OpenDisco`), for example `opendisco.cmd --quick`.
 - **Linux:**
   - **Ubuntu 24.04 LTS, Linux Mint 22, Pop!_OS 24.04:**
-    `sudo apt install ./OpenDisco-1.5.0-ubuntu-24.04-amd64.deb`
-  - **Fedora 44:** `sudo dnf install ./OpenDisco-1.5.0-fedora-44-x86_64.rpm`
+    `sudo apt install ./OpenDisco-1.6.0-ubuntu-24.04-amd64.deb`
+  - **Fedora 44:** `sudo dnf install ./OpenDisco-1.6.0-fedora-44-x86_64.rpm`
   - **Any other distribution** (Debian 13, Arch, newer Ubuntu or Fedora...): the portable
-    `OpenDisco-1.5.0-linux.tar.gz`. Extract it and run `./opendisco`; its `README-LINUX.md`
+    `OpenDisco-1.6.0-linux.tar.gz`. Extract it and run `./opendisco`; its `README-LINUX.md`
     lists the packages to install first.
 
   The `.deb` and `.rpm` install the app's own copy of Toga and PyGObject, built for that
   release, and pull in GTK, WebKitGTK, tcpdump, ip, iw and the ssh client. The app is in the
   desktop's app menu, and `opendisco` in a terminal runs it (with options, it's the
   command-line tool).
-- **Android:** `OpenDisco-1.5.0-android.apk`: sideload it with "Install unknown apps"
-  allowed. It installs over 1.4.1 and later, keeping its data. See
-  [On phones](#on-phones). From 1.4.1 the app
-  is signed with OpenDisco's own release key, so later versions install over it. 1.4.0 was
+- **Android:** `OpenDisco-1.6.0-android.apk`: sideload it with "Install unknown apps"
+  allowed, on a phone or a tablet. It installs over 1.4.1 and later, keeping its data. See
+  [On phones and tablets](#on-phones-and-tablets). From 1.4.1 the app is signed with
+  OpenDisco's own release key, so later versions install over it. 1.4.0 was
   signed with Android's debug key, which Android won't replace: uninstall 1.4.0 first. Nothing
   is lost: the phone app can't hide devices or edit the networks file, so it saves nothing.
 
-**Upgrading:** saved data (the networks file, hidden devices and SSH host keys) is retained
-with the new install and picked up the first time the new version opens. The Windows
-installer removes the earlier install; from 1.4.1 the Windows app keeps its data in
+**Upgrading:** saved data (Settings and the networks file, hidden devices, device notes,
+config backups, remembered logins and SSH host keys) is retained with the new install and
+picked up the first time the new version opens. The Windows installer removes the earlier
+install; from 1.4.1 the Windows app keeps its data in
 `%LOCALAPPDATA%\Nekobyte-Coding\OpenDisco` (earlier, `%LOCALAPPDATA%\Unknown\OpenDisco`).
 Versions before 1.4.0 used a different app ID, so on a Mac such an app stays in
 Applications until deleted, on Linux its package stays until removed, and on Android the
@@ -110,21 +113,44 @@ new version installs as a separate app.
 - Devices fill the table as they're found. Selecting one shows everything it reported and
   what to check. A device found through another device (Scan from device) is listed under it,
   indented.
+- **Search** above the table narrows it to the devices whose IP, MAC (in any spelling), model,
+  name, vendor, firmware, Status, Via or note match every word typed, ignoring case, and says
+  how many it shows ("3 of 25 shown"). A device found through another keeps the devices above
+  it in view.
+- **Firmware** shows the version each device runs and, when Ubiquiti's firmware server lists a
+  newer release for its platform, that one too: "8.7.11 (latest: 8.7.25)". **Latency** is
+  measured after every scan: a few pings to each device ("3 ms", "12 ms, 25% loss", "no
+  reply"). See [Firmware versions and latency](#firmware-versions-and-latency).
 - **Status** names what's wrong in a word or two ("CVE risk", "Factory default", "TFTP
   recovery mode"), or "Multiple issues (3)". Hovering over a device lists its issues;
   double-clicking it (or **Show issues…**) opens the list, with each CVE's NVD page a click
   away. A device with known CVEs starts with a red ❗.
 - **Right-click a device** (or use the **Device** menu) to open its web UI, SSH to it, ping
-  it, rescan it, copy its IP or MAC, forget its saved SSH key, or hide it. See
-  [Right-click menu and the Terminal tab](#right-click-menu-and-the-terminal-tab).
+  it or measure its latency, rescan it, back up, edit or upload its config, reboot it, blink
+  its LED, copy its IP or MAC, keep a note on it, export it, forget its saved SSH key, or hide
+  it. See [Right-click menu and the Terminal tab](#right-click-menu-and-the-terminal-tab).
+- **A note per device:** **Note…** keeps a note on a device under its MAC address, so it's
+  there in every later scan: first in Details, as a ✎ after its name, in the search and in the
+  exports.
 - **Packets** shows the packets the selected device sent, decoded field by field with their
   hex dumps, and checked for damage (see [Damaged packets and loss](#damaged-packets-and-loss)).
 - **Terminal** holds the SSH and ping sessions. Selecting a device shows its session.
-- The other tabs show what was heard on the wire, notes, the log, and the networks file,
-  which can be edited in the app.
+- The other tabs show what was heard on the wire, the scan's notes and the log. Settings
+  holds the networks probed through temporary addresses and the subnets every scan also
+  sweeps (see [Settings and updates](#settings-and-updates)); before 1.6.0 the networks file
+  had a tab of its own.
 - **Hidden devices…** lists hidden devices and brings them back.
-- **Export…** saves an HTML report (opens on any phone), CSV or JSON. On Android it saves
-  the HTML report to the Downloads folder.
+- **Export…** saves the scan report as HTML (opens on any phone), CSV or JSON, and offers the
+  site-wide extras as well:
+  - a **security report**: known CVEs and outdated firmware, device by device (HTML or CSV);
+  - **config backups**: every one saved, in a .zip with an index;
+  - **notes**: every device's note, seen in this scan or not (HTML, CSV or JSON);
+  - the **Log** (a text file).
+
+  **Export device…** (right-click) saves one device's report as HTML: its note, Status,
+  firmware, latency, CVEs, ports, Details and packets; with config backups saved for it, a
+  .zip holding the report and the backups. On Android, exports go to the Downloads folder; on
+  iPhone and iPad, to the share sheet. Phones save each one in its first format.
 - **Keep addresses** holds the temporary addresses that reached gear until they're released,
   so the gear's web UI can be opened.
 
@@ -214,39 +240,90 @@ take a port search for a port scan from this computer: it may raise an alert, a 
 here, or block the computer for a while. The app says so first, until "Don't warn again" is
 ticked. The command line's `--all-ports 192.168.1.20` does the same for the addresses given.
 
-### On phones
+### Firmware versions and latency
 
-The Android app and the iPhone/iPad app (beta, no public download yet) share one layout. Quick Scan, Full
-Scan and Stop sit above the device list, with Export, Notes, Log and Settings in the title bar.
-Tapping a device opens its page, titled with its name and address, with tabs along the
-bottom: **Details**, **Packets**, **Tools**, **Notes** and **Log**. **Tools** has:
+**The latest firmware.** While a scan runs, the app asks Ubiquiti's firmware server for the
+latest release of each device's firmware platform; one request covers every platform. When a
+newer release is out, the Firmware column says "8.7.11 (latest: 8.7.25)", Details gives the
+release's date, and the exports carry it (the CSV in a "Latest firmware" column). The list is
+kept in the app's data folder for about a day, so repeat scans don't ask again; when the
+server doesn't answer, an older list is used and Details says how old it is. Settings' **Check
+firmware versions during scans** turns it off. The command line shows it with `-v`, `--json`
+and `--export`; `--no-firmware-check` leaves it out.
+
+**Latency.** When a scan ends, each device it found gets 4 pings, all at once; one that lost a
+ping or averaged 100 ms or more gets 6 more before it counts. The Latency column shows the
+average ("3 ms"), any loss ("12 ms, 25% loss") or "no reply". An average of 100 ms or more is
+flagged `HIGH-LATENCY`, and 20% or more lost, with some replies, `PING-LOSS`. A device that
+never answers isn't flagged: many block pings (Windows does). Pinging needs no administrator
+rights.
+- Devices reached only through a temporary address aren't pinged once it's gone (unless Keep
+  addresses holds it), and hidden devices aren't pinged.
+- A device found through another device is pinged from this computer, so "no reply" there can
+  mean only that pings from here don't reach it.
+- The command line pings too (the result is in `-v`'s details); `--no-latency` skips it.
+
+### On phones and tablets
+
+The Android app and the iPhone/iPad app (beta, no public download yet) share one layout. Quick
+Scan, Full Scan, Stop and a search box sit above the device list. The title bar holds Export
+(the scan report and the extras), the scan's Notes and Log, Settings, and a **+** that scans
+from a device given by its address (see Scan from device under
+[Right-click menu and the Terminal tab](#right-click-menu-and-the-terminal-tab)). Each row
+gives the address with the latency ("192.168.1.20 · 3 ms"), then the model and name, and a
+newer firmware release when there is one ("↑ 8.7.25"). Tapping a device opens its page, titled with its name and address,
+with tabs along the bottom: **Details**, **Packets**, **Tools**, **Notes** and **Log**.
+**Tools** has:
 - **Ping**, the app's own, and an **SSH** session through the app's own SSH client (phones
   can't run other programs);
 - **Find** (a port: HTTP, HTTPS, SSH or all of them), **Web UI**, **Rescan** and **Scan from
   device**;
-- **Firmware** (check and update), **Config** (airMAX) and **Login**, as on the desktop;
+- **Firmware** (check and update), **Config** (the config editor) and **Login**, as on the
+  desktop;
+- **Backups** (back up now, the backups kept, restoring one, uploading a file, with what
+  changes shown first), **Reboot** and **Locate**;
+- **Note** and **Export device**;
 - **Copy IP** and **Copy MAC**.
 
 What they find, and the SSH session, show in a console underneath. Phones can't capture
 traffic, add addresses or tag VLANs, so they offer Quick and Full scans.
 
+**Tablets:** on an Android tablet, and on an iPad full screen or on the larger side of Split
+View, the device's page sits beside the list instead of over it, in either orientation. With
+no device chosen, that side shows the scan's Notes and Log. Settings, logins and the config
+editor still open over the window.
+
 ### Settings and updates
 
 **Settings…** (in the app menu on macOS and Linux, and the File menu on Windows; on phones, in
-the title bar) has two switches, both on until turned off:
+the title bar) has three switches, all on until turned off, and two lists:
 - **Check for OpenDisco updates when opening:** asks GitHub for the latest release. When
   there's a newer one, the app says what's in it and offers to update: it downloads the file
   for this platform, checks it against the SHA-256 GitHub lists, installs it the way this copy
   was installed (the .app on a Mac, the setup.exe on Windows, the .deb, .rpm or portable
   folder on Linux, the APK on Android, which asks once to allow installs from OpenDisco) and
   reopens. **Check for OpenDisco updates…** (the app menu on a Mac, the Help menu on Windows
-  and Linux, the ⋮ menu on Android) checks straight away. A copy run from source doesn't update itself: it links the release page
-  instead. The iPhone/iPad app has no self-update: Apple allows installs only through its own
-  channels.
+  and Linux, the ⋮ menu on Android) checks straight away. A copy run from source doesn't
+  update itself: it links the release page instead. The iPhone/iPad app has no self-update
+  (Apple allows installs only through its own channels), so its Settings leave this switch
+  out.
 - **Check for new CVEs when opening:** about once a day, downloads current data from the NVD
   and Ubiquiti's security advisories, so newly published CVEs are flagged without a new
   release (see [Known vulnerabilities](#known-vulnerabilities-cves)).
+- **Check firmware versions during scans:** asks Ubiquiti's firmware server for the latest
+  release of each device's firmware while the scan runs, for the Firmware column (see
+  [Firmware versions and latency](#firmware-versions-and-latency)).
+- **Also sweep these subnets** (every platform, phones included): routed or VPN subnets that
+  every scan also probes with UBNT discovery, so gear there turns up from here. A subnet or an
+  address a line, and `#` starts a comment. Each line is checked when it's saved: up to 8,192
+  addresses in all (about 33 seconds more per scan), a /16 at most per line. Direct to a
+  device leaves them out.
+- **Networks probed through temporary addresses** (macOS, Windows, Linux): the networks file
+  that Probe listed networks uses (see
+  [Finding gear on other subnets](#finding-gear-on-other-subnets-temporary-aliases--a)), with
+  **Restore defaults**.
 
+On phones, Settings also holds the **Deep checks** switch.
 This product uses the NVD API but is not endorsed or certified by the NVD.
 
 ### Right-click menu and the Terminal tab
@@ -262,6 +339,9 @@ Right-click a device in the table (or select it and use the **Device** menu):
   the terminal instead, or an SSH key is used. The username is remembered.
 - **Ping** pings it continuously in the Terminal tab. Ctrl+C stops it and prints the summary,
   and Enter starts it again.
+- **Measure latency** pings it a few times and puts the result in Details and the Latency
+  column. The Device menu's **Measure latency to all devices** does every device; each scan
+  does it anyway when it ends.
 - **Find HTTP / HTTPS / SSH port** and **Scan all ports:** see [Finding a port](#finding-a-port).
 - **Show issues…** lists the device's issues, with links to each CVE's NVD page.
 - **Rescan device** probes just that device again (discovery sent straight to it from both
@@ -273,6 +353,12 @@ Right-click a device in the table (or select it and use the **Device** menu):
   (`/proc/net/arp`). Their **Via** column says `from-device`. A device this computer hadn't found
   itself, and a station or LLDP neighbour attached to it, is listed under it, indented; one
   this computer found that's merely in its ARP table isn't.
+
+  **Scan from a device the scan didn't find:** with no device selected, the Device menu's
+  **Scan from device…** (on phones, the title bar's **+**) asks for an address, a port and a
+  login, logs in, and lists that device (Via `ssh`) with what it sees under it. That reaches a
+  site over a VPN, where discovery doesn't travel. Once a scan finds the same device, what it
+  saw stays under it.
 - **Check for firmware update** asks Ubiquiti's public firmware server for the latest release
   for the device's platform and says whether it's newer, with its date and size, and whether
   known vulnerabilities make updating advisable.
@@ -280,11 +366,31 @@ Right-click a device in the table (or select it and use the **Device** menu):
   later) downloads that release, checks its size and SHA-256, copies it to the device with
   scp, starts the family's installer and waits for the device to come back. It asks first,
   naming the device and both versions. See [Device tools over SSH](#device-tools-over-ssh).
-- **Edit config…** (airMAX) opens `/tmp/system.cfg`, airOS's whole configuration, in an
-  editor. **Save** writes it to flash for the next reboot; **Apply** saves it and applies it
-  now, as the web UI's Apply does.
+- **Edit config…** (airMAX, airFiber, LTU, GigaBeam, EdgeOS) opens the device's whole
+  configuration in an editor: `/tmp/system.cfg` on airOS and the airFiber family,
+  `/config/config.boot` on EdgeOS. **Save** writes it for the next reboot (to flash; on EdgeOS,
+  as the boot config, once EdgeOS has checked that it loads); **Apply** saves it and applies
+  it now, as the web UI's Apply does (EdgeOS: load, commit, save). The config before the edit
+  is kept as a backup.
 - **Change login…** (airMAX) sets a new username and password.
+- **Back up config** (airMAX, airFiber, LTU, GigaBeam, EdgeOS) reads the device's config and
+  keeps a copy in the app's data folder, filed under its MAC address with the date, its
+  address, model and firmware. **Config backups…** lists them, with **Restore…**, **Save a
+  copy…**, **Delete…**, **Back up now** and **Show folder**.
+- **Upload config…** sends a config file from this computer (Restore… sends a backup). It
+  must be that device's kind of file and from the same model; one from another device of
+  that model is asked about first, since its address, name and logins come with it. The app
+  then shows what changes against the device's current config, line by line, and offers
+  **Save** or **Apply now**. Either way the device's current config is kept as a backup
+  first. UniFi devices aren't offered these (their controller owns their config), nor
+  EdgeSwitches (their web UI does it).
+- **Reboot…** (airMAX, airFiber, LTU, GigaBeam, EdgeOS, UniFi access points and switches,
+  UniFi OS consoles) asks first, then restarts the device and waits until it answers again.
+- **Locate (blink LED)** (UniFi access points and switches) blinks the device's LED until
+  **Stop locating**, in its place in the menu, stops it.
 - **Copy IP address**, **Copy MAC address**.
+- **Note…** keeps a note on the device (see [The app](#the-app)); **Export device…** saves its
+  report.
 - **Forget SSH key**: see below. **Forget saved login** removes a remembered device login.
 - **Hide device** takes it out of the table, by MAC address, in every scan until it's
   unhidden under **Hidden devices…**. Exports still include it.
@@ -306,20 +412,33 @@ OpenSSH client (Settings > Optional features > OpenSSH Client, if it's missing).
 
 ### Device tools over SSH
 
-Scan from device, firmware updates, the config editor and Change login log in with the computer's own `ssh` and
-`scp`, the same known-hosts file and host keys as the Terminal tab. Their login window can
+The device tools (Scan from device, firmware updates, config backups, the config editor and
+uploads, Reboot, Locate and Change login) log in with the computer's own `ssh` and `scp`, the
+same known-hosts file and host keys as the Terminal tab; on phones, with the app's own SSH
+client. Their login window can
 **remember the login for that device** (by MAC address) in the operating system's credential
 store: the macOS Keychain, Windows Credential Manager, or a Secret Service keyring on Linux
 (through `secret-tool`, from libsecret-tools). Where there's no such store, nothing is
 remembered; passwords are never written to a file.
 
-Each action is offered only for the device families whose steps Ubiquiti documents:
+Each action is offered only for the device families whose steps are documented, by Ubiquiti
+or in the firmware's own scripts:
 
-| Family | Firmware update | Config | Login |
-|---|---|---|---|
-| airMAX (airOS 6 and 8: XM, XW, TI, XC, WA, 2XC, 2WA) | `/tmp/fwupdate.bin`, `/sbin/fwupdate -c` to check it, `/sbin/fwupdate -m` to install | `/tmp/system.cfg`; Save: `cfgmtd -w -p /etc/`; Apply: `/usr/etc/rc.d/rc.softrestart save` | `users.N.name` and `users.N.password` |
-| UniFi access points and switches | `/tmp/fwupdate.bin`, `syswrapper.sh upgrade2` | Set by the UniFi controller | Set by the UniFi controller |
-| UniFi OS consoles (2.x and later) | `/tmp/fwupdate.bin`, `ubnt-systool fwupdate /tmp/fwupdate.bin` | In the console's settings | In the console's settings |
+| Family | Firmware update | Config (backup, edit, upload) | Reboot | Locate | Login |
+|---|---|---|---|---|---|
+| airMAX (airOS 6 and 8: XM, XW, TI, XC, WA, 2XC, 2WA) | `/tmp/fwupdate.bin`, `/sbin/fwupdate -c` to check it, `/sbin/fwupdate -m` to install | `/tmp/system.cfg`; Save: `cfgmtd -w -p /etc/`; Apply: `/usr/etc/rc.d/rc.softrestart save` | `reboot` | No LED command | `users.N.name` and `users.N.password` |
+| airFiber, LTU, GigaBeam | Firmware check only | `/tmp/system.cfg`, as on airMAX; Save and Apply where the device has those commands | `reboot` | No LED command known | Not offered |
+| EdgeRouters (EdgeOS) | Firmware check only | `/config/config.boot`; Save: checked with `load`, then made the boot config; Apply: `load`, `commit`, `save` (`vyatta-cfg-cmd-wrapper`) | `sudo /sbin/reboot`, as EdgeOS's `reboot now` | No LED command | Not yet |
+| UniFi access points and switches | `/tmp/fwupdate.bin`, `syswrapper.sh upgrade2` | Set by the UniFi controller | `syswrapper.sh restart` | `syswrapper.sh set-locate`, `unset-locate` | Set by the UniFi controller |
+| UniFi OS consoles (2.x and later) | `/tmp/fwupdate.bin`, `ubnt-systool fwupdate /tmp/fwupdate.bin` | In the console's settings | `reboot` | From its UniFi app | In the console's settings |
+| EdgeSwitch | Firmware check only | In its web UI | In its web UI | Not offered | Not offered |
+
+**Config backups** are kept in the app's data folder, under `config-backups/`, one folder per
+device named after its MAC address, with a `.json` beside each copy saying when it was taken,
+from which address, model and firmware, and why (a backup, or before an upload, an edit or a
+login change). A backup is the device's whole config file, its logins' password hashes and
+any keys or shared secrets included, so the folder and the backups .zip need the same care as
+the device's own login.
 
 **A connection that breaks while saving or applying a config** can't leave the device half
 changed, and the app says what happened. The config is copied to a file of its own and checked
@@ -331,7 +450,7 @@ when the device can't be reached again does it say just that the connection was 
 reload the config once the device answers. Editing itself happens in the app: a break while
 editing loses nothing.
 
-Other gear (EdgeRouters, airFiber, LTU, UISP) gets the firmware check only. Ubiquiti's help
+Gear the table doesn't name gets the firmware check only. Ubiquiti's help
 center describes the UniFi steps as a last resort, for when the UniFi app can't update a
 device. The installer runs on the device detached from the SSH session, so a dropped
 connection doesn't stop it halfway. The download is deleted once it's installed.
@@ -342,8 +461,9 @@ one, and so on: the menu says so ("Open SSH…  (via 10.0.0.20)"). The app asks 
 device's login on the way in turn, nearest first (each can be remembered), unless this
 computer can reach the device itself. Each device on the way adds latency.
 
-- **Open SSH…**, firmware updates, the config editor, Change login and Scan from device go
-  through with ssh's ProxyJump: each device on the way keeps its own port, user and host key.
+- **Open SSH…** and the device tools (firmware updates, config backups, the editor and
+  uploads, Reboot, Locate, Change login and Scan from device) go through with ssh's
+  ProxyJump: each device on the way keeps its own port, user and host key.
 - **Ping** runs on the device just before it, in the Terminal tab.
 - **Open Web UI** forwards a local port to its web UI through the devices on the way, and opens
   `https://127.0.0.1:<port>/` (or `http://` when the device before it only finds a plain web
@@ -408,7 +528,8 @@ Every problem found is listed below the table. `-v` shows every field each devic
 
 Other options: `-i en0` (only use one interface), `-t 10` (listen longer), `--no-sweep`,
 `--no-mdns`, `--no-ssdp`, `--no-arp`, `--rate 200` (slow the sweep), `--oui 245A4C`
-(recognise another vendor prefix). `--help` lists all of them.
+(recognise another vendor prefix), `--no-latency` (no pings after the scan),
+`--no-firmware-check` (no latest-firmware lookup). `--help` lists all of them.
 
 ## Finding gear on other subnets: temporary aliases (`-a`)
 
@@ -680,6 +801,7 @@ opened.
 - `sniff`: heard in traffic on an interface (`--sniff`, `--vlans`, `--direct`)
 - `from-device`: known to another device (Scan from device: its stations, LLDP neighbours, ARP
   table)
+- `ssh`: logged in to by its address (Scan from device with no device selected)
 - `wifi`: the access point the computer's Wi-Fi is joined to
 - `mdns`: found by mDNS/Bonjour
 - `ssdp`: found by UPnP/SSDP
@@ -712,6 +834,8 @@ opened.
 | `NOT-SET-UP` | Console API says the console hasn't been set up | |
 | `DAMAGED` | Some of its discovery packets arrived damaged | Cable, connectors, switch port, speed/duplex. See [Damaged packets and loss](#damaged-packets-and-loss) |
 | `LOSS` | Missed 10% or more of the rounds of probes (at least 2) while in view | Wi-Fi interference, a bad cable or port, a busy link or device |
+| `PING-LOSS` | 20% or more of its pings went unanswered, with some replies | On a wired link: a bad cable, connector or switch port, or a speed/duplex mismatch. On a wireless hop: interference, a weak signal or a busy channel. Or the device is too busy to answer |
+| `HIGH-LATENCY` | Pings take 100 ms or more on average | A congested link on the way, interference or a weak signal on a wireless hop, or a device short of CPU |
 | `CVE` | Its firmware has known vulnerabilities; Status starts with a red ❗ | Upgrade to the version the message names. See [Known vulnerabilities](#known-vulnerabilities-cves) |
 
 **Notes** at the bottom cover the scan itself: UDP 10001 already in use, broadcasts blocked,
@@ -862,6 +986,8 @@ a packet for decoding.
 - The CVE check doesn't cover cameras and other UniFi Protect, Access, Talk and Connect gear,
   or server software (UISP, self-hosted UniFi Network or UniFi OS Server). Firmware 4.x on
   legacy access points isn't checked against advisories written for 5.x and later.
+- The device tools were tested against stand-in airOS and EdgeOS devices (Locate against a
+  stand-in of UniFi's command), not yet on real gear.
 
 ## Building from source
 
@@ -926,9 +1052,11 @@ Linux one inside containers, so nothing big ends up in iCloud. Finished installe
 | `src/opendisco/app.py` | The GUI |
 | `src/opendisco/phone.py`, `phone_android.py`, `phone_ios.py` | The phone screens, shared by Android and iPhone/iPad, and each one's native parts |
 | `src/opendisco/terminal.py` | The Terminal tab: SSH and ping sessions |
-| `src/opendisco/devicetools.py`, `devicegui.py`, `phonetools.py` | The device tools over SSH (firmware, config, login, Scan from device) and their windows on desktops and phones |
+| `src/opendisco/devicetools.py`, `devicegui.py`, `phonetools.py` | The device tools over SSH (firmware, config backups and uploads, Reboot, Locate, login, Scan from device) and their windows on desktops and phones |
 | `src/opendisco/sshrun.py`, `phonessh.py`, `credstore.py` | SSH for the device tools (the computer's `ssh` and `scp`; asyncssh on phones) and remembered logins in the system's credential store |
 | `src/opendisco/vulns.py` | The CVE check and its updates from the NVD and Ubiquiti's advisories |
+| `src/opendisco/health.py` | Each device's latest firmware, and latency |
+| `src/opendisco/records.py` | Search, device notes, the device report and the site-wide exports, Settings' subnet list |
 | `src/opendisco/update.py` | Checking for, downloading and installing OpenDisco updates |
 | `src/opendisco/winnet.py` | Windows networking: adapters, Npcap capture, administrator rights |
 | `src/opendisco/resources/` | App icon (redraw with `packaging/make_icons.py`), the default networks file, the built-in CVE list (regenerate with `packaging/update_cves.py`), and the Npcap download and Windows update scripts |
