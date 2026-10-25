@@ -26,7 +26,8 @@ SEPARATOR = 0xFFD8D8DC
 SELECTED = 0x24007AFF  # a tablet's list: the row of the device beside it
 SEARCH_FILL = 0xFFEEEEF0  # the search field
 COLORS = {"systemBlueColor": BLUE, "systemRedColor": RED, "systemGreenColor": GREEN}
-BAR_ICONS = {"Export": "ios_share", "Notes and Log": "list_alt", "Settings": "settings"}
+BAR_ICONS = {"Export": "ios_share", "Notes and Log": "list_alt", "Settings": "settings"}  # bar_button adds more
+SYMBOL_NAMES = {"plus": "add"}  # the iPhone's SF Symbol -> its Material Symbol
 TAB_ICONS = {"Details": "info", "Packets": "manage_search", "Tools": "build", "Notes": "chat_bubble", "Log": "list_alt"}
 # Material Symbols (Outlined, 24 px; Google, Apache License 2.0): SVG path data, drawn by _icon.
 # Like the iPhone's SF Symbols, in place of Android's dated built-in menu icons.
@@ -67,6 +68,7 @@ SYMBOLS = {
         "l-84 84q-12 12-29 12t-29-12Zm29-85 27-27-256-256q18-20 26-46.5t8-53.5q0-60-38.5-104.5T386-758l74"
         " 74q12 12 12 28t-12 28L332-500q-12 12-28 12t-28-12l-74-74q9 57 53.5 95.5T360-440q26 0 52-8t47-25"
         "l256 256ZM472-488Z"),
+    "add": "M440-440H200v-80h240v-240h80v240h240v80H520v240h-80v-240Z",
     "search": (
         "M784-120 532-372q-30 24-69 38t-83 14q-109 0-184.5-75.5T120-580q0-109 75.5-184.5T380-840q109 0 1"
         "84.5 75.5T640-580q0 44-14 83t-38 69l252 252-56 56ZM380-400q75 0 127.5-52.5T560-580q0-75-52.5-127"
@@ -671,6 +673,80 @@ def text_box(widget):
 def here(app) -> str:
     """What the app's text calls the device it runs on."""
     return "this tablet" if wide(app) else "this phone"
+
+
+def bar_button(app, symbol, title, action):
+    """One more title-bar button, first in the row (the + for Scan from an address), with the
+    symbol's Material counterpart for its icon."""
+    BAR_ICONS[title] = SYMBOL_NAMES.get(symbol, symbol)
+    app.main_window.toolbar.add(toga.Command(lambda command, **kwargs: action(), text=title,
+                                             group=toga.Group.COMMANDS, order=0))
+
+
+def menu_button(app, title, items):
+    """A button that opens a menu under it (Copy: the IP or MAC address): items() lists (title,
+    enabled, action) when it's tapped."""
+    def press(widget, **kwargs):
+        try:
+            from java import dynamic_proxy, jclass
+            Popup = jclass("androidx.appcompat.widget.PopupMenu")
+            menu = Popup(_activity(), widget._impl.native)
+            actions = {}
+            for index, (text, enabled, action) in enumerate(items()):
+                menu.getMenu().add(0, index, index, text).setEnabled(bool(enabled))
+                actions[index] = action
+
+            class Picked(dynamic_proxy(jclass("androidx.appcompat.widget.PopupMenu$OnMenuItemClickListener"))):
+                def onMenuItemClick(self, item):
+                    actions[item.getItemId()]()
+                    return True
+
+            widget._picked = Picked()  # kept alive while the menu shows
+            menu.setOnMenuItemClickListener(widget._picked)
+            menu.show()
+        except Exception:
+            traceback.print_exc()
+
+    return toga.Button(title, on_press=press, style=Pack(flex=1))
+
+
+async def open_file(app):
+    """A file picked in Android's file picker (Downloads, Drive, a USB stick…), copied into the
+    app's cache folder: its path, or None when nothing was picked."""
+    import asyncio
+    from pathlib import Path
+
+    from java import jarray, jbyte, jclass
+    Intent = jclass("android.content.Intent")
+    intent = Intent(Intent.ACTION_OPEN_DOCUMENT)
+    intent.addCategory(Intent.CATEGORY_OPENABLE)
+    intent.setType("*/*")
+    done = asyncio.get_running_loop().create_future()
+    app._impl.start_activity(intent, on_complete=lambda code, data: done.done() or done.set_result((code, data)))
+    code, data = await done
+    if code != jclass("android.app.Activity").RESULT_OK or data is None or data.getData() is None:
+        return None
+    uri, resolver = data.getData(), _activity().getContentResolver()
+    name = "picked"
+    cursor = resolver.query(uri, None, None, None, None)
+    if cursor is not None:
+        column = cursor.getColumnIndex(jclass("android.provider.OpenableColumns").DISPLAY_NAME)
+        if cursor.moveToFirst() and column >= 0:
+            name = cursor.getString(column) or name
+        cursor.close()
+    folder = Path(app.paths.cache) / "opened"
+    folder.mkdir(parents=True, exist_ok=True)
+    path = folder / Path(name).name
+    stream, chunk, parts = resolver.openInputStream(uri), jarray(jbyte)(65536), []
+    try:
+        while (count := stream.read(chunk)) > 0:
+            parts.append(bytes(chunk)[:count])
+            if sum(map(len, parts)) > 16_000_000:  # (a config is a few KB: this isn't one)
+                raise OSError(f"{name} is too big to be a config")
+    finally:
+        stream.close()
+    path.write_bytes(b"".join(parts))
+    return str(path)
 
 
 def export_menu(app, choices, pick):
