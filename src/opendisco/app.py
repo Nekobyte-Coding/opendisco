@@ -1327,8 +1327,8 @@ class OpenDiscoApp(toga.App):
                                                on_close=lambda: setattr(self, "close_settings", None))
 
     def _launch_checks(self):
-        self._after_update()
-        if self.settings.get("check_app_updates", True):
+        failed = self._after_update()
+        if self.settings.get("check_app_updates", True) and not failed:  # not the same offer straight away
             self._check_for_update(quiet=True)
         if self.settings.get("check_cve_updates", True):
             self._refresh_cves()
@@ -1536,32 +1536,34 @@ class OpenDiscoApp(toga.App):
         self._append_log(f"Restarting into OpenDisco {release.version}…")
         self.request_exit()
 
-    def _after_update(self):
+    def _after_update(self) -> bool:
         """The first time the app opens after an update: say whether it took, and delete the
-        download (and Windows' copy of the previous version)."""
+        download (and Windows' copy of the previous version). True when it didn't take."""
         done = self.settings.pop("update", None)
         if not isinstance(done, dict):
-            return
+            return False
         self._save_settings()
         folder = Path(str(done.get("folder") or ""))
         report = ""
         if folder.name.startswith("opendisco-update"):  # ours: never delete anything else
             try:
-                report = (folder / "update.log").read_text(encoding="utf-8", errors="replace")
+                report = (folder / "update.log").read_text(encoding="utf-8-sig", errors="replace")
             except OSError:
                 pass
             shutil.rmtree(folder, ignore_errors=True)
         wanted = str(done.get("version") or "")
         if update.version_key(__version__) >= update.version_key(wanted):
             self._append_log(f"Updated to OpenDisco {__version__}.")
-            return
-        detail = "\n".join(report.strip().splitlines()[-3:])
+            return False
+        lines = [line.split("  ", 1)[-1] for line in report.strip().splitlines()]  # without the times
+        detail = lines[-1] if lines else ""
         self._append_log(f"The update to OpenDisco {wanted} didn't install: this is still {__version__}."
                          + (f"\n{report.strip()}" if report.strip() else ""), status=False)
         self.status.text = f"OpenDisco {wanted} didn't install."
         asyncio.create_task(self.main_window.dialog(toga.ErrorDialog(
             "Update not installed", f"OpenDisco {wanted} didn't install: this is still {__version__}."
                                     + (f"\n\n{detail}" if detail else ""))))
+        return True
 
     def _android_download_folder(self) -> Path:
         """Android: downloads go in the part of the app's cache that Briefcase's FileProvider

@@ -4,7 +4,7 @@
 # of the previous version's files is kept until the installer has finished, and put back if it fails.
 param([int]$AppPid, [string]$Setup, [string]$Dir, [string]$Log)
 $ErrorActionPreference = 'Stop'
-function Say($text) { Add-Content -Path $Log -Value "$(Get-Date -Format 'HH:mm:ss')  $text" }
+function Say($text) { Add-Content -Encoding UTF8 -Path $Log -Value "$(Get-Date -Format 'HH:mm:ss')  $text" }
 $parts = 'python', 'app'
 
 try {
