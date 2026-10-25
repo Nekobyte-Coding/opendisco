@@ -270,8 +270,8 @@ Scan, Full Scan, Stop and a search box sit above the device list. The title bar 
 (the scan report and the extras), the scan's Notes and Log, Settings, and a **+** that scans
 from a device given by its address (see Scan from device under
 [Right-click menu and the Terminal tab](#right-click-menu-and-the-terminal-tab)). Each row
-gives the model and name, and a newer firmware release and the latency when there are any
-("update 8.7.25 · 3 ms"). Tapping a device opens its page, titled with its name and address,
+gives the address with the latency ("192.168.1.20 · 3 ms"), then the model and name, and a
+newer firmware release when there is one ("↑ 8.7.25"). Tapping a device opens its page, titled with its name and address,
 with tabs along the bottom: **Details**, **Packets**, **Tools**, **Notes** and **Log**.
 **Tools** has:
 - **Ping**, the app's own, and an **SSH** session through the app's own SSH client (phones
