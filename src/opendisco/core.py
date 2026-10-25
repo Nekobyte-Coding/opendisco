@@ -650,6 +650,7 @@ class Device:
     last_seen: float = field(default_factory=time.time)
     issues: list = field(default_factory=list)  # (level, tag, message)
     cves: list | None = None  # known CVEs its firmware matches (vulns.check); None = not checked
+    note: str = ""  # what's written about it, kept by MAC (records.Notes puts it here)
 
     def add_ip(self, ip: str | None) -> None:
         if ip and ip != "0.0.0.0" and ip not in self.ips:
@@ -772,6 +773,7 @@ class Device:
         self.port_search = self.port_search or other.port_search
         self.tftp = self.tftp or other.tftp
         self.found_by = self.found_by or other.found_by
+        self.note = self.note or other.note
         self.mdns = self.mdns or other.mdns
         self.ssdp = self.ssdp or other.ssdp
         self.api = self.api or other.api
@@ -4565,6 +4567,8 @@ def render_details(d: Device) -> str:
     def row(label, value):
         out.append(f"  {label:<22} {value}")
 
+    for n, line in enumerate(d.note.splitlines()):
+        row("Note" if n == 0 else "", line)
     for spec in TLV.values():
         key = spec[0]
         value = d.info.get(key)
@@ -4771,7 +4775,7 @@ def render_issues(devs) -> str:
 def device_to_dict(d: Device) -> dict:
     return {
         "mac": d.mac, "ip": d.ip, "ips": d.ips, "other_macs": sorted(d.other_macs),
-        "model": d.model, "name": d.name, "firmware": d.firmware, "console": d.console,
+        "model": d.model, "name": d.name, "firmware": d.firmware, "console": d.console, "note": d.note or None,
         "via": [v for v in VIA_ORDER if v in d.via], "ubnt_protocols": sorted(d.protocols),
         "vendor": d.vendor or None, "ubiquiti_oui": is_ubnt_mac(d.mac), "ubnt": d.info, "unknown_tlvs": d.unknown_tlvs,
         "mdns": d.mdns, "ssdp": d.ssdp, "console_api": d.api, "open_ports": d.ports,
@@ -5173,10 +5177,10 @@ def export_csv(res: ScanResult) -> str:
     import io
     out = io.StringIO()
     writer = csv.writer(out)
-    writer.writerow(EXPORT_COLUMNS + ("Diagnostics", "Found through"))
+    writer.writerow(EXPORT_COLUMNS + ("Diagnostics", "Found through", "Note"))
     for d in res.devices:
         writer.writerow(device_row(d) + [" | ".join(f"[{tag}] {msg}" for _, tag, msg in d.issues),
-                                         d.found_by.get("ip", "")])
+                                         d.found_by.get("ip", ""), d.note])
     return out.getvalue()
 
 
@@ -5198,9 +5202,10 @@ def export_html(res: ScanResult) -> str:
         issues = "".join(f"<li><b>{escape(status_label(tag))}</b> "
                          + re.sub(r"\bCVE-\d{4}-\d{4,}\b", lambda m: f'<a href="{links[m.group(0)]}">{m.group(0)}</a>',
                                   escape(msg)) + "</li>" for _, tag, msg in d.issues)
+        note = f'<div class="note">\u270e {escape(d.note)}</div>' if d.note else ""
         rows.append(f"<tr>{cells}<td>{tags}</td></tr>"
-                    + (f'<tr class="issues"><td colspan="{len(EXPORT_COLUMNS)}"><ul>{issues}</ul></td></tr>'
-                       if issues else ""))
+                    + (f'<tr class="issues"><td colspan="{len(EXPORT_COLUMNS)}">{note}<ul>{issues}</ul></td></tr>'
+                       if issues or note else ""))
     notes = "".join(f"<li>{escape(m)}</li>" for _, m in res.notes)
     wire = res.wire_text(verbose=True)
     head = "".join(f"<th>{c}</th>" for c in EXPORT_COLUMNS)
@@ -5210,7 +5215,7 @@ def export_html(res: ScanResult) -> str:
 <style>body{{font:14px -apple-system,Segoe UI,Roboto,sans-serif;margin:16px;color:#222;background:#fff}}
 table{{border-collapse:collapse;width:100%;font-size:13px}}th,td{{border-bottom:1px solid #ddd;padding:6px;text-align:left;vertical-align:top}}
 th{{background:#f4f4f4;position:sticky;top:0}}tr.issues td{{border-bottom:2px solid #ccc;color:#444}}ul{{margin:0;padding-left:18px}}
-pre{{background:#f6f6f6;padding:10px;overflow-x:auto}}.wrap{{overflow-x:auto}}
+pre{{background:#f6f6f6;padding:10px;overflow-x:auto}}.wrap{{overflow-x:auto}}.note{{white-space:pre-wrap;margin-bottom:4px}}
 @media (prefers-color-scheme: dark){{body{{background:#121212;color:#ddd}}th{{background:#222}}th,td{{border-color:#333}}pre{{background:#1e1e1e}}}}</style>
 </head><body><h1>OpenDisco</h1><p>{when} &middot; {len(res.devices)} device(s) &middot; {res.elapsed:.0f}s</p>
 <div class="wrap"><table><tr>{head}</tr>{''.join(rows)}</table></div>
@@ -5597,6 +5602,8 @@ def main(argv=None) -> int:
     res = run_scan(opts, log, progress)
     if not isinstance(res, ScanResult):
         return res
+    from opendisco import records
+    records.Notes(vulns.CACHE_DIR).apply(res.devices)  # the app's device notes, for -v and the exports
     if opts.all_ports:
         log("Note: to intrusion prevention (UniFi's IPS / Threat Management, a firewall's port-scan detection) "
             "this looks like a port scan from this computer: it may raise an alert, a false alarm here, or block "
