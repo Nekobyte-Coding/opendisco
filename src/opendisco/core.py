@@ -51,6 +51,7 @@ from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
 
 from opendisco import __version__  # one version for the app, the CLI and the installers
+from opendisco import vulns
 
 UBNT_PORT = 10001
 UBNT_MCAST = "233.89.188.1"
@@ -642,6 +643,7 @@ class Device:
     first_seen: float = field(default_factory=time.time)
     last_seen: float = field(default_factory=time.time)
     issues: list = field(default_factory=list)  # (level, tag, message)
+    cves: list | None = None  # known CVEs its firmware matches (vulns.check); None = not checked
 
     def add_ip(self, ip: str | None) -> None:
         if ip and ip != "0.0.0.0" and ip not in self.ips:
@@ -4180,6 +4182,10 @@ def diagnose(inv: Inventory, all_ifaces, scan_nets, opts, alias_used=(), skipped
                            f"Answered {answered} of {sent} rounds of discovery probes while in view: "
                            f"{sent - answered} went unanswered. On this computer's own subnet that's packet loss: "
                            "Wi-Fi interference, a bad cable or port, a busy link, or a busy device."))
+        d.cves = vulns.check(d)
+        if d.cves:
+            level, msg = vulns.issue(d.cves)
+            issues.append((level, "CVE", msg))
         d.issues = issues
 
 
@@ -4219,14 +4225,21 @@ def sorted_devices(inv: Inventory) -> list:
     return sorted(inv.devices.values(), key=_ip_sort_key)
 
 
+ALERT = "\u2757"  # a red exclamation mark (an emoji, so it's red without colour support)
+
+
 def status_cell(d: Device) -> tuple:
-    """Plain text and coloured text for the STATUS column."""
+    """Plain text and coloured text for the STATUS column. A device with known CVEs starts with a
+    red exclamation mark."""
     parts = [(tag, level) for level, tag, _ in d.issues]
     if d.console:
         parts.insert(0, ("console", "note"))
     if not parts:
         parts = [("ok", "ok")]
-    return " ".join(t for t, _ in parts), " ".join(Style.level(t, lv) for t, lv in parts)
+    plain, coloured = " ".join(t for t, _ in parts), " ".join(Style.level(t, lv) for t, lv in parts)
+    if d.cves:
+        plain, coloured = f"{ALERT} {plain}", f"{Style.paint('!', '1;31') if Style.on else ALERT} {coloured}"
+    return plain, coloured
 
 
 def render_table(devs) -> str:
@@ -4363,6 +4376,14 @@ def render_details(d: Device) -> str:
     if d.unknown_tlvs:
         for n, (t, v) in enumerate(sorted(d.unknown_tlvs.items())):
             row("Unknown TLVs" if n == 0 else "", f"{t} = {v[:64]}{'...' if len(v) > 64 else ''}")
+    if d.cves:
+        out.append(f"  Known CVEs ({len(d.cves)}, from the {vulns.list_label()}):")
+        for m, line in zip(d.cves, vulns.detail_lines(d.cves)):
+            out.append(f"    {Style.level(line[:16], vulns.LEVELS.get(m.cve.get('severity'), 'warn'))}{line[16:]}")
+    elif d.cves is not None:
+        row("Known CVEs", f"none in the {vulns.list_label()} (no match isn't proof it's safe)")
+    elif d.ubnt_packets:
+        row("Known CVEs", "not checked: the CVE list doesn't cover this model or firmware")
     if d.issues:
         out.append("  Diagnostics:")
         for level, tag, msg in d.issues:
@@ -4495,6 +4516,7 @@ def device_to_dict(d: Device) -> dict:
         "vlan": int(d.vlan_label) if d.vlan_label.isdigit() else None,
         "vlan_tagged": bool(d.vlan), "vlan_parent": d.vlan_parent or None, "answered_on": sorted(d.seen_on), "lldp": d.lldp or None, "wifi_ap": d.wifi or None,
         "issues": [{"level": lv, "tag": t, "message": m} for lv, t, m in d.issues],
+        "cves": vulns.to_dict(d.cves) if d.cves is not None else None,  # None: not checked
         "last_packet_hex": d.last_packet.hex() if d.last_packet else None,
         "packets_received": d.ubnt_packets,
         "packets": [packet_to_dict(r) for r in list(d.packets)[-10:]],
@@ -4522,6 +4544,13 @@ def render_notes(inv: Inventory, sc: Scanner, opts) -> list:
         if len(controllers) > 1:
             msg += " More than one controller on a network can adopt devices out from under each other."
         notes.append((level, msg))
+    checked = [d for d in inv.devices.values() if d.cves is not None]
+    if checked:
+        info = vulns.list_info()
+        notes.append(("note", f"The firmware of {len(checked)} device(s) was checked against {info['cves']} known CVEs "
+                              f"({vulns.list_label()}, from the NVD and Ubiquiti's security advisories). No match "
+                              "isn't proof a device is safe: only models and firmware versions discovery identifies "
+                              "for certain are checked, and the newest CVEs may be missing from the list."))
     if not inv.devices and not opts.listen and not opts.direct:
         notes.append(("note", "Nothing answered. Check that this computer is on the same VLAN as the devices, "
                               "that Wi-Fi client isolation isn't on, and that the firewall allows inbound UDP. "
@@ -4547,6 +4576,7 @@ examples:
   %(prog)s -v --raw            ... and each device's packets, checked for damage, at the end
   %(prog)s --json > scan.json  machine-readable output
   %(prog)s --interfaces        show the active interfaces it will use
+  %(prog)s --update-cves       download the current list of known firmware CVEs from the NVD
   %(prog)s -a                  also probe the networks in networks.txt through temporary
                                IP aliases on every active interface (macOS/Linux, sudo)
   %(prog)s -a --hold           ... and keep the aliases that reached gear until Ctrl+C
@@ -4616,6 +4646,9 @@ def parse_args(argv=None):
     o.add_argument("--no-color", action="store_true", help="disable colours")
     o.add_argument("--interfaces", dest="list_interfaces", action="store_true",
                    help="list active interfaces and exit")
+    o.add_argument("--update-cves", action="store_true",
+                   help="download the current list of known firmware CVEs from the NVD (kept with the app's data, "
+                        "and used when it's newer than the built-in list), then exit")
     o.add_argument("--debug", action="store_true", help=argparse.SUPPRESS)
     o.add_argument("--version", action="version", version=f"%(prog)s {__version__}")
     a = p.add_argument_group("temporary IP aliases (macOS/Linux, uses sudo)",
@@ -4829,6 +4862,7 @@ def result_to_dict(res: ScanResult) -> dict:
         "discovery_requesters": {ip: sorted(p) for ip, p in res.inv.requesters.items()},
         "unreadable_packets": {ip: [packet_to_dict(r) for r in recs] for ip, recs in res.inv.garbled.items()},
         "error_counters": res.counters or None,
+        "cve_list": vulns.list_info(),
         "notes": [{"level": lv, "message": m} for lv, m in res.notes],
     }
 
@@ -4878,6 +4912,8 @@ def export_html(res: ScanResult) -> str:
         cells = "".join(f"<td>{escape(str(v))}</td>" for v in device_row(d)[:-1])
         tags = " ".join(f'<span style="color:{colors.get(lv, "#2e7d32")}">{escape(tag)}</span>'
                         for lv, tag, _ in d.issues) or '<span style="color:#2e7d32">ok</span>'
+        if d.cves:
+            tags = f'<b style="color:{colors["error"]}">!</b> {tags}'
         issues = "".join(f"<li><b>{escape(tag)}</b> {escape(msg)}</li>" for _, tag, msg in d.issues)
         rows.append(f"<tr>{cells}<td>{tags}</td></tr>"
                     + (f'<tr class="issues"><td colspan="{len(EXPORT_COLUMNS)}"><ul>{issues}</ul></td></tr>'
@@ -5251,6 +5287,10 @@ def main(argv=None) -> int:
         os.system("")  # turns on ANSI escape handling in the Windows console
     Style.on = sys.stdout.isatty() and not opts.no_color and not opts.json and "NO_COLOR" not in os.environ
     log = (lambda msg: print(msg, file=sys.stderr, flush=True))
+    vulns.CACHE_DIR = vulns.CACHE_DIR or vulns.default_data_dir()  # the app's data folder: one list for both
+    if opts.update_cves:
+        log("Downloading the CVE list from the NVD...")
+        return 0 if vulns.refresh(vulns.CACHE_DIR, log, timeout=90.0) else 1
     tty = sys.stderr.isatty() and not opts.raw
 
     def progress(elapsed, total, inv=None):

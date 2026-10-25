@@ -18,7 +18,7 @@ import toga
 from toga.style import Pack
 from toga.style.pack import COLUMN, ROW
 
-from opendisco import FULL_NAME, __version__, core
+from opendisco import FULL_NAME, __version__, core, vulns
 
 # (name, description, command-line flags, needs) where needs is a capability from core.capabilities()
 MODES = [
@@ -111,6 +111,7 @@ class OpenDiscoApp(toga.App):
         self.networks_path = self._networks_file()
         self.settings_path = Path(self.paths.data) / "settings.json"
         self.known_hosts = Path(self.paths.data) / "known_hosts"  # SSH host keys, filed by MAC
+        vulns.CACHE_DIR = Path(self.paths.data)  # where a downloaded CVE list is kept (vulns.refresh)
         self.settings = self._load_settings()
         self.hidden = self.settings.setdefault("hidden", {})  # device key (its MAC) -> what it was
         if not self.caps["mobile"]:
