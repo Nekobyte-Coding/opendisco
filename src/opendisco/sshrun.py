@@ -209,8 +209,10 @@ def run(login: Login, command: str, timeout: float = 60, stop: threading.Event |
     device that refuses to forward, the command runs on the last hop's own SSH client."""
     if login.nested:
         return _run_nested(login, command, timeout, stop)
-    code, out, err = _spawn(ssh_command(login, command, "-T"), login.passwords, timeout, timeout, stop=stop,
-                            capture=True)
+    # -n on Windows: with its input a console, Windows' ssh can hang after the command has ended (about
+    # one run in five); the password is read from the console either way.
+    code, out, err = _spawn(ssh_command(login, command, "-T", *(["-n"] if IS_WINDOWS else [])), login.passwords,
+                            timeout, timeout, stop=stop, capture=True)
     failure = _failure(err, code, login)
     if failure and failure.kind == "forwarding" and login.via:
         login.nested = True
@@ -342,6 +344,7 @@ def _spawn_windows(argv, password, timeout, idle, on_tty, stop, env) -> tuple:
     watcher = _Watcher(password, lambda data: proc.write(data.decode("utf-8", "replace")), on_tty)
     try:
         start = last = time.monotonic()
+        ended = None
         while True:
             try:
                 data = chunks.get(timeout=0.2)
@@ -352,6 +355,10 @@ def _spawn_windows(argv, password, timeout, idle, on_tty, stop, env) -> tuple:
             if data:
                 last = time.monotonic()
                 watcher.feed(data)
+            elif not proc.isalive():  # ConPTY can keep the reader waiting after the program has ended
+                ended = ended or time.monotonic()
+                if time.monotonic() - ended > 0.6:  # what it printed last has been read by now
+                    break
             _check_limits(proc, stop, start, last, timeout, idle, watcher)
         proc.wait()
     except BaseException:
