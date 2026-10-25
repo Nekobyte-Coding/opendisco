@@ -589,7 +589,12 @@ def scan_command(fam: str) -> str:
 def read_scan(login: sshrun.Login, fam: str, stop=None) -> str:
     sshrun.run(login, scan_command(fam), timeout=90, stop=stop)
     try:
-        return _fetch(login, SCAN_FILE, stop)
+        try:
+            return _fetch(login, SCAN_FILE, stop)
+        except sshrun.SSHError as e:
+            if e.kind != "forwarding":
+                raise
+            return sshrun.run(login, f"cat {SCAN_FILE}", timeout=90, stop=stop).out  # through the hop's client
     finally:
         try:
             sshrun.run(login, f"rm -f {SCAN_FILE}", stop=stop)

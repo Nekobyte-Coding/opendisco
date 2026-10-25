@@ -6,9 +6,12 @@ app.py only lists the actions in DEVICE_ACTIONS and calls menu_state() and act()
 """
 import asyncio
 import difflib
+import socket
 import threading
 import time
 import traceback
+import urllib.parse
+import webbrowser
 from pathlib import Path
 
 import toga
@@ -22,9 +25,33 @@ _busy: dict = {}  # device key -> what's running on it
 _in_use: dict = {}  # downloaded firmware path -> updates using it
 
 
+ROUTED = ("ssh", "ping", "web", "rescan", "find_http", "find_https", "find_ssh", "all_ports")
+
+
+def route(app, d) -> list:
+    """The devices on the way to d, the nearest to this computer first: the devices it was found
+    through (found_by), each through the one before. Empty for a device found directly."""
+    devices = app.result.inv.devices if app.result else {}
+    chain, seen, current = [], {d.key}, d
+    while current.found_by.get("key") in devices and current.found_by["key"] not in seen:
+        current = devices[current.found_by["key"]]
+        seen.add(current.key)
+        chain.insert(0, current)
+    return chain
+
+
+def handles(app, d, name: str) -> bool:
+    """Whether this module does the action: the device tools, and for a device behind other
+    devices, the app's own SSH, ping, web UI and port actions too."""
+    return name in ACTIONS or (name in ROUTED and bool(route(app, d)))
+
+
 def menu_state(app, d, titles: dict) -> dict:
-    """{action: (title, enabled)} for the device tools."""
+    """{action: (title, enabled)} for the device tools, and for a device behind others, the
+    app's own actions that reach it through them."""
     state = {}
+    hops = route(app, d)
+    via = f"  (via {' → '.join(h.ip or h.mac for h in hops)})" if hops else ""
     tools = not app.caps["mobile"] and sshrun.available()
     busy = _busy.get(d.key)
     ubiquiti = bool(d.info.get("firmware") or d.info.get("platform"))
@@ -38,8 +65,17 @@ def menu_state(app, d, titles: dict) -> dict:
             title += f"  ({why})"
         elif not tools:
             title += "  (needs ssh and scp)"
+        if offered and not busy:
+            title += via
         state[name] = (title, bool(d.ip) and offered and tools and not busy)
     idle = bool(app.result) and not (app.running or app.rescanning or app.finding)
+    if hops:
+        reach = bool(d.ip) and tools and all(h.ip for h in hops)
+        for name in ("ssh", "ping", "web"):
+            state[name] = (titles[name] + via, reach)
+        for name in ("find_http", "find_https", "find_ssh", "all_ports"):
+            state[name] = (titles[name] + via, reach and idle)
+        state["rescan"] = (titles["rescan"] + "  (discovery can't travel over SSH)", False)
     if state["scan_from"][1] and not idle:  # it adds to the scan's results
         state["scan_from"] = (titles["scan_from"], False)
     state["forget_login"] = (titles["forget_login"], bool(d.mac and _remembered(app, d)))
@@ -48,7 +84,10 @@ def menu_state(app, d, titles: dict) -> dict:
 
 def act(app, d, name: str) -> None:
     flow = {"scan_from": scan_flow, "fw_check": check_flow, "fw_update": update_flow, "config": config_flow,
-            "login": login_flow}.get(name)
+            "login": login_flow, "ssh": routed_ssh, "ping": routed_ping, "web": routed_web}.get(name)
+    if name in ("find_http", "find_https", "find_ssh", "all_ports"):
+        kind = {"find_http": "http", "find_https": "https", "find_ssh": "ssh", "all_ports": "all"}[name]
+        flow = lambda app, d: routed_find(app, d, kind)  # noqa: E731
     if flow:
         asyncio.create_task(_guarded(app, d, flow))
     elif name == "forget_login":
@@ -83,8 +122,28 @@ def _remembered(app, d) -> dict | None:
     return _logins(app).get(d.mac) if d.mac else None
 
 
-def _login(app, d, user: str, password: str, port: int) -> sshrun.Login:
-    return sshrun.Login(d.ip, port, user, password, terminal.host_key_alias(d.mac, d.ip), app.known_hosts)
+def _login(app, d, user: str, password: str, port: int, via: tuple = ()) -> sshrun.Login:
+    return sshrun.Login(d.ip, port, user, password, terminal.host_key_alias(d.mac, d.ip), app.known_hosts, via)
+
+
+async def ask_route(app, d, purpose: str, hops_only: bool = False):
+    """The login for d, through the devices on its route (found_by), each asked for in turn,
+    nearest first. A device this computer can reach itself is logged in to directly. With
+    hops_only, the logins of the devices on the way only (a tuple; empty when it's direct)."""
+    hops = route(app, d)
+    if hops and await _work(devicetools.answers, d.ip, d.port("ssh"), 2):
+        hops = []  # reachable from here after all
+    via = ()
+    for n, hop in enumerate(hops, 1):
+        login = await ask_login(app, hop, f"Device {n} of {len(hops)} on the way to {d.ip}. {purpose}", via)
+        if not login:
+            return None
+        via += (login,)
+    if hops_only:
+        return via
+    if hops:
+        purpose += f" Through {' → '.join(h.ip for h in hops)}: each device on the way adds latency."
+    return await ask_login(app, d, purpose, via)
 
 
 def forget_login(app, d) -> None:
@@ -95,7 +154,7 @@ def forget_login(app, d) -> None:
                        else f"Forgot the saved username for {d.ip or d.mac}; {credstore.store_name()} had no password for it.")
 
 
-async def ask_login(app, d, purpose: str) -> sshrun.Login | None:
+async def ask_login(app, d, purpose: str, via: tuple = ()) -> sshrun.Login | None:
     """Ask for the username, password and port, then log in once to check them. Remembers or
     forgets the login as the checkbox says, once it has worked. None when cancelled."""
     saved = _remembered(app, d)
@@ -108,8 +167,8 @@ async def ask_login(app, d, purpose: str) -> sshrun.Login | None:
         if answer is None:
             return None
         user, password, port, remember = answer
-        login = _login(app, d, user, password, port)
-        app.status.text = f"Logging in to {d.ip}…"
+        login = _login(app, d, user, password, port, via)
+        app.status.text = f"Logging in to {login.where}…"
         try:
             await _work(sshrun.check_login, login)
         except sshrun.SSHError as e:
@@ -256,7 +315,7 @@ async def scan_flow(app, d):
         return
     fam = devicetools.family(d)
     tools = "its ARP table and LLDP neighbours" + (" and the stations associated with it" if fam == "airos" else "")
-    login = await ask_login(app, d, f"Log in to read what it sees: {tools}.")
+    login = await ask_route(app, d, f"Log in to read what it sees: {tools}.")
     if not login:
         return
     _busy[d.key] = "scanning"
@@ -293,6 +352,184 @@ async def scan_flow(app, d):
     selected = app._selected_device()
     if selected is not None:
         app.details.value = core.render_details(selected)
+
+
+# ---------------------------------------------------------------------------
+# Reaching a device through others: SSH, ping, web UI, ports
+# ---------------------------------------------------------------------------
+
+def _through(hops) -> str:
+    return " → ".join(h.ip for h in hops)
+
+
+async def routed_ssh(app, d):
+    session = app.term.find(d.key, "ssh")
+    if session:
+        app._show_terminal(session)
+        return
+    login = await ask_route(app, d, "Log in for an SSH session.")
+    if not login:
+        return
+    if login.nested:  # a device on the way doesn't forward: a session on the last hop's own client
+        argv = sshrun.ssh_command(sshrun.last_hop(login), sshrun.nested_command(login, None), "-tt")
+    else:
+        argv = sshrun.ssh_command(login, None)
+    title = f"{d.ip}  SSH {login.user}@ via {sshrun.route_text(login) or 'direct'}  {d.name or d.model or ''}".rstrip()
+    if not login.via:
+        title = f"{d.ip}  SSH {login.user}@port {login.port}  {d.name or d.model or ''}".rstrip()
+    app._show_terminal(app.term.open(d.key, "ssh", title, argv, login.passwords))
+
+
+async def routed_ping(app, d):
+    session = app.term.find(d.key, "ping")
+    if session:
+        if not session.alive:
+            session.type(b"\r")
+        app._show_terminal(session)
+        return
+    hops = await ask_route(app, d, f"Log in to ping {d.ip} from the device before it.", hops_only=True)
+    if hops is None:
+        return
+    if not hops:  # reachable from here
+        app._open_ping(d)
+        return
+    last = _chain(hops)
+    title = f"{d.ip}  ping from {last.ip}  {d.name or d.model or ''}".rstrip()
+    app._show_terminal(app.term.open(d.key, "ping", title, sshrun.ssh_command(last, f"ping {d.ip}", "-tt"),
+                                     last.passwords))
+
+
+def _chain(hops) -> sshrun.Login:
+    """The last device on the way, reached through the ones before it."""
+    *before, last = hops
+    return sshrun.Login(last.ip, last.port, last.user, last.password, last.alias, last.known_hosts, tuple(before))
+
+
+def _free_port() -> int:
+    with socket.socket() as s:
+        s.bind(("127.0.0.1", 0))
+        return s.getsockname()[1]
+
+
+async def routed_web(app, d):
+    """The web UI through a local port forward from the last device on the way: the browser
+    opens 127.0.0.1, and the forward runs as a Terminal session until it's closed."""
+    url = urllib.parse.urlsplit(core.web_url(d, fallback=True))
+    port = url.port or (443 if url.scheme == "https" else 80)
+    session = app.term.find(d.key, "web")
+    if session and session.alive:
+        webbrowser.open(session.url)
+        app.status.text = f"Opened {session.url} (forwarded to {d.ip}:{port})."
+        return
+    hops = await ask_route(app, d, f"Log in to forward {d.ip}'s web UI to this computer.",
+                           hops_only=True)
+    if hops is None:
+        return
+    if not hops:
+        webbrowser.open(url.geturl())
+        app.status.text = f"Opened {url.geturl()}"
+        return
+    last, local = _chain(hops), _free_port()
+    if not any(kind in ("https", "http") for kind in d.services.values()):
+        # This computer can't check its ports: the device before it looks for a web server.
+        candidates = list(dict.fromkeys([port, 443, 80, 8443, 8080]))
+        try:
+            out = (await _work(lambda: sshrun.run(last, "for p in " + " ".join(map(str, candidates)) +
+                                                  f"; do nc -z -w1 {d.ip} $p 2>/dev/null && echo $p && break; done"))).out
+        except sshrun.SSHError as e:
+            app.status.text = f"Web UI of {d.ip}: {e}"
+            return
+        found = next((int(p) for p in out.split() if p.isdigit()), None)
+        if found and found != port:
+            port, url = found, urllib.parse.urlsplit(f"{'http' if found in (80, 8080) else 'https'}://{d.ip}:{found}/")
+    argv = sshrun.ssh_command(last, None, "-N", "-L", f"127.0.0.1:{local}:{d.ip}:{port}")
+    target = f"{url.scheme}://127.0.0.1:{local}/"
+    title = f"{d.ip}  web UI via {_through(hops)}  {target}"
+    session = app.term.open(d.key, "web", title, argv, last.passwords)
+    session.url = target
+    app.status.text = f"Forwarding {target} to {d.ip}:{port} through {_through(hops)}…"
+    if await _work(_wait_local, local, 30):
+        webbrowser.open(target)
+        app.status.text = (f"Opened {target}: forwarded to {d.ip}:{port} through {_through(hops)} for as long as its "
+                           "session stays open in the Terminal tab. Each device on the way adds latency.")
+    else:
+        app._show_terminal(session)
+        app.status.text = f"The forward to {d.ip}:{port} didn't start: its session in the Terminal tab says why."
+
+
+def _wait_local(port: int, within: float) -> bool:
+    start = time.monotonic()
+    while time.monotonic() - start < within:
+        if devicetools.answers("127.0.0.1", port, 1):
+            return True
+        time.sleep(0.5)
+    return False
+
+
+async def routed_find(app, d, kind: str):
+    """A port search run on the last device on the way, with its nc: every connection through
+    an SSH forward is a channel of its own, far too slow for 65,535 ports from here."""
+    if not (app.settings.get("skip_port_warning") or app.port_warning_accepted or await app._port_warning(d)):
+        return
+    hops = await ask_route(app, d, f"Log in to search {d.ip}'s ports from the device before it.", hops_only=True)
+    if hops is None:
+        return
+    if not hops:
+        app._find(d, kind)
+        return
+    last, result = _chain(hops), app.result
+    name = core.SERVICE_NAMES[kind]
+    ports = core.search_order(kind, result.devices if result else ())
+    app.finding = True
+    app.start_button.enabled, app.stop_button.enabled = False, True
+    app.spinner.start()
+    core.STOP.clear()
+
+    def work():
+        if sshrun.run(last, f"nc -z -w1 127.0.0.1 {last.port}").code:
+            raise devicetools.ToolError(f"{last.ip} has no nc that can check ports (nc -z), so {d.ip}'s ports "
+                                        "can't be searched from it.")
+        found = {}
+        for start in range(0, len(ports), 600):
+            if core.STOP.is_set():
+                break
+            chunk = " ".join(map(str, ports[start:start + 600]))
+            out = sshrun.run(last, f"for p in {chunk}; do nc -z -w1 {d.ip} $p 2>/dev/null && echo $p; done",
+                             timeout=900).out
+            for port in (int(p) for p in out.split() if p.isdigit()):
+                banner = sshrun.run(last, f"printf 'HEAD / HTTP/1.0\\r\\n\\r\\n' | nc -w2 {d.ip} {port} 2>/dev/null "
+                                          "| head -c 80").out
+                found[port] = ("ssh" if banner.startswith("SSH-") else "http" if banner.startswith("HTTP/")
+                               else kind if kind != "all" and port in core.SEARCH_FIRST.get(kind, ()) else "open")
+            done = min(start + 600, len(ports))
+            app._from_worker(setattr, app.status, "text",
+                             f"{d.ip} (from {last.ip}): checked {done:,} of {len(ports):,} TCP ports for {name}, "
+                             f"{len(found)} open…")
+            if kind != "all" and any(k == kind for k in found.values()):
+                break
+        return found
+
+    error, found = None, {}
+    try:
+        found = await _work(work)
+    except (devicetools.ToolError, sshrun.SSHError) as e:
+        error = str(e)
+    finally:
+        app.finding = False
+        app.spinner.stop()
+        app.start_button.enabled, app.stop_button.enabled = True, False
+    if error:
+        app.status.text = f"Port search on {d.ip}: {error}"
+        return
+    d.ports = sorted(set(d.ports or []) | set(found))
+    for port, what in found.items():
+        d.services.setdefault(port, what)
+    if result is app.result:
+        app._show_devices(result.devices)
+        if app._selected_device() is d:
+            app.details.value = core.render_details(d)
+    listed = ", ".join(f"{p} {k}" for p, k in sorted(found.items())) or "none"
+    app.status.text = f"{d.ip}, checked from {last.ip}: open TCP ports {listed}."
 
 
 # ---------------------------------------------------------------------------
@@ -340,7 +577,7 @@ async def update_flow(app, d, check=None):
         return
     _busy[d.key] = "updating"
     try:
-        login = await ask_login(app, d, f"Log in to install firmware {check.latest}.")
+        login = await ask_route(app, d, f"Log in to install firmware {check.latest}.")
         if not login:
             return
         family = devicetools.FAMILY_NAMES[devicetools.family(d)]
@@ -434,7 +671,7 @@ async def _reread(app, d) -> str | None:
 # ---------------------------------------------------------------------------
 
 async def config_flow(app, d):
-    login = await ask_login(app, d, f"Log in to read its configuration ({devicetools.AIROS_CONFIG}).")
+    login = await ask_route(app, d, f"Log in to read its configuration ({devicetools.AIROS_CONFIG}).")
     if not login:
         return
     app.status.text = f"Reading the config of {d.ip}…"
@@ -544,7 +781,7 @@ class ConfigEditor:
 async def login_flow(app, d):
     if _busy.get(d.key):
         return
-    login = await ask_login(app, d, "Log in with its current username and password first.")
+    login = await ask_route(app, d, "Log in with its current username and password first.")
     if not login:
         return
     if not login.password:
@@ -572,7 +809,8 @@ async def login_flow(app, d):
                         "without applying): they're applied with it.")
         if not await app.main_window.dialog(toga.QuestionDialog("Change login?", message)):
             return
-        new = sshrun.Login(login.ip, login.port, new_user, new_password, login.alias, login.known_hosts)
+        new = sshrun.Login(login.ip, login.port, new_user, new_password, login.alias, login.known_hosts,
+                           login.via, login.nested)
         progress = Progress(app, f"Changing login: {d.ip}", f"{_label(d)}: {login.user} → {new_user}")
         progress.no_cancel()
         outcome = {}

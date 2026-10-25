@@ -833,6 +833,10 @@ class OpenDiscoApp(toga.App):
             self.status.text = "Select a device first."
             return
         title, enabled = self._menu_state(d)[name]
+        from opendisco import devicegui
+        if enabled and devicegui.handles(self, d, name):  # the device tools, and devices behind others
+            devicegui.act(self, d, name)
+            return
         if not enabled:
             waits = name == "rescan" or name in FINDS or (name == "scan_from" and "(" not in title)
             self.status.text = ("Works once a scan has finished, one device at a time." if waits
@@ -852,9 +856,6 @@ class OpenDiscoApp(toga.App):
             asyncio.create_task(self._find_after_warning(d, FINDS[name]))
         elif name == "issues":
             self._show_issues(d)
-        elif name in ("scan_from", "fw_check", "fw_update", "config", "login", "forget_login"):
-            from opendisco import devicegui
-            devicegui.act(self, d, name)
         elif name == "copy_ip":
             self._copy(d.ip, "IP address")
         elif name == "copy_mac":

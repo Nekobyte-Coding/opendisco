@@ -119,6 +119,20 @@ def open_console_window(argv: list) -> None:
 # Sessions
 # ---------------------------------------------------------------------------
 
+ASKER = re.compile(rb"([^\s@']+)@([^\s@']+)'s password")
+
+
+def prompt_password(passwords, prompt: bytes) -> tuple:
+    """(who is asking, the password to type) for an ssh password prompt. passwords is one
+    password, or {host key alias or address: password} for a connection through other devices,
+    whose prompts each name theirs ("ubnt@ubnt-0418d6a1b2c3's password:")."""
+    if not isinstance(passwords, dict):
+        return None, passwords
+    asker = ASKER.findall(prompt)
+    host = asker[-1][1].decode("utf-8", "replace") if asker else None
+    return host, passwords.get(host)
+
+
 def _take_terminal():  # runs in the child between fork and exec, so nothing that imports or allocates
     fcntl.ioctl(0, termios.TIOCSCTTY, 0)  # so ssh can read the password from its terminal
 
@@ -127,9 +141,12 @@ class Session:
     """One program running in a pseudo-terminal. A thread collects its output for the pane
     to collect; once it ends, Enter starts it again with the same settings."""
 
-    def __init__(self, sid: str, device_key: str, kind: str, title: str, argv: list, password: str | None = None):
+    def __init__(self, sid: str, device_key: str, kind: str, title: str, argv: list,
+                 password: "str | dict | None" = None):
         self.sid, self.device_key, self.kind, self.title, self.argv = sid, device_key, kind, title, argv
-        self.password = password or None  # in memory only, to log in again after a reconnect
+        # In memory only, to log in again after a reconnect. Through other devices (ssh -J), one
+        # per device on the way: {the name its host key is filed under: password}.
+        self.password = password or None
         self.size = (24, 80)  # rows, cols
         self.out, self.lock = deque(), threading.Lock()
         self.alive = False
@@ -139,7 +156,7 @@ class Session:
 
     # -- running ---------------------------------------------------------
     def start(self) -> None:
-        self.typed_password, self.tail = False, b""
+        self.typed, self.tail = set(), b""
         env = dict(os.environ, TERM="xterm-256color")
         rows, cols = self.size
         if IS_WINDOWS:
@@ -183,9 +200,12 @@ class Session:
         if KEY_CHANGED in seen:
             self.key_changed = True
         self.tail = seen[-300:]
-        if self.password and not self.typed_password and PASSWORD_PROMPT.search(self.tail):
-            self.typed_password = True
-            self.write((self.password + "\r").encode())
+        if self.password and PASSWORD_PROMPT.search(self.tail):
+            who, password = prompt_password(self.password, self.tail)
+            if password and who not in self.typed:
+                self.typed.add(who)
+                self.tail = b""
+                self.write((password + "\r").encode())
 
     def _ended(self, code) -> bytes:
         if self.kind == "ping":

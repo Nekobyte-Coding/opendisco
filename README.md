@@ -256,6 +256,25 @@ center describes the UniFi steps as a last resort, for when the UniFi app can't 
 device. The installer runs on the device detached from the SSH session, so a dropped
 connection doesn't stop it halfway. The download is deleted once it's installed.
 
+**Devices behind other devices.** A device that Scan from device found (listed under the
+device that found it) is reached through that device, and through the one that found that
+one, and so on: the menu says so ("Open SSH…  (via 10.0.0.20)"). The app asks for each
+device's login on the way in turn, nearest first (each can be remembered), unless this
+computer can reach the device itself. Each device on the way adds latency.
+
+- **Open SSH…**, firmware updates, the config editor, Change login and Scan from device go
+  through with ssh's ProxyJump: each device on the way keeps its own port, user and host key.
+- **Ping** runs on the device just before it, in the Terminal tab.
+- **Open Web UI** forwards a local port to its web UI through the devices on the way, and opens
+  `https://127.0.0.1:<port>/` (or `http://` when the device before it only finds a plain web
+  server). The forward is a session in the Terminal tab and lasts until that's closed.
+- **Find … port** and **Scan all ports** run on the device just before it, with its `nc`:
+  through SSH every connection is a channel of its own, far too slow for 65,535 ports.
+- **Rescan device** isn't offered: UBNT discovery is UDP, which SSH doesn't carry.
+- Where a device on the way refuses to forward connections (TCP forwarding off in its SSH
+  server), commands run on it with its own SSH client instead (Dropbear's `dbclient`, or `ssh`),
+  and that device checks the next one's host key; files can't be copied through it.
+
 **A new login** goes into `/tmp/system.cfg` the way airOS stores it: the password as a crypt
 hash in the same format as the current one (MD5-crypt, `$1$`, on airOS). Before writing it,
 the app hashes the password just used to log in and checks it matches the stored hash, so it
