@@ -697,7 +697,7 @@ class OpenDiscoApp(toga.App):
         else:
             self.table.data = [dict(values, key=key) for key, values in rows]
         if self.phone_ui:  # iOS forgets the tapped row whenever a row changes
-            phone.native(self).keep_selection(self, selected)
+            phone.keep_selection(self, selected)
 
     def on_search(self, widget, **kwargs):
         self._show_devices(self._all_devices())
@@ -1005,8 +1005,10 @@ class OpenDiscoApp(toga.App):
                    toga.Button("Save", on_press=lambda w, **kw: finish(True))]
         if d.note:
             buttons.insert(0, toga.Button("Delete note", on_press=lambda w, **kw: finish(False)))
-        if not self.caps["mobile"]:
+        if not self.caps["mobile"] or self.phone_ui:  # (phones: at the right, Save filled, as their other pages)
             buttons.insert(1 if d.note else 0, toga.Box(style=Pack(flex=1)))
+        if self.phone_ui:
+            phone.native(self).style_button(buttons[-1])
         content = toga.Box(style=Pack(direction=COLUMN, flex=1, margin=14, gap=8), children=[
             toga.Label(self._wrap(f"Kept with {d.mac} in this computer's OpenDisco data, through rescans, restarts "
                                   "and updates; Details, the search and the exports include it.")),
@@ -1481,6 +1483,9 @@ class OpenDiscoApp(toga.App):
         for kind, button, text, _types in records.SITE_EXPORTS:
             enabled, extra = state.get(kind, (True, ""))
             choices.append((kind, button, f"{text} ({extra})." if extra else f"{text}.", enabled))
+        if self.phone_ui:  # a page of its own, a narrow screen's layout
+            phone.export_chooser(self, choices)
+            return
 
         def pick(kind):
             close()

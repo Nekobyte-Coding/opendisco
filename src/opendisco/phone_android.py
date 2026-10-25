@@ -22,6 +22,7 @@ FILL = 0xFFE9E9EB  # a gray button
 DISABLED_FILL, DISABLED_TEXT = 0xFFF0F0F2, 0xFFB4B4B9
 SEPARATOR = 0xFFD8D8DC
 SELECTED = 0x24007AFF  # a tablet's list: the row of the device beside it
+SEARCH_FILL = 0xFFEEEEF0  # the search field
 COLORS = {"systemBlueColor": BLUE, "systemRedColor": RED, "systemGreenColor": GREEN}
 BAR_ICONS = {"Export": "ios_share", "Notes and Log": "list_alt", "Settings": "settings"}
 TAB_ICONS = {"Details": "info", "Packets": "manage_search", "Tools": "build", "Notes": "chat_bubble", "Log": "list_alt"}
@@ -64,6 +65,10 @@ SYMBOLS = {
         "l-84 84q-12 12-29 12t-29-12Zm29-85 27-27-256-256q18-20 26-46.5t8-53.5q0-60-38.5-104.5T386-758l74"
         " 74q12 12 12 28t-12 28L332-500q-12 12-28 12t-28-12l-74-74q9 57 53.5 95.5T360-440q26 0 52-8t47-25"
         "l256 256ZM472-488Z"),
+    "search": (
+        "M784-120 532-372q-30 24-69 38t-83 14q-109 0-184.5-75.5T120-580q0-109 75.5-184.5T380-840q109 0 1"
+        "84.5 75.5T640-580q0 44-14 83t-38 69l252 252-56 56ZM380-400q75 0 127.5-52.5T560-580q0-75-52.5-127"
+        ".5T380-760q-75 0-127.5 52.5T200-580q0 75 52.5 127.5T380-400Z"),
     "chat_bubble": (
         "M80-80v-720q0-33 23.5-56.5T160-880h640q33 0 56.5 23.5T880-800v480q0 33-23.5 56.5T800-240H240L80-"
         "80Zm126-240h594v-480H160v525l46-45Zm-46 0v-480 480Z"),
@@ -609,6 +614,40 @@ def plain_entry(widget, send=False, new_password=False):
         traceback.print_exc()
 
 
+def search_field(widget):
+    """The search field as the iPhone draws it: a rounded gray box with a magnifier and no
+    underline; the keyboard's key reads Search and puts the keyboard away (the list changes as
+    it's typed)."""
+    try:
+        from java import dynamic_proxy, jclass
+        EditorInfo = jclass("android.view.inputmethod.EditorInfo")
+        impl, native = widget._impl, widget._impl.native
+        shape = jclass("android.graphics.drawable.GradientDrawable")()
+        shape.setCornerRadius(_dp(10))
+        shape.setColor(_int(SEARCH_FILL))
+        native.setBackground(shape)
+        impl.set_background_color = lambda color: None  # (Toga would put its underline back)
+        native.setPadding(_dp(10), _dp(8), _dp(10), _dp(8))
+        icon = _icon("search", SECONDARY, 20)
+        icon.setBounds(0, 0, _dp(20), _dp(20))
+        native.setCompoundDrawablesRelative(icon, None, None, None)
+        native.setCompoundDrawablePadding(_dp(6))
+        native.setHintTextColor(_int(SECONDARY))
+        native.setImeOptions(EditorInfo.IME_ACTION_SEARCH)
+
+        class Searched(dynamic_proxy(jclass("android.widget.TextView$OnEditorActionListener"))):
+            def onEditorAction(self, view, action, event):
+                if action == EditorInfo.IME_ACTION_SEARCH:
+                    end_editing(None)
+                    return True
+                return False
+
+        widget._searched = Searched()  # kept alive with the widget
+        native.setOnEditorActionListener(widget._searched)
+    except Exception:
+        traceback.print_exc()
+
+
 def end_editing(app):
     """Put the keyboard away."""
     try:
@@ -650,7 +689,8 @@ def _keep_above_keyboard(app):
             params = view.getLayoutParams()
             bottom = max(bars.bottom, keyboard.bottom)
             tabs = app.tabs._impl.native_navigationview
-            tabs.setVisibility(View.GONE if keyboard.bottom > bars.bottom else View.VISIBLE)
+            # (asked, not measured: a tablet counts the keyboard in the system bars' bottom too)
+            tabs.setVisibility(View.GONE if insets.isVisible(Type.ime()) else View.VISIBLE)
             if (params.leftMargin, params.topMargin, params.rightMargin, params.bottomMargin) != (
                     bars.left, bars.top, bars.right, bottom):
                 params.setMargins(bars.left, bars.top, bars.right, bottom)
