@@ -6,6 +6,38 @@ when it came out. The Linux packages of 1.1.0 to 1.3.1 were added then too; thos
 never released for Linux. README.md's "Versions and platforms" lists each version's platforms
 and known issues.
 
+## 1.6.1 (2026-10-25)
+
+- **Terms of use:** OpenDisco shows its terms of use (TERMS.md) when it first opens and after
+  each upgrade, and they must be accepted before it's used. On macOS, Windows, Linux and Android
+  they take the place of the main window, with the app's own menu items and title-bar buttons
+  off until **I agree**; Quit, closing the window or Android's Back leaves. iOS shows them over
+  everything, with I agree only. **Terms of Use…** shows them again (the OpenDisco menu on a
+  Mac, Help on Windows and Linux, Settings on phones).
+- The command line asks too, before anything runs: `I agree` typed in a terminal, or
+  `--accept-terms` for scripts and other runs without one. `--terms` prints them. One
+  acceptance counts for both the app and the command line.
+- Each acceptance is kept in `terms.json` in the app's data folder: the version, the time (UTC),
+  the SHA-256 of the terms' text, and whether the app or the command line accepted them. Terms
+  whose text changes are asked again.
+- The confirmations for installing firmware, saving, applying, uploading or restoring a config,
+  changing a login and rebooting say what can go wrong, and that the device tools have been
+  tested only on simulated devices so far.
+- **Open-source licenses…** (beside Terms of Use…) lists the licenses of the components each
+  build bundles.
+- The update offer says the new version asks for its terms of use, with **Read the terms** on
+  desktops.
+- macOS and Linux: the app's data folder (config backups hold password hashes and shared
+  secrets) is readable by its own account only.
+- Windows and Linux: the main window starts wider when the screen has room (up to 1500 pixels,
+  centred), and each column of the device list gets the width its contents need. Too narrow
+  for them all, the widest columns give up width first, and the IP and MAC addresses stay whole.
+  At the first size, Linux had cut Name, Model and Via to a few characters, and Windows the
+  firmware, names and statuses. On a screen smaller than the window, it opens at the top left.
+- Linux: the app no longer hangs when it opens with a page of text to show (the terms of use).
+- Android: Quit closes the app.
+- Details says "1 packet", not "1 packets", for a device heard once.
+
 ## 1.6.0 (2026-10-25)
 
 **Device configs** (airMAX, airFiber, LTU, GigaBeam and EdgeOS; not UniFi, whose controller owns
