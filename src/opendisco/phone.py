@@ -2,14 +2,15 @@
 
 A phone has no menus, no second windows and no room for a twelve-column table, and lets an app
 run no other program. So there the app opens on its device list, under Quick Scan, Full Scan and
-Stop and a search field, with Export, the scan's Notes and Log and Settings in the title bar. Tapping a device opens
+Stop and a search, with Export (the scan report and the other reports), the scan's Notes and Log
+and Settings in the title bar. Tapping a device opens
 its own page, titled with its name and address, with its tabs along the bottom: Details,
 Packets, Tools, Notes and Log. Tools pings the device (core.ping: the app's own ICMP), opens an
 SSH session to it (phonessh: the app's own SSH), finds its ports, opens its web UI, rescans it,
 reads what it sees of its neighbours (Scan from device, as on the desktop: devicetools), checks
 and updates its firmware, edits its config, changes its login (phonetools), keeps a note on it,
-exports its report (app.py and records, as on the desktop) and copies its addresses, with what
-they find, and the SSH session, in a console underneath. On a tablet
+exports its own report and copies its addresses, with what they find, and the SSH session, in a
+console underneath. On a tablet
 (wide), the device's page sits beside the list instead of over it, turned either way.
 
 This module is what both phones share. What each does natively is in phone_<platform>.py
@@ -35,17 +36,23 @@ This module is what both phones share. What each does natively is in phone_<plat
                                 new_password: no password manager taking it over
     end_editing(app)            finish typing, so a field's value has its last character
     done_bar(app, widget)       a way to put the keyboard away from a many-line text view
-    side_by_side(app)           True while the device list stays in view beside the pages (a tablet)
-    wide(app)                   True on a tablet where this module lays out the list and the device
-                                page side by side (Detail; Android). iOS splits natively instead
-                                (side_by_side) and leaves this False
-    clear_selection(app)        with wide: no row marked as the one beside the list (the scan's
+    wide(app)                   True on a tablet: the list and the device page side by side, laid
+                                out here (Detail)
+    side_by_side(app)           True while the platform's own layout keeps the list in view beside
+                                the pages (iOS: an iPad at a regular width, in a split view)
+    clear_selection(app)        a tablet: no row marked as the one beside the list (the scan's
                                 Notes and Log are showing there)
-    search_field(widget)        the platform's look for the search field over the list
+    search_field(app, widget)   the search above the list, looking like the platform's own
+    export_menu(app, choices, pick)   Export offers a choice of reports: choices() lists them as
+                                (kind, title, detail, enabled) when it's tapped; pick(kind) saves one
+                                (without it, Export saves the scan report)
+    here(app)                   what the app's text calls the device it runs on ("this phone")
+    text_box(widget)            a text view for typing many lines into, drawn so it can be seen
 app.py makes the widgets every platform shares and calls in here; it all runs on the UI thread.
 """
 import importlib
 import importlib.util
+import re
 import shutil
 import threading
 from pathlib import Path
@@ -90,13 +97,20 @@ def _nothing(*args, **kwargs):
 
 
 FALLBACKS = {"Picker": _SelectionPicker, "watch_keyboard": _nothing, "plain_entry": _nothing,
-             "end_editing": _nothing, "done_bar": _nothing, "side_by_side": _nothing,
-             "wide": lambda app: False, "clear_selection": _nothing, "search_field": _nothing}
+             "end_editing": _nothing, "done_bar": _nothing, "wide": lambda app: False,
+             "side_by_side": lambda app: False, "clear_selection": _nothing, "search_field": _nothing,
+             "export_menu": _nothing, "here": lambda app: "this phone", "text_box": _nothing}
 
 
 def hook(app, name: str):
     """A phone_<platform> function that not every platform has, or its plain fallback."""
     return getattr(native(app), name, None) or FALLBACKS[name]
+
+
+def beside(app) -> bool:
+    """True while the list is in view beside the device page: a tablet, laid out here (wide) or
+    by the platform (side_by_side)."""
+    return app.wide or hook(app, "side_by_side")(app)
 
 
 class Mirror:
@@ -124,7 +138,9 @@ def main_screen(app) -> toga.Box:
     status_here = app.status
     app.status = Mirror(status_here, app.tool_status)
     app.start_button = Mirror(quick, full)
-    app.search.placeholder = "Search"  # (the desktop's lists what it looks through: too long here)
+    app.search.placeholder = "Search: IP, MAC, model, name, note…"  # (and firmware, status, via)
+    app.search.on_confirm = lambda w, **kw: hook(app, "end_editing")(app)
+    app.search_count.style.update(color="#8a8a8e", font_size=13)
     content = toga.Box(style=Pack(direction=COLUMN, margin=10, gap=10), children=[
         toga.Box(style=Pack(direction=ROW, gap=8), children=[quick, full, app.stop_button]),
         toga.Box(style=Pack(direction=ROW, align_items="center", gap=8), children=[app.search, app.search_count]),
@@ -135,6 +151,7 @@ def main_screen(app) -> toga.Box:
     style(quick)
     style(full)
     style(app.stop_button, "tinted", "systemRedColor")
+    hook(app, "search_field")(app, app.search)
     app.wide = hook(app, "wide")(app)
     if not app.wide:
         return content
@@ -169,7 +186,7 @@ class Detail:
 
 def _scan(app, mode: str):
     app.mode.value = mode
-    if app.wide:  # the new scan clears the shown device's tabs; its Log shows how it goes
+    if beside(app):  # the new scan clears the shown device's tabs; its Log shows how it goes
         show_scan(app)
     app.loop.create_task(app.on_start(None))
 
@@ -183,25 +200,28 @@ def fit(app):
     ui.monospaced(app.console, 10)
     if not app.wide:  # (a tablet's is beside the list: Detail)
         app.page = ui.Page(app, toga.Box(style=Pack(direction=COLUMN, flex=1), children=[app.tabs]))
-    ui.fit(app, export=app._export_chooser, notes=lambda: show_scan(app), settings=app.preferences)
+    ui.fit(app, export=lambda: app.loop.create_task(app.on_export(None)), notes=lambda: show_scan(app),
+           settings=app.preferences)
     for button in (app.ping_button, app.ssh_button, app.web_button, app.rescan_button, app.scan_from_button,
-                   app.firmware_button, app.config_button, app.login_button, app.find_button, app.note_button,
-                   app.export_device_button):
+                   app.firmware_button, app.config_button, app.login_button, app.find_button):
         ui.style_button(button, "tinted")
-    for button in (app.copy_ip_button, app.copy_mac_button, *app.ssh_row.children[1:]):
+    for button in (app.note_button, app.export_device_button, app.copy_ip_button, app.copy_mac_button,
+                   *app.ssh_row.children[1:]):
         ui.style_button(button, "gray")
+    hook(app, "export_menu")(app, lambda: export_choices(app), lambda kind: app.loop.create_task(app._export(kind)))
     hook(app, "watch_keyboard")(app, app.console)
     hook(app, "plain_entry")(app.ssh_input, send=True)
-    hook(app, "plain_entry")(app.search)  # addresses, MACs and names: no capitals or corrections
-    hook(app, "search_field")(app.search)
     if app.wide:  # beside the list until a device is tapped
         show_scan(app)
     update_tools(app)
 
 
-def push_panel(app, title: str, content, on_back=None):
+def push_panel(app, title: str, content, on_back=None, fit=False):
     """A small page (Settings, a login) over what's showing; returns what closes it. Back closes
-    it too, then calls on_back. (A tablet's is a phone's width, in the middle of the screen.)"""
+    it too, then calls on_back. fit: app.py's panels, made for every platform, get this one's looks
+    (fit_panel). (A tablet's is a phone's width, in the middle of the screen.)"""
+    if fit:
+        fit_panel(app, content)
     column = toga.Box(style=Pack(direction=COLUMN, flex=1), children=[content])
     if app.wide:
         column.style.update(flex=0, width=PANEL_WIDTH)
@@ -210,6 +230,70 @@ def push_panel(app, title: str, content, on_back=None):
     page = native(app).Page(app, column, on_back)
     page.show(title, "")
     return page.close
+
+
+EDITOR_HEIGHT = 170  # a panel's many-line text box (a note, the subnets to sweep)
+PRIMARY = ("Save", "Log in", "OK")  # a panel's buttons that go ahead: filled (Done just closes, as Back does)
+DANGER = ("Delete", "Reboot", "Restore", "Upload")  # what changes or loses something on a device: red
+
+
+def fit_panel(app, box):
+    """A panel app.py made for every platform, made to look at home on a phone: its buttons
+    styled (going ahead filled, deleting red, the rest gray) and a row of them at the right; its
+    one-line fields and monospaced text (addresses, logins) without auto-capitals or corrections,
+    in the platform's monospaced font; a many-line one in a box of its own size, with a way to
+    put the keyboard away and kept clear of it; and "this computer" in its text named for this
+    device."""
+    ui = native(app)
+    for widget in box.children:
+        if isinstance(widget, toga.Button):
+            text = widget.text or ""  # (one styled already has none: it keeps its looks)
+            if not text:
+                continue
+            if text in PRIMARY:
+                ui.style_button(widget)
+            elif text.startswith(DANGER):
+                ui.style_button(widget, "tinted", "systemRedColor")
+            else:
+                ui.style_button(widget, "gray")
+        elif isinstance(widget, toga.MultilineTextInput):
+            if "monospace" in str(widget.style.font_family):  # (a note stays prose, corrected as typed)
+                ui.monospaced(widget, 12)
+                hook(app, "plain_entry")(widget)
+            if not widget.readonly:  # a box of its own size, the buttons under it above the keyboard
+                widget.style.update(flex=0, height=EDITOR_HEIGHT)
+                hook(app, "text_box")(widget)
+                hook(app, "done_bar")(app, widget)
+                hook(app, "watch_keyboard")(app, widget, follow=False)
+        elif isinstance(widget, toga.TextInput):  # PasswordInput too
+            hook(app, "plain_entry")(widget)
+        elif isinstance(widget, toga.Label) and re.search(r"this\s+computer", widget.text):
+            noun = hook(app, "here")(app).split(" ", 1)[-1]  # (a wrapped label may break the line between)
+            widget.text = re.sub(r"this(\s+)computer", lambda m: f"this{m.group(1)}{noun}", widget.text)
+        elif isinstance(widget, toga.Box):
+            fit_panel(app, widget)
+    if box.children and isinstance(box.children[-1], toga.Box) and all(
+            isinstance(w, toga.Button) for w in box.children[-1].children):  # a row of buttons: at the right
+        box.children[-1].insert(0, toga.Box(style=Pack(flex=1)))
+
+
+def export_choices(app) -> list:
+    """What Export offers on a phone: the scan report, then the other reports (records.SITE_EXPORTS),
+    as (kind, title, detail, enabled)."""
+    from opendisco import records
+    backups = records.all_backups()
+    notes = len(app.device_notes.items)
+    details = {"scan": "Every device, with diagnostics: HTML",
+               "security": "Known CVEs and outdated firmware: HTML",
+               "backups": f"{sum(len(p) for _, p in backups)} file(s) from {len(backups)} device(s): .zip"
+                          if backups else "None saved yet",
+               "notes": f"{notes} note(s): HTML" if notes else "None written yet",
+               "log": "The Log, as text"}
+    enabled = {"scan": bool(app.result), "security": bool(app.result), "backups": bool(backups), "notes": bool(notes)}
+    choices = [("scan", "Scan report", details["scan"], enabled["scan"])]
+    for kind, button, _text, _types in records.SITE_EXPORTS:
+        choices.append((kind, button.rstrip("…"), details.get(kind, ""), enabled.get(kind, True)))
+    return choices
 
 
 # -- the device page ------------------------------------------------------------------
@@ -261,6 +345,7 @@ def show_scan(app):
     _device_tabs(app, False)
     if app.wide:
         app.page.key = None
+    if beside(app):
         hook(app, "clear_selection")(app)
     app.page.show("Scan", _scan_summary(app))
 
@@ -399,8 +484,8 @@ def update_tools(app):
     retitle = native(app).retitle
     d = app._selected_device()
     state = app._menu_state(d)
-    if app.wide and _showing_scan(app):  # a scan started or ended beside it
-        app.page.subtitle.text = _scan_summary(app)
+    if beside(app) and _showing_scan(app):  # a scan started or ended beside it
+        app.page.show("Scan", _scan_summary(app))
     idle = bool(d and d.ip and app.result) and not (app.running or app.rescanning or app.finding or app.device_job)
     retitle(app.find_button, "Stop" if app.finding else "Find")
     app.find_button.enabled = idle or app.finding
@@ -621,27 +706,11 @@ async def scan_from(app):
     app._tool_said(lines[0])
     if lines[1:]:
         say(app, "\n".join(lines[1:]))
-    if not hook(app, "side_by_side")(app):
+    if not beside(app):  # (a tablet shows the list already)
         app.page.close()  # back to the list
 
 
 # -- export -----------------------------------------------------------------------------
-def export_chooser(app, choices):
-    """Export: a page with a button for the scan report and for each of the extras, what it saves
-    under it. choices: app._export_chooser's (kind, button, what it saves, enabled)."""
-    def pick(kind):
-        close()
-        app.loop.create_task(app._export(kind))
-
-    rows = []
-    for kind, button, text, enabled in choices:
-        pressed = toga.Button(button.rstrip("…"), enabled=enabled, on_press=lambda w, kind=kind, **kw: pick(kind))
-        native(app).style_button(pressed, "tinted")
-        rows.append(toga.Box(style=Pack(direction=COLUMN, gap=4), children=[
-            pressed, toga.Label(app._wrap(text), style=Pack(font_size=13, color="#8a8a8e", margin_left=4))]))
-    close = push_panel(app, "Export", toga.Box(style=Pack(direction=COLUMN, margin=14, gap=14), children=rows))
-
-
 def export_file(app, name: str) -> Path:
     """Write the report into the app's own folder, in place of the last one (shared already, or
     not wanted)."""

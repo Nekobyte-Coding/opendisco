@@ -13,6 +13,8 @@ a native call fails the plain Toga widget is left as it was.
 import traceback
 
 import toga
+from toga.style import Pack
+from toga.style.pack import COLUMN
 
 # The iPhone's system colours (light mode), as Android colour ints (ARGB)
 BLUE, RED, GREEN = 0xFF007AFF, 0xFFFF3B30, 0xFF34C759
@@ -287,7 +289,7 @@ def fit(app, export, notes, settings):
     def command(text, action, order):
         return toga.Command(lambda command, **kwargs: action(), text=text, group=toga.Group.COMMANDS, order=order)
 
-    export_command = command("Export", export, 1)
+    export_command = command("Export", lambda: (app.__dict__.get("_export_menu") or export)(), 1)
     export_command.enabled = False
     app.main_window.toolbar.add(export_command, command("Notes and Log", notes, 2), command("Settings", settings, 3))
     app.export_button = CommandButton(export_command)
@@ -614,10 +616,11 @@ def plain_entry(widget, send=False, new_password=False):
         traceback.print_exc()
 
 
-def search_field(widget):
+def search_field(app, widget):
     """The search field as the iPhone draws it: a rounded gray box with a magnifier and no
-    underline; the keyboard's key reads Search and puts the keyboard away (the list changes as
-    it's typed)."""
+    underline, typed without capitals or corrections; the keyboard's key reads Search and puts
+    the keyboard away (the list changes as it's typed)."""
+    plain_entry(widget)
     try:
         from java import dynamic_proxy, jclass
         EditorInfo = jclass("android.view.inputmethod.EditorInfo")
@@ -646,6 +649,49 @@ def search_field(widget):
         native.setOnEditorActionListener(widget._searched)
     except Exception:
         traceback.print_exc()
+
+
+def text_box(widget):
+    """A many-line field to type into (a note, the subnets to sweep): a light frame around it,
+    not Android's line under the last line."""
+    try:
+        from java import jclass
+        impl, native = widget._impl, widget._impl.native
+        shape = jclass("android.graphics.drawable.GradientDrawable")()
+        shape.setCornerRadius(_dp(8))
+        shape.setColor(_int(0xFFFFFFFF))
+        shape.setStroke(max(1, _dp(1)), _int(SEPARATOR))
+        native.setBackground(shape)
+        impl.set_background_color = lambda color: None  # (Toga would put its underline back)
+        native.setPadding(_dp(10), _dp(8), _dp(10), _dp(8))
+    except Exception:
+        traceback.print_exc()
+
+
+def here(app) -> str:
+    """What the app's text calls the device it runs on."""
+    return "this tablet" if wide(app) else "this phone"
+
+
+def export_menu(app, choices, pick):
+    """Export offers the scan report and the other reports: on a page, each one's button over
+    what it holds (iOS shows the same as a menu). choices() lists them, pick(kind) saves one."""
+    def show():
+        from opendisco import phone
+
+        def chosen(kind):
+            close()
+            pick(kind)
+
+        rows = []
+        for kind, title, detail, enabled in choices():
+            button = toga.Button(title, enabled=enabled, on_press=lambda w, kind=kind, **kw: chosen(kind))
+            style_button(button, "tinted")
+            rows.append(toga.Box(style=Pack(direction=COLUMN, gap=4), children=[
+                button, toga.Label(app._wrap(detail), style=Pack(font_size=13, color="#8a8a8e", margin_left=4))]))
+        close = phone.push_panel(app, "Export", toga.Box(style=Pack(direction=COLUMN, margin=14, gap=14), children=rows))
+
+    app._export_menu = show
 
 
 def end_editing(app):

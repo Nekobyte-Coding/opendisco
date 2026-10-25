@@ -18,6 +18,9 @@ from opendisco import phone
 # SF Symbols for the device page's tabs, in place of Toga's star on every one
 TAB_SYMBOLS = {"Details": "info.circle", "Packets": "doc.text.magnifyingglass", "Tools": "wrench.and.screwdriver",
                "Notes": "text.bubble", "Log": "list.bullet.rectangle"}
+# and for Export's reports (phone.export_choices)
+EXPORT_SYMBOLS = {"scan": "doc.richtext", "security": "exclamationmark.shield", "backups": "archivebox",
+                  "notes": "note.text", "log": "list.bullet.rectangle"}
 
 
 def _objc(name):
@@ -33,10 +36,11 @@ def _class_value(cls, name):
 
 
 class BarItem:
-    """A title-bar button that app.py enables and disables like a Toga one (Export)."""
+    """A title-bar button that app.py enables and disables like a Toga one (Export). One that
+    opens a menu stays enabled: the menu's items say what there is to choose."""
 
     def __init__(self, native):
-        self.native = native
+        self.native, self.menu = native, False
 
     @property
     def enabled(self) -> bool:
@@ -44,7 +48,7 @@ class BarItem:
 
     @enabled.setter
     def enabled(self, value):
-        self.native.enabled = bool(value)
+        self.native.enabled = bool(value) or self.menu
 
 
 _NAV_WATCHER = None
@@ -146,7 +150,7 @@ class Page:
         split = _split(self.app)
         if index == 0:  # the device page beside the list: none any more
             nav.setViewControllers([split.empty], animated=False)
-            split.deselect()
+            clear_selection(self.app)
         else:  # this page, and any pushed over it
             nav.popToViewController(stack[index - 1], animated=True)
         split.fit_list()
@@ -254,12 +258,6 @@ class _Split:
         if getattr(self.app, "_ios_edge", None) is not None:
             self.app._ios_edge.hidden = self.view is None
 
-    def deselect(self):
-        native = self.app.table._impl.native
-        path = native.indexPathForSelectedRow
-        if path is not None:
-            native.deselectRowAtIndexPath(path, animated=True)
-
 
 def _pad() -> bool:
     return _objc("UIDevice").currentDevice.userInterfaceIdiom == 1  # UIUserInterfaceIdiomPad
@@ -274,6 +272,14 @@ def _split(app) -> _Split:
 def side_by_side(app) -> bool:
     """True while the device list stays in view beside the pages (an iPad at a regular width)."""
     return _split(app).view is not None
+
+
+def clear_selection(app):
+    """No row marked as the device beside the list (the scan's Notes and Log are there, or nothing)."""
+    native = app.table._impl.native
+    path = native.indexPathForSelectedRow
+    if path is not None:
+        native.deselectRowAtIndexPath(path, animated=True)
 
 
 def fit(app, export, notes, settings):
@@ -354,6 +360,86 @@ def _fit_pad(app):
         pass
 
 
+def text_box(widget):
+    """A text view for typing many lines into (a note, a list of subnets), shown as a gray
+    rounded box: by itself it has no edge to show where it is."""
+    try:
+        from rubicon.objc.types import UIEdgeInsetsMake
+        native = widget._impl.native
+        native.backgroundColor = _class_value(_objc("UIColor"), "secondarySystemBackgroundColor")
+        native.layer.cornerRadius = 10
+        native.textContainerInset = UIEdgeInsetsMake(8, 6, 8, 6)
+    except Exception:
+        pass  # cosmetic
+
+
+def search_field(app, widget):
+    """The search above the list drawn as iOS draws its own: a magnifying glass in a gray
+    rounded field, a button that clears it, and Search on the keyboard."""
+    try:
+        from rubicon.objc import CGRect, NSInteger, send_message
+        UIColor, native = _objc("UIColor"), widget._impl.native
+        native.borderStyle = 0  # none: the fill shows the field
+        native.backgroundColor = _class_value(UIColor, "tertiarySystemFillColor")
+        native.layer.cornerRadius = 10
+        glass = _objc("UIImageView").alloc().initWithImage(_objc("UIImage").systemImageNamed("magnifyingglass"))
+        glass.tintColor = _class_value(UIColor, "secondaryLabelColor")
+        glass.contentMode = 4  # centred
+        glass.frame = CGRect((8, 0), (20, 20))
+        room = _objc("UIView").alloc().initWithFrame(CGRect((0, 0), (32, 20)))  # keeps the text off it
+        room.addSubview(glass)
+        native.leftView = room
+        native.leftViewMode = 3  # always
+        widget.style.update(height=36)  # a search bar's height: without its border the field shrank
+        native.clearButtonMode = 1  # while typing
+        plain_entry(widget)
+        send_message(native, "setReturnKeyType:", 6, restype=None, argtypes=[NSInteger])  # Search
+    except Exception:
+        pass  # cosmetic
+
+
+def export_menu(app, choices, pick):
+    """Export opens a menu of the reports, listed afresh each time it opens: the scan report,
+    then the security report, config backups, notes and the Log, each saying what's in it (and
+    dimmed while there's nothing). Choosing one saves it and offers it to the share sheet."""
+    from rubicon.objc import Block, objc_id
+    from rubicon.objc.api import ObjCBlock
+    UIAction, UIImage = _objc("UIAction"), _objc("UIImage")
+
+    def provide(completion) -> None:
+        app._ios_export_blocks = []  # the open menu's handlers, kept alive while it's up
+        actions = []
+        for kind, title, detail, enabled in choices():
+            block = Block(lambda _action, kind=kind: pick(kind), None, objc_id)
+            app._ios_export_blocks.append(block)
+            action = UIAction.actionWithTitle(title, image=UIImage.systemImageNamed(EXPORT_SYMBOLS.get(kind, "doc")),
+                                              identifier=None, handler=block)
+            try:
+                action.subtitle = detail  # iOS 15 and later
+            except Exception:
+                pass
+            if not enabled:
+                action.attributes = 1  # UIMenuElementAttributesDisabled
+            actions.append(action)
+        ObjCBlock(completion, None, objc_id)(_objc("NSArray").arrayWithArray(actions))
+
+    try:
+        app._ios_export_provider = Block(provide, None, objc_id)
+        deferred = _objc("UIDeferredMenuElement").elementWithUncachedProvider(app._ios_export_provider)
+        item = app.export_button.native
+        item.menu = _objc("UIMenu").menuWithTitle("", children=_objc("NSArray").arrayWithObject(deferred))
+        item.primaryAction = None  # a tap opens the menu
+        app.export_button.menu = True
+        app.export_button.enabled = True
+    except Exception:
+        pass  # Export saves the scan report, as before
+
+
+def here(app) -> str:
+    """What the app's text calls the device it runs on."""
+    return "this iPad" if _pad() else "this iPhone"
+
+
 def _shortened(label):
     """A one-line label that ends in … where its text doesn't fit: Toga makes a label at least
     as wide as its text, which pushed the end of a long status past the screen's edge."""
@@ -377,7 +463,9 @@ def style_button(button, kind="filled", color=None):
         config = {"filled": Config.filledButtonConfiguration, "tinted": Config.tintedButtonConfiguration,
                   "gray": Config.grayButtonConfiguration}[kind]()
         config.cornerStyle = 4  # capsule
-        config.title = button.text
+        config.titleLineBreakMode = 4  # one line, ending in … if it must: never "Can-cel" over two
+        styled = button._impl.native.configuration  # styled before: Toga's own title is gone
+        config.title = button.text if styled is None else str(styled.title)
         if color:
             tint = _class_value(_objc("UIColor"), color)
             config.baseForegroundColor = tint
@@ -385,9 +473,27 @@ def style_button(button, kind="filled", color=None):
         native = button._impl.native
         native.setTitle(None, forState=0)  # Toga's title would keep its own colour: blue on the blue fill
         native.configuration = config
+        _natural_size(button)
         button.refresh()
     except Exception:
         pass  # cosmetic: a plain button still works
+
+
+def _natural_size(button):
+    """Size a styled button by its whole title in the capsule: Toga takes the smallest it can be
+    squeezed to, which cut a title short ("Can…") where nothing made the button wider."""
+    from math import ceil
+    from rubicon.objc import CGSize, send_message
+    from travertino.size import at_least
+    impl = button._impl
+
+    def rehint():
+        size = send_message(impl.native, "intrinsicContentSize", restype=CGSize, argtypes=[])
+        button.intrinsic.width = at_least(ceil(size.width))
+        button.intrinsic.height = ceil(size.height)
+
+    impl.rehint = rehint
+    rehint()
 
 
 def retitle(button, text: str):
@@ -405,7 +511,11 @@ def retitle(button, text: str):
 def monospaced(text, size: float):
     """The system's monospaced font (SF Mono), which reads better than the Courier Toga picks."""
     try:
-        text._impl.native.font = _objc("UIFont").monospacedSystemFontOfSize(size, weight=0.0)
+        font = _objc("UIFont").monospacedSystemFontOfSize(size, weight=0.0)
+        text._impl.native.font = font
+        placeholder = getattr(text._impl, "placeholder_label", None)  # Toga's own label over the text
+        if placeholder is not None:
+            placeholder.font = font
     except Exception:
         pass  # cosmetic
 
