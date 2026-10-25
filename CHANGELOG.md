@@ -6,11 +6,26 @@ when it came out. The Linux packages of 1.1.0 to 1.3.1 were added then too; thos
 never released for Linux. README.md's "Versions and platforms" lists each version's platforms
 and known issues.
 
+## 1.4.2
+
+- Fixed: picking Direct to a device or Trunk VLANs turned on "Probe listed networks", and it
+  stayed on after switching back to Full scan or Sniff the wire, so the next scan added
+  temporary addresses (and asked for an administrator password) nobody asked for (1.1.0 to
+  1.4.1). Leaving those modes now sets the switch back to how it was.
+- Fixed: a scan started while Keep addresses was still adding its addresses lost track of them,
+  and they stayed until the app quit. Start now waits until they're in place.
+- Fixed: on Android, a second export in the same minute was reported under the first one's file
+  name; Android had saved it as "… (1).html". The message now names the file that was saved.
+- The Networks tab says when a line isn't a network ("unknown option" before).
+- The installed command-line tool calls itself `opendisco` in `--help` and `--version`
+  (`opendisco.py` before).
+- README-LINUX.md lists `ip` (iproute2) with the packages to install.
+
 ## 1.4.1
 
 - The Android app is signed with OpenDisco's own release key instead of Android's debug key,
   so later versions install over it. Android won't replace the debug-signed 1.4.0 with it:
-  uninstall 1.4.0 first, which removes its hidden devices.
+  uninstall 1.4.0 first (nothing is lost: the phone app saves nothing).
 - Android: the device list shows just IP, Model and Name, in larger text. Its twelve columns
   ran off a phone's screen. Tapping a device shows everything else in Details.
 - Fixed: on Android, Export did nothing. It now saves the HTML report to the Downloads folder.

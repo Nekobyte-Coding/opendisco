@@ -2945,12 +2945,14 @@ def parse_alias_spec(spec: str) -> list:
     """Parse "10.0.0.0/24", "10.0.0.0/24 alias=10.0.0.199", or a range split into blocks:
     "172.16.10.1-20/30" is every /30 with a usable address between .1 and .20."""
     parts = spec.split()
+    m = re.fullmatch(r"(\d+\.\d+\.\d+\.\d+)-(\d+(?:\.\d+\.\d+\.\d+)?)/(\d+)", parts[0])
+    if not m and not re.fullmatch(r"\d+\.\d+\.\d+\.\d+(?:/\d+)?", parts[0]):
+        raise ValueError(f"{parts[0]!r} isn't a network: write one like 192.168.1.0/24")
     alias = None
     for opt in parts[1:]:
         if not opt.startswith("alias="):
-            raise ValueError(f"unknown option {opt!r}")
+            raise ValueError(f"unknown option {opt!r} (the only option is alias=<address>)")
         alias = opt[len("alias="):]
-    m = re.fullmatch(r"(\d+\.\d+\.\d+\.\d+)-(\d+(?:\.\d+\.\d+\.\d+)?)/(\d+)", parts[0])
     if m:
         if alias:
             raise ValueError("alias= can't be used with a range")
@@ -4250,7 +4252,8 @@ from the switch says otherwise)
 
 def parse_args(argv=None):
     p = argparse.ArgumentParser(
-        prog="opendisco.py",
+        # As it was started: ./opendisco.py from the source, otherwise the installed opendisco command.
+        prog="opendisco.py" if os.path.basename(sys.argv[0]) == "opendisco.py" else "opendisco",
         description="Find and diagnose Ubiquiti devices (UniFi, airMAX, EdgeMAX, UISP, AmpliFi).",
         epilog=EPILOG, formatter_class=argparse.RawDescriptionHelpFormatter)
     p.add_argument("targets", nargs="*", metavar="TARGET",
@@ -4302,7 +4305,8 @@ def parse_args(argv=None):
     a.add_argument("--alias", action="append", default=[], metavar="NET",
                    help="probe this network too, e.g. 10.0.0.0/24 or 172.16.10.1-20/30 (repeatable)")
     a.add_argument("--networks", default=DEFAULT_NETWORKS_FILE, metavar="FILE",
-                   help="networks file (default: networks.txt next to this script)")
+                   help="networks file (default: the networks.txt next to opendisco.py, or the list that comes "
+                        "with the installed app)")
     a.add_argument("--hold", action="store_true",
                    help="afterwards keep the aliases that reached gear, until Ctrl+C")
     a.add_argument("--dry-run", action="store_true", help="print the alias commands, change nothing")

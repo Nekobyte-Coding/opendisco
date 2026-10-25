@@ -121,6 +121,7 @@ class OpenDiscoApp(toga.App):
         self.start_button = toga.Button("Start", on_press=self.on_start, style=Pack(width=90))
         self.stop_button = toga.Button("Stop", on_press=self.on_stop, enabled=False, style=Pack(width=90))
         self.aliases = toga.Switch("Probe listed networks (temporary addresses)", enabled=self.caps["aliases"])
+        self.aliases_choice = None  # the switch as it was set, while a mode that needs it on is picked
         self.deep = toga.Switch("Deep checks (ports, console API)")
         # GTK draws − and + beside the number, so on Linux the box takes its own width (for "300")
         # instead of a fixed one, which pushed the + outside the box.
@@ -442,6 +443,12 @@ class OpenDiscoApp(toga.App):
         self.mode_help.text = textwrap.fill(description, 44) if self.caps["mobile"] else description
         forced = needs == "vlans"  # these always probe through temporary addresses
         if self.caps["aliases"]:
+            # Turned on for these modes only: leaving them sets the switch back, or the next Full
+            # scan would add addresses (and ask for a password) nobody asked for.
+            if forced and self.aliases_choice is None:
+                self.aliases_choice = self.aliases.value
+            elif not forced and self.aliases_choice is not None:
+                self.aliases.value, self.aliases_choice = self.aliases_choice, None
             self.aliases.enabled = not forced and name != "Quick"
             if forced:
                 self.aliases.value = True
@@ -1049,6 +1056,14 @@ class OpenDiscoApp(toga.App):
             stream.write(text.encode("utf-8"))
         finally:
             stream.close()
+        try:  # Android adds " (1)" when the folder already has that name: say what it's called
+            cursor = resolver.query(uri, [columns.DISPLAY_NAME], None, None, None)
+            if cursor is not None:
+                if cursor.moveToFirst():
+                    name = cursor.getString(0) or name
+                cursor.close()
+        except Exception:
+            pass
         return f"{name} in Downloads"
 
     async def on_hold(self, widget, **kwargs):
@@ -1056,7 +1071,9 @@ class OpenDiscoApp(toga.App):
             await self._release_hold()
             return
         res = self.result
-        self.hold_button.enabled = False
+        # Until the addresses are in place: a scan started meanwhile would replace this result
+        # and lose track of them.
+        self.hold_button.enabled = self.start_button.enabled = False
 
         def work():
             try:
@@ -1064,13 +1081,15 @@ class OpenDiscoApp(toga.App):
                 lines = core.hold_start(res.mgr, res.inv, lambda m: self._from_worker(self._append_log, m))
             except SystemExit as e:
                 lines = [f"[error] {str(e.code).removeprefix('error: ')}"]
-            self._from_worker(self._held, lines)
+            except Exception as e:
+                lines = [f"[error] {type(e).__name__}: {e}"]
+            self._from_worker(self._held, res, lines)
 
         threading.Thread(target=work, daemon=True).start()
 
-    def _held(self, lines):
-        self.hold_button.enabled = True
-        if not self.result.mgr.active:
+    def _held(self, res, lines):
+        self.hold_button.enabled = self.start_button.enabled = True
+        if not res.mgr.active:
             self.notes.value += "\n\n" + ("\n".join(lines) or "Nothing was reached through an address to keep.")
             return
         self.holding = True

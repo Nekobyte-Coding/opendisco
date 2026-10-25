@@ -9,7 +9,7 @@
 [tool.briefcase]
 project_name = "opendisco"
 bundle = "com.michaelfroehlke"
-version = "1.4.1"
+version = "1.4.2"
 license = "Apache-2.0"
 license-files = ["LICENSE"]
 author = "Michael Froehlke"

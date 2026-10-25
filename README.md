@@ -32,12 +32,13 @@ Installers are on the [Releases](https://github.com/Nekobyte-Coding/opendisco/re
 
 | Version | Released for | Builds added later | Known issues (fixed in) |
 |---|---|---|---|
-| 1.4.1 | macOS, Windows, Linux, Android | | |
-| 1.4.0 | macOS, Windows, Linux, Android | | Windows: Keep addresses fails, and a Port whose adapter name has a space (Ethernet 2) isn't the one scanned. Android: Export does nothing (1.4.1) |
-| 1.3.2 | macOS, Windows, Linux | | Windows: the app doesn't open (1.4.0) |
-| 1.3.1 | macOS, Windows | Linux, without the right-click menu | Windows: the app doesn't open (1.4.0). A UCG Fiber's port 7080 is shown as its HTTPS port (1.3.2) |
+| 1.4.2 | macOS, Windows, Linux, Android | | |
+| 1.4.1 | macOS, Windows, Linux, Android | | "Probe listed networks" stays on after Direct or Trunk VLANs, so the next scan adds temporary addresses (1.4.2). Android: a second export in the same minute is reported under the first one's file name (1.4.2) |
+| 1.4.0 | macOS, Windows, Linux, Android | | Windows: Keep addresses fails, and a Port whose adapter name has a space (Ethernet 2) isn't the one scanned. Android: Export does nothing (1.4.1). "Probe listed networks" stays on after Direct or Trunk VLANs (1.4.2) |
+| 1.3.2 | macOS, Windows, Linux | | Windows: the app doesn't open (1.4.0). Mac and Linux: "Probe listed networks" stays on after Direct or Trunk VLANs (1.4.2) |
+| 1.3.1 | macOS, Windows | Linux, without the right-click menu | Windows: the app doesn't open (1.4.0). A UCG Fiber's port 7080 is shown as its HTTPS port (1.3.2). Mac and Linux: "Probe listed networks" stays on after Direct or Trunk VLANs (1.4.2) |
 | 1.3.0 | macOS, Windows | Linux, without the right-click menu | Same as 1.3.1 |
-| 1.2.0 | macOS, Windows | Linux | Windows: the table's columns open too narrow to read (1.4.0). UCG Fiber port 7080 (1.3.2) |
+| 1.2.0 | macOS, Windows | Linux | Windows: the table's columns open too narrow to read (1.4.0). UCG Fiber port 7080 (1.3.2). Mac and Linux: "Probe listed networks" stays on after Direct or Trunk VLANs (1.4.2) |
 | 1.1.0 | macOS, Windows | Linux | Same as 1.2.0, and the unicast sweep misses UniFi OS gear (1.2.0) |
 
 - **Rebuilds:** every installer before 1.4.0 was rebuilt in October 2026 from that version's
@@ -57,9 +58,9 @@ Installers are on the [Releases](https://github.com/Nekobyte-Coding/opendisco/re
 
 ## The app
 
-- **Mac:** open `OpenDisco-1.4.1-macos-universal.dmg` (Apple silicon and Intel Macs) and drag
+- **Mac:** open `OpenDisco-1.4.2-macos-universal.dmg` (Apple silicon and Intel Macs) and drag
   the app to Applications.
-- **Windows:** run `OpenDisco-1.4.1-windows-x64-setup.exe` (64-bit; Windows on ARM runs it
+- **Windows:** run `OpenDisco-1.4.2-windows-x64-setup.exe` (64-bit; Windows on ARM runs it
   too). It installs for the current user without administrator rights, with Start menu and
   desktop shortcuts and an uninstaller in Apps.
   - **SmartScreen:** the installer isn't code-signed, so the first time Windows shows
@@ -71,22 +72,22 @@ Installers are on the [Releases](https://github.com/Nekobyte-Coding/opendisco/re
     (`%LOCALAPPDATA%\Programs\OpenDisco`), for example `opendisco.cmd --quick`.
 - **Linux:**
   - **Ubuntu 24.04 LTS, Linux Mint 22, Pop!_OS 24.04:**
-    `sudo apt install ./OpenDisco-1.4.1-ubuntu-24.04-amd64.deb`
-  - **Fedora 44:** `sudo dnf install ./OpenDisco-1.4.1-fedora-44-x86_64.rpm`
+    `sudo apt install ./OpenDisco-1.4.2-ubuntu-24.04-amd64.deb`
+  - **Fedora 44:** `sudo dnf install ./OpenDisco-1.4.2-fedora-44-x86_64.rpm`
   - **Any other distribution** (Debian 13, Arch, newer Ubuntu or Fedora...): the portable
-    `OpenDisco-1.4.1-linux.tar.gz`. Extract it and run `./opendisco`; its `README-LINUX.md`
+    `OpenDisco-1.4.2-linux.tar.gz`. Extract it and run `./opendisco`; its `README-LINUX.md`
     lists the packages to install first.
 
   The `.deb` and `.rpm` install the app's own copy of Toga and PyGObject, built for that
   release, and pull in GTK, WebKitGTK, tcpdump, ip, iw and the ssh client. The app is in the
   desktop's app menu, and `opendisco` in a terminal runs it (with options, it's the
   command-line tool).
-- **Android:** `OpenDisco-1.4.1-android.apk`: sideload it with "Install unknown apps"
+- **Android:** `OpenDisco-1.4.2-android.apk`: sideload it with "Install unknown apps"
   allowed. Phones can run Quick and Full scans only. The list shows each device's IP,
   model and name; tapping one shows the rest in Details. From 1.4.1 the app
   is signed with OpenDisco's own release key, so later versions install over it. 1.4.0 was
-  signed with Android's debug key, which Android won't replace: uninstall 1.4.0 first (its
-  hidden devices go with it).
+  signed with Android's debug key, which Android won't replace: uninstall 1.4.0 first. Nothing
+  is lost: the phone app can't hide devices or edit the networks file, so it saves nothing.
 
 **Upgrading:** saved data (the networks file, hidden devices and SSH host keys) is retained
 with the new install and picked up the first time the new version opens. The Windows
