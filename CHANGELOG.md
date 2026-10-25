@@ -28,7 +28,7 @@ and known issues.
 - The update offer says the new version asks for its terms of use, with **Read the terms** on
   desktops.
 - macOS and Linux: the app's data folder (config backups hold password hashes and shared
-  secrets) is readable by its own account only.
+  secrets) is readable by its own account only, whether the app or the command line made it.
 - Windows and Linux: the main window starts wider when the screen has room (up to 1500 pixels,
   centred), and each column of the device list gets the width its contents need. Too narrow
   for them all, the widest columns give up width first, and the IP and MAC addresses stay whole.
@@ -36,6 +36,7 @@ and known issues.
   firmware, names and statuses. On a screen smaller than the window, it opens at the top left.
 - Linux: the app no longer hangs when it opens with a page of text to show (the terms of use).
 - Android: Quit closes the app.
+- iOS (beta): long texts (the terms, the licenses, Details) scroll under a finger.
 - Details says "1 packet", not "1 packets", for a device heard once.
 
 ## 1.6.0 (2026-10-25)
