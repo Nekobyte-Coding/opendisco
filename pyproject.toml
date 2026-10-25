@@ -9,7 +9,8 @@
 [tool.briefcase]
 project_name = "opendisco"
 bundle = "com.michaelfroehlke"
-version = "1.6.1"
+version = "1.6.2"
+url = "https://github.com/Nekobyte-Coding/opendisco"
 license = "Apache-2.0"
 license-files = ["LICENSE"]
 author = "Michael Froehlke"

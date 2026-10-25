@@ -102,7 +102,8 @@ Installers are on the [Releases](https://github.com/Nekobyte-Coding/opendisco/re
 
 | Version | What's new | Released for | Known issues (fixed in) |
 |---|---|---|---|
-| 1.6.1 | Terms of use, shown when the app first opens and after each upgrade, to be accepted before use (the command line asks too). Each device tool's confirmation says what can go wrong. Windows and Linux: the window starts wider when the screen has room, and the list's columns fit what they hold. Open-source licenses… lists the licenses of what each build bundles | macOS, Windows, Linux, Android; iOS (beta, no public download yet) |  |
+| 1.6.2 | The Linux packages name the project's homepage | macOS, Windows, Linux, Android; iOS (beta, no public download yet) |  |
+| 1.6.1 | Terms of use, shown when the app first opens and after each upgrade, to be accepted before use (the command line asks too). Each device tool's confirmation says what can go wrong. Windows and Linux: the window starts wider when the screen has room, and the list's columns fit what they hold. Open-source licenses… lists the licenses of what each build bundles | macOS, Windows, Linux, Android; iOS (beta, no public download yet) | Linux: the .deb and .rpm give the homepage as "None" (1.6.2) |
 | 1.6.0 | Config backups, Upload config… with what changes shown first, and Apply (airMAX, airFiber, LTU, GigaBeam, EdgeOS). Reboot, and Locate for UniFi access points and switches. Scan from a device given by its address, over a VPN too. Each device's latest firmware during scans, and a Latency column. Search, a note per device, Export device…, and a security report, all config backups, all notes and the Log. Settings holds the networks list and "Also sweep these subnets", on every platform. Tablets and iPads show the device list and a device's page side by side. The adapter picker is called Interface | macOS, Windows, Linux, Android; iOS (beta, no public download yet) | Windows and Linux: at the window's first size, long names, firmware and statuses are cut short. Details says "1 packets" (1.6.1) |
 | 1.5.0 | Find HTTP/HTTPS/SSH port and Scan all ports for one device, and an HTTP column. Status in plain words with an issue list. A CVE check of each device's firmware, updated from the NVD. TFTP recovery detection. Device tools over SSH: firmware updates, config editor, change login, Scan from device, devices behind other devices. Settings and self-update. A new phone layout | macOS, Windows, Linux, Android; iOS (beta, no public download yet) |  |
 | 1.4.2 | "Probe listed networks" no longer stays on after Direct or Trunk VLANs. Start waits for Keep addresses. Android names the export file it saved. Clearer networks-file errors | macOS, Windows, Linux, Android | macOS: a scan can find nothing on a Mac that has an older OpenDisco (another app ID) or another app built with Briefcase (1.5.0) |
@@ -137,9 +138,9 @@ Installers are on the [Releases](https://github.com/Nekobyte-Coding/opendisco/re
 
 ## The app
 
-- **Mac:** open `OpenDisco-1.6.1-macos-universal.dmg` (Apple silicon and Intel Macs) and drag
+- **Mac:** open `OpenDisco-1.6.2-macos-universal.dmg` (Apple silicon and Intel Macs) and drag
   the app to Applications.
-- **Windows:** run `OpenDisco-1.6.1-windows-x64-setup.exe` (64-bit; Windows on ARM runs it
+- **Windows:** run `OpenDisco-1.6.2-windows-x64-setup.exe` (64-bit; Windows on ARM runs it
   too). It installs for the current user without administrator rights, with Start menu and
   desktop shortcuts and an uninstaller in Apps.
   - **SmartScreen:** the installer isn't code-signed, so the first time Windows shows
@@ -151,17 +152,17 @@ Installers are on the [Releases](https://github.com/Nekobyte-Coding/opendisco/re
     (`%LOCALAPPDATA%\Programs\OpenDisco`), for example `opendisco.cmd --quick`.
 - **Linux:**
   - **Ubuntu 24.04 LTS, Linux Mint 22, Pop!_OS 24.04:**
-    `sudo apt install ./OpenDisco-1.6.1-ubuntu-24.04-amd64.deb`
-  - **Fedora 44:** `sudo dnf install ./OpenDisco-1.6.1-fedora-44-x86_64.rpm`
+    `sudo apt install ./OpenDisco-1.6.2-ubuntu-24.04-amd64.deb`
+  - **Fedora 44:** `sudo dnf install ./OpenDisco-1.6.2-fedora-44-x86_64.rpm`
   - **Any other distribution** (Debian 13, Arch, newer Ubuntu or Fedora...): the portable
-    `OpenDisco-1.6.1-linux.tar.gz`. Extract it and run `./opendisco`; its `README-LINUX.md`
+    `OpenDisco-1.6.2-linux.tar.gz`. Extract it and run `./opendisco`; its `README-LINUX.md`
     lists the packages to install first.
 
   The `.deb` and `.rpm` install the app's own copy of Toga and PyGObject, built for that
   release, and pull in GTK, WebKitGTK, tcpdump, ip, iw and the ssh client. The app is in the
   desktop's app menu, and `opendisco` in a terminal runs it (with options, it's the
   command-line tool).
-- **Android:** `OpenDisco-1.6.1-android.apk`: sideload it with "Install unknown apps"
+- **Android:** `OpenDisco-1.6.2-android.apk`: sideload it with "Install unknown apps"
   allowed, on a phone or a tablet. It installs over 1.4.1 and later, keeping its data. See
   [On phones and tablets](#on-phones-and-tablets). From 1.4.1 the app is signed with
   OpenDisco's own release key, so later versions install over it. 1.4.0 was

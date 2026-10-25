@@ -6,6 +6,12 @@ when it came out. The Linux packages of 1.1.0 to 1.3.1 were added then too; thos
 never released for Linux. README.md's "Versions and platforms" lists each version's platforms
 and known issues.
 
+## 1.6.2 (2026-10-25)
+
+- Linux: the .deb and the .rpm name the project's homepage,
+  https://github.com/Nekobyte-Coding/opendisco, where `apt show` and `dnf info` gave "None".
+  Nothing else changes; the terms of use are asked for again, as after every upgrade.
+
 ## 1.6.1 (2026-10-25)
 
 - **Terms of use:** OpenDisco shows its terms of use (TERMS.md) when it first opens and after
