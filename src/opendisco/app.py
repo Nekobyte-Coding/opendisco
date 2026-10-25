@@ -141,8 +141,11 @@ class OpenDiscoApp(toga.App):
         self.settings_path = Path(self.paths.data) / "settings.json"
         self.known_hosts = Path(self.paths.data) / "known_hosts"  # SSH host keys, filed by MAC
         vulns.CACHE_DIR = Path(self.paths.data)  # where a downloaded CVE list is kept (vulns.refresh)
-        from opendisco import devicetools  # its SSH parts load only when used
-        devicetools.BACKUP_ROOT = Path(self.paths.data) / devicetools.BACKUP_FOLDER  # config backups, by MAC
+        try:  # config backups, by MAC (its SSH parts load only when used; a build may leave it out)
+            from opendisco import devicetools
+            devicetools.BACKUP_ROOT = Path(self.paths.data) / devicetools.BACKUP_FOLDER
+        except ImportError:
+            pass
         self.settings = self._load_settings()
         self.hidden = self.settings.setdefault("hidden", {})  # device key (its MAC) -> what it was
         if not self.caps["mobile"]:
