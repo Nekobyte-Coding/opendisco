@@ -48,8 +48,8 @@ DEVICE_ACTIONS = [("web", "Open Web UI"), ("ssh", "Open SSH…"), ("ping", "Ping
                   ("all_ports", "Scan all ports"), None,
                   ("fw_check", "Check for firmware update"), ("fw_update", "Update firmware…"),
                   ("config", "Edit config…"), ("login", "Change login…"), None,
-                  ("note", "Note…"), ("export_device", "Export device…"), None,
                   ("copy_ip", "Copy IP address"), ("copy_mac", "Copy MAC address"), None,
+                  ("note", "Note…"), ("export_device", "Export device…"), None,
                   ("forget", "Forget SSH key"), ("forget_login", "Forget saved login"), ("hide", "Hide device")]
 FINDS = {"find_http": "http", "find_https": "https", "find_ssh": "ssh", "all_ports": "all"}
 # Said before a port search, until switched off: to intrusion prevention it looks like a port scan.
