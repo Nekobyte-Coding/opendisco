@@ -12,6 +12,7 @@ import re
 import socket
 import subprocess
 import sys
+import textwrap
 import threading
 import time
 import traceback
@@ -124,6 +125,12 @@ def _label(d) -> str:
     return f"{d.ip}  {d.name or d.model or d.mac or ''}".strip()
 
 
+def _fill(text: str, width: int) -> str:
+    """Labels don't wrap by themselves (Windows' and macOS's alike): each paragraph broken to
+    `width` characters, so it stays inside its window."""
+    return "\n".join(textwrap.fill(part, width) if part.strip() else "" for part in str(text).split("\n"))
+
+
 # ---------------------------------------------------------------------------
 # Logins
 # ---------------------------------------------------------------------------
@@ -207,7 +214,7 @@ async def _login_window(app, d, purpose, user, password, port, remembered, probl
     user_box = toga.TextInput(value=user, placeholder="e.g. ubnt or admin", style=Pack(flex=1))
     password_box = toga.PasswordInput(value=password, style=Pack(flex=1))
     port_box = toga.TextInput(value=str(port), style=Pack(width=80))
-    trouble = toga.Label(problem, style=Pack(flex=1))
+    trouble = toga.Label(_fill(problem, 46), style=Pack(flex=1))
     can_remember = bool(d.mac) and credstore.available()
     remember = toga.Switch(f"Remember for this device (in {credstore.store_name()})", value=remembered and can_remember,
                            enabled=can_remember)
@@ -221,7 +228,7 @@ async def _login_window(app, d, purpose, user, password, port, remembered, probl
                 trouble.text = "The device tools need a username."
                 return
             if not text.isdigit() or not 0 < int(text) < 65536:
-                trouble.text = "The port is a number from 1 to 65535."
+                trouble.text = _fill("The port is a number from 1 to 65535.", 46)
                 return
             answer.set_result((user_box.value.strip(), password_box.value, int(text), remember.value))
         else:
@@ -245,12 +252,12 @@ async def _login_window(app, d, purpose, user, password, port, remembered, probl
                          position=app._over_main(size))
     window.content = toga.Box(style=Pack(direction=COLUMN, margin=14, gap=8), children=[
         toga.Label(_label(d)),
-        toga.Label(purpose),
+        toga.Label(_fill(purpose, 72)),
         toga.Box(style=row, children=[toga.Label("Username", style=label), user_box]),
         toga.Box(style=row, children=[toga.Label("Password", style=label), password_box]),
         toga.Box(style=row, children=[toga.Label("Port", style=label), port_box, trouble]),
         remember,
-        toga.Label(note),
+        toga.Label(_fill(note, 72)),
         toga.Box(style=Pack(direction=ROW, gap=8), children=[
             toga.Box(style=Pack(flex=1)),
             toga.Button("Cancel", on_press=lambda w: finish(False)),
@@ -275,7 +282,8 @@ class Progress:
         self.app = app
         self.stop = threading.Event()
         self.closed = False
-        self.heading = toga.Label(heading)
+        self.said = ""  # the step as it was said, before it was broken into lines
+        self.heading = toga.Label(_fill(heading, 84))
         self.step = toga.Label("", style=Pack(flex=1))
         self.bar = toga.ProgressBar(max=100, value=0, style=Pack(flex=1))
         self.log = toga.MultilineTextInput(readonly=True, style=Pack(flex=1, font_family="monospace", font_size=11))
@@ -302,10 +310,10 @@ class Progress:
 
     def _show(self, text, percent):
         if text:
-            if text.split("…")[0] != self.step.text.split("…")[0]:
+            if text.split("…")[0] != self.said.split("…")[0]:
                 self.log.value += time.strftime("%H:%M:%S  ") + text.rstrip(" 0123456789s") + "\n"
                 self.log.scroll_to_bottom()
-            self.step.text = text
+            self.said, self.step.text = text, _fill(text, 84)
         if percent is not None:
             self.bar.value = max(0, min(100, percent))
 
@@ -735,7 +743,7 @@ class ConfigEditor:
         self.window = toga.Window(title=f"Config: {_label(d)}", size=size, on_close=self.closing,
                                   position=app._over_main(size))
         self.window.content = toga.Box(style=Pack(direction=COLUMN, margin=12, gap=8), children=[
-            toga.Label(about), self.box,
+            toga.Label(_fill(about, 118)), self.box,
             toga.Box(style=Pack(direction=ROW, align_items="center", gap=8), children=[
                 self.state, *self.buttons, toga.Button("Close", on_press=lambda w: self.window.close())])])
         self._pending(pending)
@@ -743,8 +751,8 @@ class ConfigEditor:
         app._show_over_main(self.window)
 
     def _pending(self, pending):
-        self.state.text = ("It has changes that aren't applied yet (made in its web UI, or saved without applying)."
-                           if pending else self.tools["why"])
+        self.state.text = _fill("It has changes that aren't applied yet (made in its web UI, or saved without "
+                                "applying)." if pending else self.tools["why"], 64)
 
     def _enable(self, on: bool):
         for button in self.buttons:
@@ -769,7 +777,7 @@ class ConfigEditor:
         try:
             text, pending = await _work(devicetools.read_device_config, self.login, self.kind)
         except (sshrun.SSHError, devicetools.ToolError) as e:
-            self.state.text = str(e)
+            self.state.text = _fill(e, 64)
         else:
             self.saved = self.box.value = text
             self._pending(pending)
@@ -799,7 +807,7 @@ class ConfigEditor:
             return
         self._enable(False)
         self.state.text = "Applying…" if apply else "Saving…"
-        say = lambda m: self.app._from_worker(setattr, self.state, "text", m)  # noqa: E731
+        say = lambda m: self.app._from_worker(setattr, self.state, "text", _fill(m, 64))  # noqa: E731
 
         def work():
             if self.d.mac:  # what it had, kept before it's replaced
@@ -810,14 +818,14 @@ class ConfigEditor:
         try:
             message = await _work(work)
         except devicetools.LostConnection as e:  # what it means for the device, as far as it's known
-            self.state.text = str(e)
+            self.state.text = _fill(e, 64)
             self.app.status.text = f"{self.d.ip}: {e}"
             await self.window.dialog(toga.ErrorDialog("Connection lost", str(e)))
         except (devicetools.ToolError, sshrun.SSHError, OSError) as e:
-            self.state.text = str(e)
+            self.state.text = _fill(e, 64)
         else:
             self.saved = text
-            self.state.text = message
+            self.state.text = _fill(message, 64)
             self.app.status.text = f"{self.d.ip}: {message}"
         self._enable(True)
 
@@ -909,7 +917,7 @@ async def _new_login_window(app, d, login, text):
                 new_text, scheme = devicetools.change_login(text, login.user, login.password, user_box.value.strip(),
                                                             first.value)
             except devicetools.ToolError as e:
-                trouble.text = str(e)
+                trouble.text = _fill(e, 76)
                 return
             answer.set_result((new_text, user_box.value.strip(), first.value, scheme))
         else:
@@ -930,8 +938,8 @@ async def _new_login_window(app, d, login, text):
                          position=app._over_main(size))
     window.content = toga.Box(style=Pack(direction=COLUMN, margin=14, gap=8), children=[
         toga.Label(_label(d)),
-        toga.Label("The new password is stored on the device hashed the way it hashes the current one, never as "
-                   "plain text; the app checks its hashing against the current password first."),
+        toga.Label(_fill("The new password is stored on the device hashed the way it hashes the current one, never "
+                         "as plain text; the app checks its hashing against the current password first.", 76)),
         toga.Box(style=row, children=[toga.Label("Username", style=label), user_box]),
         toga.Box(style=row, children=[toga.Label("New password", style=label), first]),
         toga.Box(style=row, children=[toga.Label("Again", style=label), second]),
@@ -1033,7 +1041,7 @@ class BackupsWindow:
         self.window = toga.Window(title=f"Config backups: {_label(d)}", size=size, on_close=self.closing,
                                   position=app._over_main(size))
         self.window.content = toga.Box(style=Pack(direction=COLUMN, margin=12, gap=8), children=[
-            toga.Label(about), self.table, self.text,
+            toga.Label(_fill(about, 112)), self.table, self.text,
             toga.Box(style=Pack(direction=ROW, align_items="center", gap=8), children=[
                 self.state,
                 toga.Button("Back up now", on_press=self.backup_now, enabled=offered),
@@ -1215,7 +1223,7 @@ async def _diff_window(app, d, kind, current, text, source, tools):
     size = (900, 640)
     window = toga.Window(title=f"Upload config: {d.ip}", size=size, on_close=closing, position=app._over_main(size))
     window.content = toga.Box(style=Pack(direction=COLUMN, margin=12, gap=8), children=[
-        toga.Label(heading), view, toga.Label(note),
+        toga.Label(_fill(heading, 118)), view, toga.Label(_fill(note, 118)),
         toga.Box(style=Pack(direction=ROW, gap=8), children=[
             toga.Box(style=Pack(flex=1)),
             toga.Button("Cancel", on_press=lambda w: finish(None)),
@@ -1378,7 +1386,7 @@ async def _address_window(app, ip, port, user, password, remember, problem):
     port_box = toga.TextInput(value=str(port), style=Pack(width=80))
     user_box = toga.TextInput(value=user, placeholder="e.g. ubnt or admin", style=Pack(flex=1))
     password_box = toga.PasswordInput(value=password, style=Pack(flex=1))
-    trouble = toga.Label(problem, style=Pack(flex=1))
+    trouble = toga.Label(_fill(problem, 46), style=Pack(flex=1))
     can_remember = credstore.available()
     keep = toga.Switch(f"Remember for this device (in {credstore.store_name()})", value=remember and can_remember,
                        enabled=can_remember)
@@ -1389,10 +1397,10 @@ async def _address_window(app, ip, port, user, password, remember, problem):
         if ok:
             address, text = ip_box.value.strip(), port_box.value.strip()
             if not re.fullmatch(r"\d{1,3}(\.\d{1,3}){3}", address) or not core._usable_ip(address):
-                trouble.text = "The address is an IPv4 address, such as 10.20.0.1."
+                trouble.text = _fill("The address is an IPv4 address, such as 10.20.0.1.", 46)
                 return
             if not text.isdigit() or not 0 < int(text) < 65536:
-                trouble.text = "The port is a number from 1 to 65535."
+                trouble.text = _fill("The port is a number from 1 to 65535.", 46)
                 return
             if not user_box.value.strip():
                 trouble.text = "Logging in needs a username."
@@ -1416,9 +1424,9 @@ async def _address_window(app, ip, port, user, password, remember, problem):
     window = toga.Window(title="Scan from a device", size=size, resizable=False, on_close=closing,
                          position=app._over_main(size))
     window.content = toga.Box(style=Pack(direction=COLUMN, margin=14, gap=8), children=[
-        toga.Label("Log in to a device by its address, one the scan didn't find (over a VPN, say), to list what it "
-                   "sees: its ARP table, LLDP neighbours and, on airOS, its stations. They're listed under it, and "
-                   "the device tools reach them through it."),
+        toga.Label(_fill("Log in to a device by its address, one the scan didn't find (over a VPN, say), to list "
+                         "what it sees: its ARP table, LLDP neighbours and, on airOS, its stations. They're listed "
+                         "under it, and the device tools reach them through it.", 74)),
         toga.Box(style=row, children=[toga.Label("Address", style=label), ip_box]),
         toga.Box(style=row, children=[toga.Label("Port", style=label), port_box, trouble]),
         toga.Box(style=row, children=[toga.Label("Username", style=label), user_box]),
