@@ -65,6 +65,7 @@ CHECK_PORTS = (22, 80, 443, 8080, 8443)
 PORT_SOURCES = {"discovery": "its discovery reply", "redirect": "its HTTP redirect",
                 "mDNS": "its mDNS services", "UPnP": "its UPnP description"}
 IS_WINDOWS = sys.platform.startswith("win")
+IS_APPLE = sys.platform in ("darwin", "ios")  # macOS and iOS: the same BSD socket options
 
 STOP = threading.Event()  # a GUI's Stop button: ends the scan early, the way Ctrl+C does
 SUDO_ASKPASS = None  # a GUI sets this to fn(reason) -> password or None; the CLI lets sudo prompt
@@ -82,7 +83,8 @@ def platform_name() -> str:
 
 def capabilities() -> dict:
     """What this platform lets the scanner do. Phones can't capture traffic, add addresses or
-    tag VLANs; iOS also blocks broadcasts unless Apple grants the app the multicast entitlement."""
+    tag VLANs. iOS blocks broadcasts and multicast unless the app has Apple's multicast
+    entitlement (the iOS app has it) and Local Network access."""
     plat = platform_name()
     unix_desktop = plat in ("macos", "linux")
     caps = {"platform": plat, "mobile": plat in ("ios", "android"),
@@ -1071,15 +1073,63 @@ def _parse_ipconfig(text: str) -> list:
     return out
 
 
+IFF_UP, IFF_BROADCAST, IFF_LOOPBACK, IFF_RUNNING = 0x1, 0x2, 0x8, 0x40  # <net/if.h>
+
+
+def _getifaddrs() -> list:
+    """IPv4 interfaces that are up and can broadcast, from getifaddrs() (iOS, where no program
+    such as ifconfig can be run). That leaves out cellular data and VPN tunnels: Wi-Fi and
+    Ethernet adapters are where gear is."""
+    import ctypes
+
+    class Ifaddrs(ctypes.Structure):  # struct ifaddrs, <ifaddrs.h>
+        pass
+
+    Ifaddrs._fields_ = [("ifa_next", ctypes.POINTER(Ifaddrs)), ("ifa_name", ctypes.c_char_p),
+                        ("ifa_flags", ctypes.c_uint), ("ifa_addr", ctypes.c_void_p),
+                        ("ifa_netmask", ctypes.c_void_p), ("ifa_dstaddr", ctypes.c_void_p),
+                        ("ifa_data", ctypes.c_void_p)]
+    libc = ctypes.CDLL(None)
+    libc.getifaddrs.argtypes = [ctypes.POINTER(ctypes.POINTER(Ifaddrs))]
+    libc.freeifaddrs.argtypes = [ctypes.POINTER(Ifaddrs)]
+    head = ctypes.POINTER(Ifaddrs)()
+    if libc.getifaddrs(ctypes.byref(head)) != 0:
+        return []
+    out = []
+    try:
+        node = head
+        while node:
+            ifa = node.contents
+            node = ifa.ifa_next
+            wanted = IFF_UP | IFF_RUNNING | IFF_BROADCAST
+            if ifa.ifa_flags & (wanted | IFF_LOOPBACK) != wanted or not ifa.ifa_addr or not ifa.ifa_netmask:
+                continue
+            addr = ctypes.string_at(ifa.ifa_addr, 8)  # BSD sockaddr_in: length, family, port, address
+            if addr[1] != socket.AF_INET:
+                continue
+            mask = socket.inet_ntoa(ctypes.string_at(ifa.ifa_netmask, 8)[4:8])
+            prefix = _mask_to_prefix(mask)
+            if prefix is not None:
+                out.append(Iface(ifa.ifa_name.decode(errors="replace"), socket.inet_ntoa(addr[4:8]), prefix))
+    finally:
+        libc.freeifaddrs(head)
+    return out
+
+
 def local_interfaces() -> list:
     if IS_WINDOWS:
         from opendisco import winnet
         ifaces = ([Iface(name, ip, prefix) for name, ip, prefix in winnet.ipv4_addresses()]
                   or _parse_ipconfig(_run(["ipconfig"])))
+    elif platform_name() == "ios":
+        try:
+            ifaces = _getifaddrs()
+        except (OSError, AttributeError, ValueError):
+            ifaces = []
     else:
         ifaces = _parse_ip_addr(_run(["ip", "-o", "-4", "addr", "show"])) or _parse_ifconfig(_run(["ifconfig"]))
     ifaces = [i for i in ifaces if not i.ip.startswith("127.")]
-    if not ifaces:
+    if not ifaces and platform_name() != "ios":  # there, the default route may be cellular data
         try:  # last resort: the address of the default route, assume a /24
             with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as s:
                 s.connect(("192.0.2.1", 9))
@@ -1192,7 +1242,11 @@ def local_macs() -> set:
         from opendisco import winnet
         macs = {norm_mac(a["mac"]) for a in winnet.adapters() if a["mac"]}
     elif os.path.isdir("/sys/class/net"):
-        for name in os.listdir("/sys/class/net"):
+        try:
+            names = os.listdir("/sys/class/net")
+        except OSError:  # Android keeps it from apps (and hides the phone's MACs from them anyway)
+            names = []
+        for name in names:
             try:
                 with open(f"/sys/class/net/{name}/address") as f:
                     macs.add(norm_mac(f.read().strip()))
@@ -1930,6 +1984,95 @@ def probe_console_api(ip: str) -> dict:
 
 
 # ---------------------------------------------------------------------------
+# Ping without the ping program (iOS can't run one)
+# ---------------------------------------------------------------------------
+
+ICMP_KINDS = {3: "Destination unreachable", 11: "Time to live exceeded"}
+
+
+def _icmp_checksum(data: bytes) -> int:
+    if len(data) % 2:
+        data += b"\0"
+    total = sum(struct.unpack(f"!{len(data) // 2}H", data))
+    total = (total >> 16) + (total & 0xFFFF)
+    total += total >> 16
+    return ~total & 0xFFFF
+
+
+def ping(ip: str, out, stop, interval: float = 1.0, timeout: float = 2.0, count: int = 0) -> None:
+    """Ping ip the way ping(8) does, a line per reply to out(line), until stop() is true (or count
+    echoes have been answered or timed out), then the statistics. Through an unprivileged ICMP
+    datagram socket, which macOS and iOS allow any app (and Linux when net.ipv4.ping_group_range
+    includes the user)."""
+    try:
+        s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM, socket.IPPROTO_ICMP)
+    except OSError as e:
+        out(f"ping: can't open an ICMP socket: {e.strerror or e}")
+        return
+    ident, seq, size = os.getpid() & 0xFFFF, 0, 56
+    pending, rtts, sent = {}, [], 0  # pending: seq -> when it was sent
+    out(f"PING {ip}: {size} data bytes")
+    next_send = time.monotonic()
+    with s:
+        s.setblocking(False)
+        while not stop() and not (count and sent >= count and not pending):
+            now = time.monotonic()
+            if now >= next_send and not (count and sent >= count):
+                body = struct.pack("!d", time.time()) + bytes(range(size - 8))
+                head = struct.pack("!BBHHH", 8, 0, 0, ident, seq)
+                packet = struct.pack("!BBHHH", 8, 0, _icmp_checksum(head + body), ident, seq) + body
+                try:
+                    s.sendto(packet, (ip, 0))
+                    pending[seq] = now
+                except OSError as e:
+                    out(f"ping: sendto: {e.strerror or e}")
+                seq, sent, next_send = (seq + 1) & 0xFFFF, sent + 1, now + interval
+            for n, when in sorted(pending.items()):
+                if now - when > timeout:
+                    del pending[n]
+                    out(f"Request timeout for icmp_seq {n}")
+            try:
+                readable, _, _ = select.select([s], [], [], max(0.0, min(0.2, next_send - time.monotonic())))
+            except InterruptedError:
+                continue
+            if not readable:
+                continue
+            try:
+                data, addr = s.recvfrom(2048)
+            except (BlockingIOError, InterruptedError):
+                continue
+            except OSError as e:
+                out(f"ping: recvfrom: {e.strerror or e}")
+                continue
+            ttl = None
+            if data and data[0] >> 4 == 4:  # macOS and iOS hand over the IP header too; Linux doesn't
+                ttl, data = data[8], data[(data[0] & 0x0F) * 4:]
+            if len(data) < 8:
+                continue
+            kind, _code, _sum, _ident, n = struct.unpack("!BBHHH", data[:8])
+            if kind in ICMP_KINDS and len(data) >= 36:  # the error quotes our echo: IP header + 8 bytes
+                inner = data[8:]
+                n = struct.unpack("!H", inner[(inner[0] & 0x0F) * 4 + 6:][:2])[0]
+                if pending.pop(n, None) is not None:
+                    out(f"From {addr[0]} icmp_seq={n} {ICMP_KINDS[kind]}")
+                continue
+            if kind != 0 or n not in pending or addr[0] != ip:
+                continue
+            rtt = (time.monotonic() - pending.pop(n)) * 1000
+            rtts.append(rtt)
+            out(f"{len(data)} bytes from {addr[0]}: icmp_seq={n}" + (f" ttl={ttl}" if ttl is not None else "")
+                + f" time={rtt:.3f} ms")
+    received = len(rtts)
+    out(f"\n--- {ip} ping statistics ---")
+    out(f"{sent} packets transmitted, {received} packets received, "
+        f"{(sent - received) / sent * 100 if sent else 0:.1f}% packet loss")
+    if rtts:
+        mean = sum(rtts) / received
+        spread = (sum((r - mean) ** 2 for r in rtts) / received) ** 0.5
+        out(f"round-trip min/avg/max/stddev = {min(rtts):.3f}/{mean:.3f}/{max(rtts):.3f}/{spread:.3f} ms")
+
+
+# ---------------------------------------------------------------------------
 # Port search: one device's every TCP port, for a service that isn't where it should be
 # ---------------------------------------------------------------------------
 
@@ -2160,7 +2303,7 @@ def udp_socket(port: int = 0, broadcast: bool = False, reuse: bool = False) -> s
     try:
         if reuse and not IS_WINDOWS:  # Windows SO_REUSEADDR would steal the port
             s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-            if sys.platform == "darwin":  # lets the per-interface broadcast sockets share the port
+            if IS_APPLE:  # lets the per-interface broadcast sockets share the port
                 s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEPORT, 1)
         if broadcast:
             s.setsockopt(socket.SOL_SOCKET, socket.SO_BROADCAST, 1)
@@ -2188,7 +2331,7 @@ def scoped_broadcast_socket(iface: Iface, port: int):
         s.setsockopt(socket.SOL_SOCKET, socket.SO_BROADCAST, 1)
         if IS_WINDOWS:  # Windows sends it out of the adapter that owns the socket's address;
             addr = iface.ip  # SO_REUSEADDR would let it take the port from another program
-        elif sys.platform == "darwin":
+        elif IS_APPLE:
             s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
             s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEPORT, 1)
             s.setsockopt(socket.IPPROTO_IP, IP_BOUND_IF, socket.if_nametoindex(iface.name))
@@ -2222,10 +2365,18 @@ def _ingress_name(ancdata) -> str | None:
     for level, kind, data in ancdata:
         if level == socket.IPPROTO_IP and kind == socket.IP_PKTINFO and len(data) >= 4:
             try:
-                return socket.if_indextoname(struct.unpack_from("I", data)[0])
+                return _if_indextoname(struct.unpack_from("I", data)[0])
             except OSError:
                 return None
     return None
+
+
+def _if_indextoname(index: int) -> str | None:
+    if hasattr(socket, "if_indextoname"):
+        return socket.if_indextoname(index)
+    import ctypes  # Android's Python 3.13 leaves it out: ask the C library
+    name = ctypes.create_string_buffer(16)  # IF_NAMESIZE
+    return name.value.decode(errors="replace") if ctypes.CDLL(None).if_indextoname(index, name) else None
 
 
 def hexdump(data: bytes, indent: str = "    ") -> str:
@@ -2540,7 +2691,10 @@ class Scanner:
         if not self.opts.listen and self.bcast_errors and self.bcast_ok == 0:
             reason = "; ".join(sorted(set(self.bcast_errors.values())))
             msg = f"Every discovery broadcast failed to send ({reason})."
-            if sys.platform == "darwin":
+            if platform_name() == "ios":
+                msg += (" On iOS this usually means OpenDisco lacks Local Network access: Settings > Privacy & "
+                        "Security > Local Network.")
+            elif sys.platform == "darwin":
                 msg += (" On macOS this usually means the app running the scan (OpenDisco, or the terminal) "
                         "lacks Local Network access: System Settings > Privacy & Security > Local Network.")
             else:
@@ -5167,6 +5321,9 @@ def run_scan(opts, log, progress=None, on_inventory=None):
         extra_notes += [("note", f"{l.name} ({l.label}) has link but no IPv4 address (no DHCP?). Run with -a "
                                  "to probe the listed networks on it through temporary aliases.")
                         for l in unaddressed]
+    if not all_ifaces and not opts.alias_mode and not links:  # an IPv6-only network, or none at all
+        raise SystemExit("error: no IPv4 network here. UBNT discovery, the sweep, mDNS and SSDP all work over "
+                         "IPv4, so an IPv6-only network (or none) leaves nothing to scan.")
     if not ifaces and not opts.alias_mode:
         names = ", ".join(str(i) for i in all_ifaces) or "none found"
         hint = f" {', '.join(l.name for l in unaddressed)} has link but no address: try -a." if unaddressed else ""

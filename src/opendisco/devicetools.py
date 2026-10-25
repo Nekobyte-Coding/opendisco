@@ -31,7 +31,12 @@ import urllib.request
 from dataclasses import dataclass
 from pathlib import Path
 
-from opendisco import sshrun
+from opendisco import core
+
+if core.platform_name() in ("ios", "android"):  # no ssh program there: asyncssh, with the same calls
+    from opendisco import phonessh as sshrun
+else:
+    from opendisco import sshrun
 
 INDEX_URL = "https://fw-update.ubnt.com/api/firmware-latest"
 INDEX_TTL = 1800  # seconds the firmware list is kept before asking again
@@ -166,8 +171,12 @@ _CONTEXT = None
 
 
 def https_context() -> ssl.SSLContext:
-    """Certificates checked as usual. A Python without its own CA list on macOS gets the system's."""
+    """Certificates checked as usual. A Python without its own CA list on macOS gets the system's;
+    phones get tls.context()'s (Android's own roots, certifi's on iOS)."""
     global _CONTEXT
+    if _CONTEXT is None and core.platform_name() in ("ios", "android"):
+        from opendisco import tls
+        _CONTEXT = tls.context()
     if _CONTEXT is None:
         ctx = ssl.create_default_context()
         if not ctx.cert_store_stats().get("x509_ca") and sys.platform == "darwin":
@@ -511,6 +520,15 @@ def config_problems(text: str) -> list:
             if line.strip() and not re.match(r"[A-Za-z0-9_.-]+=", line)]
 
 
+def lines_changed(old: str, new: str) -> int:
+    """How many lines differ between two configs: an edited line counts once (not as one line
+    taken out and one put in), as do one added and one removed."""
+    import difflib
+    a, b = old.replace("\r", "").splitlines(), new.replace("\r", "").splitlines()
+    return sum(max(i2 - i1, j2 - j1) for tag, i1, i2, j1, j2 in difflib.SequenceMatcher(None, a, b, autojunk=False)
+               .get_opcodes() if tag != "equal")
+
+
 def write_config(login: sshrun.Login, text: str, apply: bool, report=None, stop=None,
                  new_login: sshrun.Login | None = None, confirm_within: float = 240) -> str:
     """Write the config and save it to flash; with apply, apply it in place too (rc.softrestart
@@ -532,12 +550,17 @@ def write_config(login: sshrun.Login, text: str, apply: bool, report=None, stop=
     if apply:
         try:
             running = _fetch(login, AIROS_RUNNING, stop)
+            stored = _fetch(login, AIROS_CONFIG, stop) if _lines(running) == _lines(text) else ""
         except sshrun.SSHError as e:
             if e.kind in ("auth", "key", "cancelled"):
                 raise
             raise LostConnection(f"{untouched} ({e})", "not done") from None
-        if _lines(running) == _lines(text):
+        # Both: a config saved to flash but not applied (Save) is what the next reboot runs.
+        if _lines(running) == _lines(text) and _lines(stored) == _lines(text):
             return "Nothing to apply: the device already runs this config."
+    # It runs this config already, but has another saved: saving it is all there is to do (airOS's
+    # rc.softrestart save does nothing at all when the saved config matches the running one).
+    runs_it = apply and _lines(running) == _lines(text)
 
     say("Copying the config to the device…")
     folder = Path(tempfile.mkdtemp(prefix="opendisco-"))
@@ -561,8 +584,9 @@ def write_config(login: sshrun.Login, text: str, apply: bool, report=None, stop=
     sent = True
     try:
         # Detached: applying can restart SSH itself, which would end a command run in the session.
-        sshrun.run(login, detached(f"mv -f {STAGED_CONFIG} {AIROS_CONFIG} && " + (AIROS_APPLY if apply else AIROS_SAVE),
-                                   CONFIG_LOG, run), timeout=60, stop=stop)
+        sshrun.run(login, detached(f"mv -f {STAGED_CONFIG} {AIROS_CONFIG} && "
+                                   + (AIROS_APPLY if apply and not runs_it else AIROS_SAVE), CONFIG_LOG, run),
+                   timeout=60, stop=stop)
     except sshrun.SSHError as e:
         if e.kind in ("auth", "key"):
             raise
@@ -573,7 +597,8 @@ def write_config(login: sshrun.Login, text: str, apply: bool, report=None, stop=
     if state == "done":
         if code:
             raise ToolError(("Applying" if apply else "Saving") + " failed" + (f": {said[-300:]}" if said else "."))
-        done = "Applied and saved to flash." if apply else "Saved to flash. It takes effect at the next reboot."
+        done = ("It already ran this config: saved to flash, so it runs it after a reboot too." if runs_it
+                else "Applied and saved to flash." if apply else "Saved to flash. It takes effect at the next reboot.")
         if not sent or (dropped and not apply):  # applying restarts SSH: drops then are expected
             done += " The connection dropped meanwhile: the device finished on its own, checked after reconnecting."
         return done

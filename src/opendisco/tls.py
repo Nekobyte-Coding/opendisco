@@ -5,9 +5,10 @@ Linux (OpenSSL's folders) and on Android (Chaquopy loads a bundle it brings). Th
 the macOS app doesn't: its OpenSSL looks where python.org's installer puts certificates, a folder
 that only exists after that installer's "Install Certificates" step, so every certificate check
 fails. Where Python finds none, context() loads the system's own: macOS's /etc/ssl/cert.pem, or
-the bundle or folder a Linux distribution or Android keeps them in.
+the bundle or folder a Linux distribution or Android keeps them in. iOS keeps its root
+certificates where no app can read them, so the iOS app brings certifi's list (Mozilla's).
 
-Standard library only.
+Standard library only, plus certifi in the iOS app.
 """
 from __future__ import annotations
 
@@ -72,6 +73,16 @@ def _load_system_roots(ctx: ssl.SSLContext) -> str | None:
     return None
 
 
+def _load_bundled_roots(ctx: ssl.SSLContext) -> str | None:
+    """certifi's root certificates, where the app brings them (iOS); where they came from."""
+    try:
+        import certifi
+        ctx.load_verify_locations(cafile=certifi.where())
+    except (ImportError, OSError, ssl.SSLError):
+        return None
+    return certifi.where() if ctx.cert_store_stats()["x509_ca"] else None
+
+
 def context() -> ssl.SSLContext:
     """A default, certificate-checking SSL context that trusts the system's root certificates."""
     global _context
@@ -79,7 +90,7 @@ def context() -> ssl.SSLContext:
         if _context is None:
             ctx = ssl.create_default_context()
             if not _python_finds_them(ctx):
-                _load_system_roots(ctx)
+                _load_system_roots(ctx) or _load_bundled_roots(ctx)
             _context = ctx
         return _context
 

@@ -13,7 +13,8 @@ long as the app is released. They live outside the project:
     password:  the "OpenDisco Android signing" item in the login keychain
                (or $OPENDISCO_KEYSTORE_PASSWORD)
 
-    .venv/bin/python packaging/android/build_apk.py              # build and sign
+    .venv/bin/python packaging/android/build_apk.py              # build and sign, into dist/
+    .venv/bin/python packaging/android/build_apk.py --out DIR    # into another folder
     .venv/bin/python packaging/android/build_apk.py --create-key # once: make the release key
 """
 import argparse
@@ -88,6 +89,9 @@ def sign(unsigned: Path, dest: Path) -> None:
 def main() -> int:
     parser = argparse.ArgumentParser(description="Build the release-signed Android .apk.")
     parser.add_argument("--create-key", action="store_true", help="make the release key (once)")
+    parser.add_argument("--out", type=Path, default=ROOT / "dist", help="folder for the .apk (default: dist)")
+    parser.add_argument("--work", type=Path, default=MIRROR,
+                        help=f"folder the project is copied to and built in (default: {MIRROR})")
     args = parser.parse_args()
     if args.create_key:
         create_key()
@@ -99,21 +103,26 @@ def main() -> int:
         sys.exit(f"error: no release key at {KEYSTORE}: restore it from its backup (or, for a first release "
                  "only, make one with --create-key)")
     version = re.search(r'__version__ = "([^"]+)"', (ROOT / "src" / "opendisco" / "__init__.py").read_text())[1]
-    MIRROR.mkdir(parents=True, exist_ok=True)
+    python = re.search(r'chaquopy\s*\{[^}]*version\s*=\s*"(3\.\d+)"', (ROOT / "pyproject.toml").read_text())
+    if python and not shutil.which(f"python{python[1]}"):  # Chaquopy's pip runs on the same version
+        sys.exit(f"error: the Android app is built with Python {python[1]}, and Chaquopy needs python{python[1]} "
+                 f"on this computer to install its packages: brew install python@{python[1]}")
+    work = args.work.resolve()
+    work.mkdir(parents=True, exist_ok=True)
     for name in NEEDED:
-        src, dst = ROOT / name, MIRROR / name
+        src, dst = ROOT / name, work / name
         if dst.is_dir():
             shutil.rmtree(dst)
         elif dst.exists():
             dst.unlink()
         shutil.copytree(src, dst, ignore=SKIP) if src.is_dir() else shutil.copyfile(src, dst)
-    shutil.rmtree(MIRROR / "build" / "opendisco" / "android", ignore_errors=True)  # fresh: picks up the version
-    shutil.rmtree(MIRROR / "dist", ignore_errors=True)
+    shutil.rmtree(work / "build" / "opendisco" / "android", ignore_errors=True)  # fresh: picks up the version
+    shutil.rmtree(work / "dist", ignore_errors=True)
     for step in (["create"], ["build"], ["package", "--packaging-format", "apk"]):
-        subprocess.run([str(briefcase), step[0], "android", *step[1:]], cwd=MIRROR, check=True)
-    unsigned = next((MIRROR / "dist").glob("*.apk"))
-    dest = ROOT / "dist" / f"OpenDisco-{version}-android.apk"
-    dest.parent.mkdir(exist_ok=True)
+        subprocess.run([str(briefcase), step[0], "android", *step[1:]], cwd=work, check=True)
+    unsigned = next((work / "dist").glob("*.apk"))
+    dest = args.out.resolve() / f"OpenDisco-{version}-android.apk"
+    dest.parent.mkdir(parents=True, exist_ok=True)
     sign(unsigned, dest)
     print(f"Built {dest} ({dest.stat().st_size / 1e6:.1f} MB)")
     return 0
