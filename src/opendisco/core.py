@@ -1980,6 +1980,95 @@ def probe_console_api(ip: str) -> dict:
 
 
 # ---------------------------------------------------------------------------
+# Ping without the ping program (iOS can't run one)
+# ---------------------------------------------------------------------------
+
+ICMP_KINDS = {3: "Destination unreachable", 11: "Time to live exceeded"}
+
+
+def _icmp_checksum(data: bytes) -> int:
+    if len(data) % 2:
+        data += b"\0"
+    total = sum(struct.unpack(f"!{len(data) // 2}H", data))
+    total = (total >> 16) + (total & 0xFFFF)
+    total += total >> 16
+    return ~total & 0xFFFF
+
+
+def ping(ip: str, out, stop, interval: float = 1.0, timeout: float = 2.0, count: int = 0) -> None:
+    """Ping ip the way ping(8) does, a line per reply to out(line), until stop() is true (or count
+    echoes have been answered or timed out), then the statistics. Through an unprivileged ICMP
+    datagram socket, which macOS and iOS allow any app (and Linux when net.ipv4.ping_group_range
+    includes the user)."""
+    try:
+        s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM, socket.IPPROTO_ICMP)
+    except OSError as e:
+        out(f"ping: can't open an ICMP socket: {e.strerror or e}")
+        return
+    ident, seq, size = os.getpid() & 0xFFFF, 0, 56
+    pending, rtts, sent = {}, [], 0  # pending: seq -> when it was sent
+    out(f"PING {ip}: {size} data bytes")
+    next_send = time.monotonic()
+    with s:
+        s.setblocking(False)
+        while not stop() and not (count and sent >= count and not pending):
+            now = time.monotonic()
+            if now >= next_send and not (count and sent >= count):
+                body = struct.pack("!d", time.time()) + bytes(range(size - 8))
+                head = struct.pack("!BBHHH", 8, 0, 0, ident, seq)
+                packet = struct.pack("!BBHHH", 8, 0, _icmp_checksum(head + body), ident, seq) + body
+                try:
+                    s.sendto(packet, (ip, 0))
+                    pending[seq] = now
+                except OSError as e:
+                    out(f"ping: sendto: {e.strerror or e}")
+                seq, sent, next_send = (seq + 1) & 0xFFFF, sent + 1, now + interval
+            for n, when in sorted(pending.items()):
+                if now - when > timeout:
+                    del pending[n]
+                    out(f"Request timeout for icmp_seq {n}")
+            try:
+                readable, _, _ = select.select([s], [], [], max(0.0, min(0.2, next_send - time.monotonic())))
+            except InterruptedError:
+                continue
+            if not readable:
+                continue
+            try:
+                data, addr = s.recvfrom(2048)
+            except (BlockingIOError, InterruptedError):
+                continue
+            except OSError as e:
+                out(f"ping: recvfrom: {e.strerror or e}")
+                continue
+            ttl = None
+            if data and data[0] >> 4 == 4:  # macOS and iOS hand over the IP header too; Linux doesn't
+                ttl, data = data[8], data[(data[0] & 0x0F) * 4:]
+            if len(data) < 8:
+                continue
+            kind, _code, _sum, _ident, n = struct.unpack("!BBHHH", data[:8])
+            if kind in ICMP_KINDS and len(data) >= 36:  # the error quotes our echo: IP header + 8 bytes
+                inner = data[8:]
+                n = struct.unpack("!H", inner[(inner[0] & 0x0F) * 4 + 6:][:2])[0]
+                if pending.pop(n, None) is not None:
+                    out(f"From {addr[0]} icmp_seq={n} {ICMP_KINDS[kind]}")
+                continue
+            if kind != 0 or n not in pending or addr[0] != ip:
+                continue
+            rtt = (time.monotonic() - pending.pop(n)) * 1000
+            rtts.append(rtt)
+            out(f"{len(data)} bytes from {addr[0]}: icmp_seq={n}" + (f" ttl={ttl}" if ttl is not None else "")
+                + f" time={rtt:.3f} ms")
+    received = len(rtts)
+    out(f"\n--- {ip} ping statistics ---")
+    out(f"{sent} packets transmitted, {received} packets received, "
+        f"{(sent - received) / sent * 100 if sent else 0:.1f}% packet loss")
+    if rtts:
+        mean = sum(rtts) / received
+        spread = (sum((r - mean) ** 2 for r in rtts) / received) ** 0.5
+        out(f"round-trip min/avg/max/stddev = {min(rtts):.3f}/{mean:.3f}/{max(rtts):.3f}/{spread:.3f} ms")
+
+
+# ---------------------------------------------------------------------------
 # Port search: one device's every TCP port, for a service that isn't where it should be
 # ---------------------------------------------------------------------------
 
