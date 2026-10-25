@@ -38,14 +38,20 @@ ACCESSORS = [c.lower() for c in COLUMNS]
 PHONE_COLUMNS = ["IP", "Model", "Name"]
 ANY_PORT = "Any port"
 # What a device's right-click menu (and the Device menu) offers; None separates groups.
-DEVICE_ACTIONS = [("web", "Open Web UI"), ("ssh", "Open SSH…"), ("ping", "Ping"), ("rescan", "Rescan device"), None,
-                  ("find_https", "Find HTTPS port"), ("find_http", "Find HTTP port"), ("find_ssh", "Find SSH port"),
+DEVICE_ACTIONS = [("web", "Open Web UI"), ("ssh", "Open SSH…"), ("ping", "Ping"), ("rescan", "Rescan device"),
+                  ("issues", "Show issues…"), None,
+                  ("find_http", "Find HTTP port"), ("find_https", "Find HTTPS port"), ("find_ssh", "Find SSH port"),
                   ("all_ports", "Scan all ports"), None,
                   ("fw_check", "Check for firmware update"), ("fw_update", "Update firmware…"),
                   ("config", "Edit config…"), ("login", "Change login…"), None,
                   ("copy_ip", "Copy IP address"), ("copy_mac", "Copy MAC address"), None,
                   ("forget", "Forget SSH key"), ("forget_login", "Forget saved login"), ("hide", "Hide device")]
-FINDS = {"find_https": "https", "find_http": "http", "find_ssh": "ssh", "all_ports": "all"}
+FINDS = {"find_http": "http", "find_https": "https", "find_ssh": "ssh", "all_ports": "all"}
+# Said before a port search, until switched off: to intrusion prevention it looks like a port scan.
+PORT_SEARCH_WARNING = ("A port search connects to {ip}'s TCP ports: all 65,535 of them when the service isn't on a "
+                       "usual one. Intrusion prevention on the network (UniFi's IPS / Threat Management, a "
+                       "firewall's port-scan detection) can take that for a port scan from this computer: it may "
+                       "raise an alert, a false alarm here, or block this computer for a while.")
 NO_SESSION = "Right-click a device to get started: Open SSH or Ping."
 # Where earlier versions kept their data, by the parts of the data folder's path that changed:
 # folder name now -> patterns for its earlier names. macOS names the folder after the app ID
@@ -61,6 +67,7 @@ LEGACY_FOLDERS = {"com.michaelfroehlke.opendisco": ("*.opendisco", "*.ubnt-disco
 WINDOWS_PUBLISHER = "Nekobyte-Coding"
 
 _MENU_TARGET = None
+_TIP_TABLE = None
 
 
 def _menu_target_class():
@@ -109,6 +116,8 @@ class OpenDiscoApp(toga.App):
         self.holding = False
         self.cancel_password = None
         self.cancel_ssh_login = None
+        self.cancel_port_warning = None
+        self.port_warning_accepted = False  # phones: asked once per run
         self._move_old_data()
         self.networks_path = self._networks_file()
         self.settings_path = Path(self.paths.data) / "settings.json"
@@ -147,10 +156,11 @@ class OpenDiscoApp(toga.App):
             # No right-click on a phone: the port finder's buttons act on the device last tapped.
             self.find_buttons = [toga.Button(text, id=action, on_press=self.on_find_button, enabled=False,
                                              style=Pack(flex=1))
-                                 for action, text in (("find_https", "HTTPS"), ("find_http", "HTTP"),
+                                 for action, text in (("find_http", "HTTP"), ("find_https", "HTTPS"),
                                                       ("find_ssh", "SSH"), ("all_ports", "All ports"))]
         else:
-            self.table = toga.Table(columns=COLUMNS, on_select=self.on_select, style=Pack(flex=1))
+            self.table = toga.Table(columns=COLUMNS, on_select=self.on_select, on_activate=self.on_activate,
+                                    style=Pack(flex=1))
         mono = Pack(flex=1, font_family="monospace", font_size=12 if mobile else 11)
         self.details = toga.MultilineTextInput(readonly=True, placeholder="Select a device to see everything "
                                                "it reported and what to check.", style=mono)
@@ -224,6 +234,7 @@ class OpenDiscoApp(toga.App):
         self.main_window.show()
         if not mobile:
             self._install_context_menu()
+            self._install_status_tips()
         # macOS re-centres the tab labels whenever it re-tiles the tab view (window resizes,
         # dragging the divider, tab changes, moving to another display), so snap a moment later.
         self.main_window.on_resize = lambda *args, **kwargs: (self.loop.call_later(0.05, self._align_tab_labels),
@@ -244,8 +255,9 @@ class OpenDiscoApp(toga.App):
         try:
             self.settings_path.parent.mkdir(parents=True, exist_ok=True)
             self.settings_path.write_text(json.dumps({k: v for k, v in self.settings.items()
-                                                      if k in ("hidden", "ssh_user", "device_logins")}, indent=1),
-                                          encoding="utf-8")
+                                                      if k in ("hidden", "ssh_user", "skip_port_warning",
+                                                               "device_logins")},
+                                                     indent=1), encoding="utf-8")
         except OSError:
             pass
 
@@ -308,7 +320,7 @@ class OpenDiscoApp(toga.App):
         except Exception:
             pass  # purely cosmetic
 
-    COLUMN_WEIGHTS = (1.1, 0.5, 0.9, 1.3, 1.0, 1.4, 0.9, 0.7, 0.6, 0.6, 0.7, 1.1, 1.3)  # IP ... Status
+    COLUMN_WEIGHTS = (1.1, 0.5, 0.9, 1.3, 1.0, 1.4, 0.9, 0.6, 0.7, 0.6, 0.7, 1.1, 1.3)  # IP ... Status
 
     def _size_columns(self, *args, **kwargs):
         """Windows: toga sizes the table's columns once, before the window has its width, which left
@@ -586,7 +598,12 @@ class OpenDiscoApp(toga.App):
         """Fill the table, minus hidden devices. Rows change in place when the same devices are
         listed, so the selection stays put while a scan or a rescan updates them."""
         row = self._phone_row if self.caps["mobile"] else (lambda d: dict(zip(ACCESSORS, core.device_row(d))))
-        rows = [(d.key, row(d)) for d in devices if d.key not in self.hidden]
+        rows = []
+        for d, depth in core.tree_order(devices):  # found through another device: indented under it
+            if d.key not in self.hidden:
+                values = row(d)
+                values["ip"] = core.nested_ip(d, depth)
+                rows.append((d.key, values))
         data = self.table.data
         if [key for key, _ in rows] == [getattr(row, "key", None) for row in data]:
             for row, (_, values) in zip(data, rows):
@@ -801,6 +818,7 @@ class OpenDiscoApp(toga.App):
             "ssh": ("Show SSH session" if ssh else f"Open SSH…  (port {d.port('ssh')})", ip),
             "ping": ("Show ping" if ping and ping.alive else titles["ping"], ip),
             "rescan": (titles["rescan"], idle),
+            "issues": (f"Show issues ({len(d.issues)})…" if d.issues else titles["issues"], bool(d.issues)),
             **finds,
             "copy_ip": (f"Copy IP address  ({d.ip})" if ip else titles["copy_ip"], ip),
             "copy_mac": (f"Copy MAC address  ({d.mac})" if d.mac else titles["copy_mac"], bool(d.mac)),
@@ -830,7 +848,9 @@ class OpenDiscoApp(toga.App):
         elif name == "rescan":
             self._rescan(d)
         elif name in FINDS:
-            self._find(d, FINDS[name])
+            asyncio.create_task(self._find_after_warning(d, FINDS[name]))
+        elif name == "issues":
+            self._show_issues(d)
         elif name in ("fw_check", "fw_update", "config", "login", "forget_login"):
             from opendisco import devicegui
             devicegui.act(self, d, name)
@@ -994,6 +1014,51 @@ class OpenDiscoApp(toga.App):
                             + f"; {ports}.")
 
     # -- chasing one device's ports ---------------------------------------------------
+    async def _find_after_warning(self, d, kind):
+        if self.settings.get("skip_port_warning") or self.port_warning_accepted or await self._port_warning(d):
+            self._find(d, kind)
+
+    async def _port_warning(self, d) -> bool:
+        """Say what a port search can set off, and ask to go ahead (phones once a run; elsewhere
+        until "Don't warn again" is ticked)."""
+        text = PORT_SEARCH_WARNING.format(ip=d.ip)
+        if self.caps["mobile"]:  # phones have no extra windows: a plain question
+            ok = await self.main_window.dialog(toga.QuestionDialog("Port search", text + " Go ahead?"))
+            self.port_warning_accepted = bool(ok)
+            return bool(ok)
+        answer = self.loop.create_future()
+        quiet = toga.Switch("Don't warn again")
+
+        def finish(ok):
+            if not answer.done():
+                answer.set_result(ok)
+                window.close()
+
+        def closing(widget, **kwargs):
+            if not answer.done():
+                answer.set_result(False)
+            return True
+
+        window = toga.Window(title=f"Port search on {d.ip}", size=(540, 240), resizable=False, on_close=closing,
+                             position=self._over_main((540, 240)))
+        window.content = toga.Box(style=Pack(direction=COLUMN, margin=14, gap=10), children=[
+            toga.Label(textwrap.fill(text, 78)),
+            quiet,
+            toga.Box(style=Pack(direction=ROW, gap=8), children=[
+                toga.Box(style=Pack(flex=1)),
+                toga.Button("Cancel", on_press=lambda w: finish(False)),
+                toga.Button("Search ports", on_press=lambda w: finish(True))])])
+        self._show_over_main(window)
+        self.cancel_port_warning = lambda: finish(False)
+        try:
+            ok = await answer
+        finally:
+            self.cancel_port_warning = None
+        if ok and quiet.value:
+            self.settings["skip_port_warning"] = True
+            self._save_settings()
+        return ok
+
     def _find(self, d, kind):
         """Look for one device's SSH, HTTPS or HTTP port, or every open port ("all"): the deep
         check, then all 65535 TCP ports until it turns up. Stop ends it."""
@@ -1058,6 +1123,102 @@ class OpenDiscoApp(toga.App):
         d = self._selected_device()
         if d is not None:
             self._device_action(widget.id)
+
+    # -- a device's issues: the Status column's hover text and list ------------------
+    @staticmethod
+    def _issue_text(d, width=None) -> str:
+        lines = []
+        for level, tag, msg in d.issues:
+            line = f"{core.status_label(tag)} ({level}): {msg}"
+            lines.append(textwrap.fill(line, width, subsequent_indent="    ") if width else line)
+        return "\n".join(lines)
+
+    def on_activate(self, widget, row=None, **kwargs):
+        d = self._device(getattr(row, "key", None)) if row is not None else None
+        if d is not None and d.issues:
+            self._show_issues(d)
+
+    def _show_issues(self, d):
+        """Every finding for one device, with its public write-ups (CVE pages) one click away."""
+        links = core.issue_links(d)
+        text = toga.MultilineTextInput(readonly=True, value=self._issue_text(d),
+                                       style=Pack(flex=1, font_family="monospace", font_size=11))
+        rows = [toga.Box(style=Pack(flex=1)), toga.Button("Close", on_press=lambda w: window.close())]
+        if links:
+            pick = toga.Selection(items=[name for name, _ in links], style=Pack(width=200))
+            rows[:0] = [toga.Label("Read about"), pick,
+                        toga.Button("Open", on_press=lambda w: webbrowser.open(dict(links)[pick.value]))]
+        title = f"{d.ip or d.mac}  {d.name or d.model or ''}".strip()
+        window = toga.Window(title=f"Issues: {title}", size=(720, 360), position=self._over_main((720, 360)))
+        window.content = toga.Box(style=Pack(direction=COLUMN, margin=12, gap=8), children=[
+            text, toga.Box(style=Pack(direction=ROW, align_items="center", gap=8), children=rows)])
+        self._show_over_main(window)
+
+    def _tip(self, index) -> str:
+        """Hover text for a table row: its device's issues, or nothing."""
+        try:
+            d = self._device(getattr(self.table.data[index], "key", None))
+        except IndexError:
+            return ""
+        if d is None or not d.issues:
+            return ""
+        return self._issue_text(d, 90) + ("\n\nDouble-click for the list" + (" and CVE pages." if core.issue_links(d) else "."))
+
+    def _install_status_tips(self):
+        """Hovering over a device lists its issues (Toga's tables have no tooltips of their own)."""
+        try:
+            if self.caps["platform"] == "macos":
+                self._status_tips_macos()
+            elif self.caps["platform"] == "windows":
+                view = self.table._impl.native
+                view.ShowItemToolTips = True
+
+                def retrieve(sender, e):  # runs after Toga's own handler has made the row
+                    if e.Item is not None:
+                        e.Item.ToolTipText = self._tip(e.ItemIndex)
+
+                view.RetrieveVirtualItem += retrieve
+                self._tip_handler = retrieve
+            elif self.caps["platform"] == "linux":
+                view = self.table._impl.native_table
+
+                def query(widget, x, y, keyboard, tooltip):
+                    found, _x, _y, _model, path, _iter = widget.get_tooltip_context(x, y, keyboard)
+                    text = self._tip(path.get_indices()[0]) if found and path else ""
+                    if not text:
+                        return False
+                    tooltip.set_text(text)
+                    widget.set_tooltip_row(tooltip, path)
+                    return True
+
+                view.set_has_tooltip(True)
+                view.connect("query-tooltip", query)
+        except Exception:  # cosmetic: Show issues… and Details still have it all
+            self._append_log("Couldn't add the hover lists:\n" + traceback.format_exc())
+
+    def _status_tips_macos(self):
+        """macOS: each row's cells carry the hover text, set as the table makes them."""
+        from rubicon.objc import NSInteger, ObjCInstance, objc_id, objc_method, send_super
+        from rubicon.objc.runtime import libobjc
+        native = self.table._impl.native_table
+        table_class = native.objc_class
+        app = self
+
+        global _TIP_TABLE
+        if _TIP_TABLE is None:
+            class OpenDiscoTipTable(table_class):
+                @objc_method
+                def tableView_viewForTableColumn_row_(self, table, column, row: int):
+                    view = send_super(__class__, self, "tableView:viewForTableColumn:row:", table, column, row,
+                                      argtypes=[objc_id, objc_id, NSInteger], restype=objc_id)
+                    if not view:
+                        return None
+                    view = ObjCInstance(view)
+                    view.toolTip = app._tip(row) or None
+                    return view
+
+            _TIP_TABLE = OpenDiscoTipTable
+        libobjc.object_setClass(native, _TIP_TABLE)
 
     # -- clipboard and hidden devices -----------------------------------------------
     def _copy(self, text, what):
@@ -1233,6 +1394,8 @@ class OpenDiscoApp(toga.App):
             self.cancel_password()
         if self.cancel_ssh_login:
             self.cancel_ssh_login()
+        if self.cancel_port_warning:
+            self.cancel_port_warning()
         if self.term:
             self.term.close_all()  # ends ssh and ping
         if self.result and self.result.mgr:

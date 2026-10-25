@@ -622,6 +622,10 @@ class Device:
     services: dict = field(default_factory=dict)  # port -> "ssh" / "https" / "http" / "open"...
     service_info: dict = field(default_factory=dict)  # port -> what answered there (banner, page title...)
     port_search: dict = field(default_factory=dict)  # the last search of its TCP ports (find_ports)
+    tftp: bool = False  # a TFTP server answered on it: TFTP recovery mode
+    # Found through another device's own tools (Scan from device): {"key", "ip", "how"}. The table
+    # lists it under that device, indented.
+    found_by: dict = field(default_factory=dict)
     port_hints: dict = field(default_factory=dict)  # "https"/"ssh" -> {source: port}, beyond discovery
     alias: dict = field(default_factory=dict)  # the temporary alias it was reached through
     direct: bool = False  # answered without an alias (old firmware answers other subnets)
@@ -762,6 +766,8 @@ class Device:
         if other.ports is not None:
             self.ports = sorted(set(self.ports or []) | set(other.ports))
         self.port_search = self.port_search or other.port_search
+        self.tftp = self.tftp or other.tftp
+        self.found_by = self.found_by or other.found_by
         self.mdns = self.mdns or other.mdns
         self.ssdp = self.ssdp or other.ssdp
         self.api = self.api or other.api
@@ -1872,6 +1878,29 @@ def upnp_port_hint(d) -> None:
             d.port_hints.setdefault(url.scheme, {})["UPnP"] = url.port or (443 if url.scheme == "https" else 80)
     except ValueError:
         pass
+
+
+def probe_tftp(ip: str, timeout: float = 1.0, port: int = 69) -> bool:
+    """Whether a TFTP server answers on ip. Ubiquiti gear in TFTP recovery mode (reset held while
+    powering up) waits there for firmware, silent to discovery. A read request for a file that
+    isn't there gets an error packet back (or data), from another port, as TFTP does."""
+    try:
+        with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as s:
+            s.settimeout(timeout)
+            s.sendto(b"\x00\x01opendisco-probe\x00octet\x00", (ip, port))
+            end = time.monotonic() + timeout
+            while time.monotonic() < end:
+                data, addr = s.recvfrom(1024)
+                if addr[0] == ip and data[:2] in (b"\x00\x03", b"\x00\x05"):  # DATA or ERROR
+                    return True
+    except OSError:  # includes the timeout
+        pass
+    return False
+
+
+def tftp_candidates(devs) -> list:
+    """Ubiquiti gear that's on the network (ARP, the wire) but silent to discovery."""
+    return [d for d in devs if d.ip and not d.ubnt_packets and d.vendor == "Ubiquiti" and _usable_ip(d.ip)]
 
 
 def probe_console_api(ip: str) -> dict:
@@ -3613,7 +3642,7 @@ def run_alias_rounds(sc: Scanner, inv: Inventory, mgr: AliasManager, plans, opts
              so a point-to-point pair isn't disturbed. Blocks with no free address are skipped.
     Round 3  blocks that stayed silent, from their other address: a lone device sitting on
              the address round 2 borrowed would have ignored us."""
-    result = {"arp": {}, "ctx": {}, "skipped": []}
+    result = {"arp": {}, "ctx": {}, "skipped": [], "tftp": set()}
 
     def occupied(seen) -> set:
         # Our own earlier aliases don't count as taken; anything that answered does.
@@ -3642,11 +3671,17 @@ def run_alias_rounds(sc: Scanner, inv: Inventory, mgr: AliasManager, plans, opts
             sc.run(max(3.0, sc.sweep_seconds() + 2.0))
         finally:
             # Read ARP before the aliases go: removing them flushes those entries.
+            heard = []
             for ip, mac in read_arp_table().items():
                 for t, alias_ip in added:
                     if ip != alias_ip and _in_any(ip, [t.network]):
                         result["arp"][ip] = mac
                         result["ctx"].setdefault(ip, alias_context(link, alias_ip, t.network))
+                        if vendor_of(mac) == "Ubiquiti" and ip not in sc.replied:
+                            heard.append(ip)
+            if heard:  # silent Ubiquiti gear: in TFTP recovery mode? Only reachable while the alias is up
+                with ThreadPoolExecutor(16) as ex:
+                    result["tftp"].update(ip for ip, ok in zip(heard, ex.map(probe_tftp, heard)) if ok)
             sc.end_alias_round()
             for t, ip in added:
                 mgr.remove(link.name, ip, t.network.prefixlen)
@@ -3861,6 +3896,16 @@ def enrich(inv: Inventory, sc: Scanner, opts, log, alias_result=None) -> None:
         if d and any(p != opts.port for p in ports):
             d.console = True  # consoles echo discovery requests from an ephemeral port
 
+    for ip in alias_result.get("tftp", ()):  # found during an alias round, while it was reachable
+        d = inv.find(ip=ip)
+        if d:
+            d.tftp = True
+    silent = [d for d in tftp_candidates(inv.devices.values()) if not d.tftp and not d.alias and not opts.listen]
+    if silent:
+        with ThreadPoolExecutor(16) as ex:
+            for d, answered in zip(silent, ex.map(lambda d: probe_tftp(d.ip), silent)):
+                d.tftp = d.tftp or answered
+
     if opts.ports or opts.deep:
         check_ports(inv.devices.values(), opts, log)
 
@@ -4062,7 +4107,7 @@ def diagnose(inv: Inventory, all_ifaces, scan_nets, opts, alias_used=(), skipped
             issues.append(("error", "LINK-LOCAL",
                            "Has a 169.254.x.x self-assigned address: it never got a DHCP lease. "
                            "Check the DHCP server, VLAN/port profile and uplink."))
-        if FALLBACK_IP in d.ips and info.get("dhcp_bound") is not True:
+        if FALLBACK_IP in d.ips and info.get("dhcp_bound") is not True and not d.tftp:  # recovery mode sits there
             issues.append(("warn", "FALLBACK-IP",
                            f"Sitting on the factory fallback address {FALLBACK_IP}, which usually means "
                            "no DHCP lease. Several devices in this state will conflict with each other."))
@@ -4132,12 +4177,20 @@ def diagnose(inv: Inventory, all_ifaces, scan_nets, opts, alias_used=(), skipped
                 advice = " Add -a to probe it through a temporary address (--sniff -a does that automatically)."
             issues.append(("note", "OTHER-SUBNET", f"Heard on the wire, outside this computer's subnets ({nets})."
                            + advice))
+        elif d.tftp:
+            issues.append(("error", "TFTP-RECOVERY",
+                           f"A TFTP server answers on {d.ip} and UBNT discovery doesn't: it's in TFTP recovery "
+                           "mode, waiting for firmware. Upload a firmware image for this model with a TFTP client "
+                           f"in binary mode (tftp -i {d.ip} put <firmware>.bin) and leave it powered until it "
+                           "reboots, which can take 10 minutes."))
         elif not heard_ubnt and not opts.listen and d.via and d.ips and d.vendor == "Ubiquiti":
             seen = "/".join(v for v in VIA_ORDER if v in d.via)
+            hint = (f" Sitting at {FALLBACK_IP} without discovery, it may be in TFTP recovery mode (its LEDs "
+                    "cycle): then it takes firmware over TFTP." if FALLBACK_IP in d.ips else "")
             issues.append(("warn", "NO-DISCOVERY",
                            f"Seen via {seen} but didn't answer UBNT discovery: discovery may be turned "
                            "off on the device, UDP 10001 filtered (firewall, client isolation), or the "
-                           "model doesn't support it."))
+                           "model doesn't support it." + hint))
         for kind, tag, standard in (("https", "HTTPS-PORT", opts.https_ports), ("ssh", "SSH-PORT", opts.ssh_ports)):
             name = "web UI" if kind == "https" else "SSH"
             said = d.said_ports(kind)
@@ -4215,26 +4268,86 @@ def _ip_sort_key(d: Device):
         return (1, 0)
 
 
+def tree_order(devices) -> list:
+    """[(device, depth)] in table order: by IP, each device followed by the ones found through it
+    (Scan from device), a level deeper."""
+    devs = sorted(devices, key=_ip_sort_key)
+    keys = {d.key for d in devs}
+    children, roots = {}, []
+    for d in devs:
+        parent = d.found_by.get("key")
+        if parent in keys and parent != d.key:
+            children.setdefault(parent, []).append(d)
+        else:
+            roots.append(d)
+    out, placed = [], set()
+
+    def walk(d, depth):
+        if d.key not in placed:
+            placed.add(d.key)
+            out.append((d, depth))
+            for child in children.get(d.key, ()):
+                walk(child, depth + 1)
+
+    for d in roots + devs:  # then any loop (each found through the next) from its first device
+        walk(d, 0)
+    return out
+
+
 def sorted_devices(inv: Inventory) -> list:
-    return sorted(inv.devices.values(), key=_ip_sort_key)
+    return [d for d, _ in tree_order(inv.devices.values())]
+
+
+def nested_ip(d: Device, depth: int) -> str:
+    """The IP as the table shows it: indented under the device it was found through."""
+    return f"{'    ' * (depth - 1)}└ {d.ip or d.mac or '-'}" if depth else d.ip
+
+
+# What the Status column says for each finding, in a word or two; Diagnostics say the rest.
+STATUS_LABELS = {
+    "IP-CONFLICT": "IP conflict", "LINK-LOCAL": "No IP address", "DEFAULT": "Factory default",
+    "LOCATING": "Locating (LED)", "NOT-SET-UP": "Not set up", "NOT-PROBED": "Not probed",
+    "OTHER-SUBNET": "Other subnet", "WIFI-AP": "This Wi-Fi's AP", "ALIAS": "Via temporary address",
+    "ALIAS-CONFLICT": "Address clash", "DAMAGED": "Damaged packets", "FALLBACK-IP": "Fallback IP",
+    "LOSS": "Missed replies", "NO-DISCOVERY": "No discovery reply", "NO-LEASE": "No DHCP lease",
+    "NO-PORTS": "No ports open", "OFF-SUBNET": "Wrong subnet", "REBOOTED": "Rebooted recently",
+    "WAN-DOWN": "WAN down", "HTTPS-PORT": "HTTPS port problem", "SSH-PORT": "SSH port problem",
+    "CVE": "CVE risk", "TFTP-RECOVERY": "TFTP recovery mode",
+}
+LEVEL_ORDER = ("ok", "note", "warn", "error")
+NVD_URL = "https://nvd.nist.gov/vuln/detail/{}"
+
+
+def status_label(tag: str) -> str:
+    return STATUS_LABELS.get(tag, tag.replace("-", " ").capitalize())
 
 
 def status_cell(d: Device) -> tuple:
-    """Plain text and coloured text for the STATUS column."""
-    parts = [(tag, level) for level, tag, _ in d.issues]
-    if d.console:
-        parts.insert(0, ("console", "note"))
-    if not parts:
-        parts = [("ok", "ok")]
-    return " ".join(t for t, _ in parts), " ".join(Style.level(t, lv) for t, lv in parts)
+    """Plain and coloured text for the Status column: the finding in a word or two, or "Multiple
+    issues" when there's more than one (Details and the issue list name them all)."""
+    if not d.issues:
+        text, level = ("Console", "note") if d.console else ("OK", "ok")
+    elif len(d.issues) == 1:
+        level, tag, _ = d.issues[0]
+        text = status_label(tag)
+    else:
+        text = f"Multiple issues ({len(d.issues)})"
+        level = max((lv for lv, _, _ in d.issues), key=LEVEL_ORDER.index)
+    return text, Style.level(text, level)
+
+
+def issue_links(d: Device) -> list:
+    """[(name, URL)] for the public write-ups its findings point to: each CVE's NVD page."""
+    ids = dict.fromkeys(m for _, _, msg in d.issues for m in re.findall(r"\bCVE-\d{4}-\d{4,}\b", msg))
+    return [(cve, NVD_URL.format(cve)) for cve in ids]
 
 
 def render_table(devs) -> str:
-    cols = [("IP", 15), ("VLAN", 4), ("VENDOR", 9), ("MAC", 17), ("MODEL", 22), ("NAME", 22), ("FIRMWARE", 16),
+    cols = [("IP", 23), ("VLAN", 4), ("VENDOR", 9), ("MAC", 17), ("MODEL", 22), ("NAME", 22), ("FIRMWARE", 16),
             ("UPTIME", 7), ("VIA", 24)]
     rows = []
-    for d in devs:
-        vals = [d.ip or "-", d.vlan_label or "?", d.vendor or "?", d.mac or "-", d.model or "?", d.name, d.firmware,
+    for d, depth in tree_order(devs):
+        vals = [nested_ip(d, depth) or "-", d.vlan_label or "?", d.vendor or "?", d.mac or "-", d.model or "?", d.name, d.firmware,
                 fmt_uptime(d.info.get("uptime")), ",".join(v for v in VIA_ORDER if v in d.via)]
         rows.append(([_trunc(v, w) for v, (_, w) in zip(vals, cols)], status_cell(d)))
     widths = [max([len(h)] + [len(r[0][i]) for r in rows]) for i, (h, _) in enumerate(cols)]
@@ -4305,6 +4418,8 @@ def render_details(d: Device) -> str:
         row("VLAN", f"{d.vlan_label} ({how})")
     if d.seen_on:
         row("Answered on", ", ".join(sorted(d.seen_on)))
+    if d.found_by:
+        row("Found through", f"{d.found_by.get('ip', '?')}" + (f" ({d.found_by['how']})" if d.found_by.get("how") else ""))
     if d.lldp:
         bits = [d.lldp.get(k) for k in ("system", "description") if d.lldp.get(k)]
         if d.lldp.get("mgmt_ip"):
@@ -4341,7 +4456,7 @@ def render_details(d: Device) -> str:
             row("Console API", "  ".join(bits))
         if d.api.get("apps"):
             row("Console apps", ", ".join(d.api["apps"]))
-    for kind, label in (("https", "HTTPS port"), ("http", "HTTP port"), ("ssh", "SSH port")):
+    for kind, label in (("http", "HTTP port"), ("https", "HTTPS port"), ("ssh", "SSH port")):
         said = d.said_ports(kind)
         if said:
             row(label, "; ".join(f"{port} ({PORT_SOURCES[source]})" for source, port in said.items()))
@@ -4492,6 +4607,7 @@ def device_to_dict(d: Device) -> dict:
         "https_port": d.said_port("https"), "http_port": d.said_port("http"), "ssh_port": d.said_port("ssh"),
         "port_sources": {kind: d.said_ports(kind) for kind in ("https", "http", "ssh") if d.said_ports(kind)} or None,
         "alias": d.alias or None, "answered_without_alias": d.direct,
+        "found_through": {k: v for k, v in d.found_by.items() if k != "key"} or None,
         "vlan": int(d.vlan_label) if d.vlan_label.isdigit() else None,
         "vlan_tagged": bool(d.vlan), "vlan_parent": d.vlan_parent or None, "answered_on": sorted(d.seen_on), "lldp": d.lldp or None, "wifi_ap": d.wifi or None,
         "issues": [{"level": lv, "tag": t, "message": m} for lv, t, m in d.issues],
@@ -4589,7 +4705,8 @@ def parse_args(argv=None):
     g.add_argument("--deep", action="store_true", help="--ports plus the UniFi OS console API")
     g.add_argument("--all-ports", action="store_true",
                    help="check every TCP port on the TARGET addresses given and name what answers on each "
-                        "(SSH, HTTPS, HTTP...), the way a port scanner would; about 20-60s a device")
+                        "(SSH, HTTPS, HTTP...), the way a port scanner would; about 20-60s a device. Intrusion "
+                        "prevention may report it as a port scan")
     g.add_argument("--https-port", action="append", default=[], metavar="PORTS",
                    help="the standard web UI port(s), e.g. 8443: gear reporting another is flagged, and "
                         "--ports/--deep check them")
@@ -4833,12 +4950,12 @@ def result_to_dict(res: ScanResult) -> dict:
     }
 
 
-EXPORT_COLUMNS = ("IP", "VLAN", "Vendor", "MAC", "Model", "Name", "Firmware", "HTTPS", "HTTP", "SSH", "Uptime",
+EXPORT_COLUMNS = ("IP", "VLAN", "Vendor", "MAC", "Model", "Name", "Firmware", "HTTP", "HTTPS", "SSH", "Uptime",
                   "Via", "Status")
 
 
 def port_cell(d: Device, kind: str) -> str:
-    """The HTTPS, HTTP or SSH column: the port the device reports, with a deep check's verdict
+    """The HTTP, HTTPS or SSH column: the port the device reports, with a deep check's verdict
     (✓ that service answers there, ✗ nothing does), then any other port it was found on."""
     reported = d.said_port(kind)
     elsewhere = [f"{p} ✓" for p, k in sorted(d.services.items()) if k == kind and p != reported]
@@ -4854,7 +4971,7 @@ def port_cell(d: Device, kind: str) -> str:
 def device_row(d: Device) -> list:
     """The values the table, CSV and HTML exports show for a device."""
     return [d.ip or "", d.vlan_label, d.vendor, d.mac or "", d.model, d.name, d.firmware,
-            port_cell(d, "https"), port_cell(d, "http"), port_cell(d, "ssh"), fmt_uptime(d.info.get("uptime")),
+            port_cell(d, "http"), port_cell(d, "https"), port_cell(d, "ssh"), fmt_uptime(d.info.get("uptime")),
             ",".join(v for v in VIA_ORDER if v in d.via), status_cell(d)[0]]
 
 
@@ -4863,9 +4980,10 @@ def export_csv(res: ScanResult) -> str:
     import io
     out = io.StringIO()
     writer = csv.writer(out)
-    writer.writerow(EXPORT_COLUMNS + ("Diagnostics",))
+    writer.writerow(EXPORT_COLUMNS + ("Diagnostics", "Found through"))
     for d in res.devices:
-        writer.writerow(device_row(d) + [" | ".join(f"[{tag}] {msg}" for _, tag, msg in d.issues)])
+        writer.writerow(device_row(d) + [" | ".join(f"[{tag}] {msg}" for _, tag, msg in d.issues),
+                                         d.found_by.get("ip", "")])
     return out.getvalue()
 
 
@@ -4874,11 +4992,17 @@ def export_html(res: ScanResult) -> str:
     from html import escape
     colors = {"error": "#c62828", "warn": "#b26a00", "note": "#1565c0"}
     rows = []
-    for d in res.devices:
-        cells = "".join(f"<td>{escape(str(v))}</td>" for v in device_row(d)[:-1])
-        tags = " ".join(f'<span style="color:{colors.get(lv, "#2e7d32")}">{escape(tag)}</span>'
-                        for lv, tag, _ in d.issues) or '<span style="color:#2e7d32">ok</span>'
-        issues = "".join(f"<li><b>{escape(tag)}</b> {escape(msg)}</li>" for _, tag, msg in d.issues)
+    for d, depth in tree_order(res.devices):
+        values = device_row(d)[:-1]
+        values[0] = nested_ip(d, depth)
+        cells = "".join(f"<td>{escape(str(v)).replace(' ', '&nbsp;') if n == 0 else escape(str(v))}</td>"
+                        for n, v in enumerate(values))
+        tags = ", ".join(f'<span style="color:{colors.get(lv, "#2e7d32")}">{escape(status_label(tag))}</span>'
+                         for lv, tag, _ in d.issues) or '<span style="color:#2e7d32">OK</span>'
+        links = dict(issue_links(d))
+        issues = "".join(f"<li><b>{escape(status_label(tag))}</b> "
+                         + re.sub(r"\bCVE-\d{4}-\d{4,}\b", lambda m: f'<a href="{links[m.group(0)]}">{m.group(0)}</a>',
+                                  escape(msg)) + "</li>" for _, tag, msg in d.issues)
         rows.append(f"<tr>{cells}<td>{tags}</td></tr>"
                     + (f'<tr class="issues"><td colspan="{len(EXPORT_COLUMNS)}"><ul>{issues}</ul></td></tr>'
                        if issues else ""))
@@ -5272,6 +5396,9 @@ def main(argv=None) -> int:
     if not isinstance(res, ScanResult):
         return res
     if opts.all_ports:
+        log("Note: to intrusion prevention (UniFi's IPS / Threat Management, a firewall's port-scan detection) "
+            "this looks like a port scan from this computer: it may raise an alert, a false alarm here, or block "
+            "this computer for a while.")
         for ip in expand_targets(opts.targets, lambda m: sys.exit(f"error: {m}"))[0]:
             d = res.inv.find(ip=ip) or res.inv.lookup(ip=ip)  # checked even if it didn't answer discovery
             find_ports(res, d, "all", log, port_progress)
