@@ -52,6 +52,7 @@ from dataclasses import dataclass, field
 
 from opendisco import __version__  # one version for the app, the CLI and the installers
 from opendisco import vulns
+from opendisco import health  # the latest firmware and latency (it imports core back)
 
 UBNT_PORT = 10001
 UBNT_MCAST = "233.89.188.1"
@@ -650,6 +651,7 @@ class Device:
     last_seen: float = field(default_factory=time.time)
     issues: list = field(default_factory=list)  # (level, tag, message)
     cves: list | None = None  # known CVEs its firmware matches (vulns.check); None = not checked
+    health: dict = field(default_factory=dict)  # health.py: "firmware" (its latest release), "latency"
 
     def add_ip(self, ip: str | None) -> None:
         if ip and ip != "0.0.0.0" and ip not in self.ips:
@@ -779,6 +781,7 @@ class Device:
         self.direct = self.direct or other.direct
         self.seen_on |= other.seen_on
         self.lldp = self.lldp or other.lldp
+        self.health = {**other.health, **self.health}
         self.wifi = self.wifi or other.wifi
         if self.vlan is None:
             self.vlan, self.vlan_parent = other.vlan, other.vlan_parent
@@ -4389,6 +4392,7 @@ def diagnose(inv: Inventory, all_ifaces, scan_nets, opts, alias_used=(), skipped
                            f"Answered {answered} of {sent} rounds of discovery probes while in view: "
                            f"{sent - answered} went unanswered. On this computer's own subnet that's packet loss: "
                            "Wi-Fi interference, a bad cable or port, a busy link, or a busy device."))
+        issues += health.issues(d)
         d.cves = vulns.check(d)
         if d.cves:
             level, msg = vulns.issue(d.cves)
@@ -4473,6 +4477,7 @@ STATUS_LABELS = {
     "NO-PORTS": "No ports open", "OFF-SUBNET": "Wrong subnet", "REBOOTED": "Rebooted recently",
     "WAN-DOWN": "WAN down", "HTTPS-PORT": "HTTPS port problem", "SSH-PORT": "SSH port problem",
     "CVE": "CVE risk", "TFTP-RECOVERY": "TFTP recovery mode",
+    "HIGH-LATENCY": "High latency", "PING-LOSS": "Packet loss",
 }
 LEVEL_ORDER = ("ok", "note", "warn", "error")
 NVD_URL = "https://nvd.nist.gov/vuln/detail/{}"
@@ -4645,6 +4650,8 @@ def render_details(d: Device) -> str:
     if d.unknown_tlvs:
         for n, (t, v) in enumerate(sorted(d.unknown_tlvs.items())):
             row("Unknown TLVs" if n == 0 else "", f"{t} = {v[:64]}{'...' if len(v) > 64 else ''}")
+    for label, text in health.detail_rows(d):
+        row(label, text)
     if d.cves:
         out.append(f"  Known CVEs ({len(d.cves)}, from the {vulns.list_label()}):")
         for m, line in zip(d.cves, vulns.detail_lines(d.cves)):
@@ -4787,6 +4794,7 @@ def device_to_dict(d: Device) -> dict:
         "vlan_tagged": bool(d.vlan), "vlan_parent": d.vlan_parent or None, "answered_on": sorted(d.seen_on), "lldp": d.lldp or None, "wifi_ap": d.wifi or None,
         "issues": [{"level": lv, "tag": t, "message": m} for lv, t, m in d.issues],
         "cves": vulns.to_dict(d.cves) if d.cves is not None else None,  # None: not checked
+        **health.to_dict(d),
         "last_packet_hex": d.last_packet.hex() if d.last_packet else None,
         "packets_received": d.ubnt_packets,
         "packets": [packet_to_dict(r) for r in list(d.packets)[-10:]],
@@ -4908,6 +4916,11 @@ def parse_args(argv=None):
     g.add_argument("--rate", type=int, default=500, metavar="N", help="sweep rate, hosts/second (default 500)")
     g.add_argument("--oui", action="append", default=[], metavar="XXXXXX",
                    help="extra Ubiquiti OUI to recognise, e.g. 245A4C (repeatable)")
+    g.add_argument("--no-latency", dest="latency", action="store_false",
+                   help="don't ping the devices found afterwards to measure their latency")
+    g.add_argument("--no-firmware-check", dest="firmware_check", action="store_false",
+                   help="don't ask Ubiquiti's firmware server for the latest release of each device's firmware "
+                        "(-v, --json and --export show it; the answers are kept a day)")
     g.add_argument("--port", type=int, default=UBNT_PORT, help=argparse.SUPPRESS)
     o = p.add_argument_group("output")
     o.add_argument("-v", "--verbose", action="store_true", help="per-device details and diagnostics")
@@ -5143,8 +5156,8 @@ def result_to_dict(res: ScanResult) -> dict:
     }
 
 
-EXPORT_COLUMNS = ("IP", "VLAN", "Vendor", "MAC", "Model", "Name", "Firmware", "HTTP", "HTTPS", "SSH", "Uptime",
-                  "Via", "Status")
+EXPORT_COLUMNS = ("IP", "VLAN", "Vendor", "MAC", "Model", "Name", "Firmware", "Latency", "HTTP", "HTTPS", "SSH",
+                  "Uptime", "Via", "Status")
 
 
 def port_cell(d: Device, kind: str) -> str:
@@ -5163,9 +5176,9 @@ def port_cell(d: Device, kind: str) -> str:
 
 def device_row(d: Device) -> list:
     """The values the table, CSV and HTML exports show for a device."""
-    return [d.ip or "", d.vlan_label, d.vendor, d.mac or "", d.model, d.name, d.firmware,
-            port_cell(d, "http"), port_cell(d, "https"), port_cell(d, "ssh"), fmt_uptime(d.info.get("uptime")),
-            ",".join(v for v in VIA_ORDER if v in d.via), status_cell(d)[0]]
+    return [d.ip or "", d.vlan_label, d.vendor, d.mac or "", d.model, d.name, health.firmware_cell(d),
+            health.latency_cell(d), port_cell(d, "http"), port_cell(d, "https"), port_cell(d, "ssh"),
+            fmt_uptime(d.info.get("uptime")), ",".join(v for v in VIA_ORDER if v in d.via), status_cell(d)[0]]
 
 
 def export_csv(res: ScanResult) -> str:
@@ -5173,10 +5186,10 @@ def export_csv(res: ScanResult) -> str:
     import io
     out = io.StringIO()
     writer = csv.writer(out)
-    writer.writerow(EXPORT_COLUMNS + ("Diagnostics", "Found through"))
+    writer.writerow(EXPORT_COLUMNS + ("Diagnostics", "Found through", "Latest firmware"))
     for d in res.devices:
         writer.writerow(device_row(d) + [" | ".join(f"[{tag}] {msg}" for _, tag, msg in d.issues),
-                                         d.found_by.get("ip", "")])
+                                         d.found_by.get("ip", ""), health.latest_version(d)])
     return out.getvalue()
 
 
@@ -5597,6 +5610,7 @@ def main(argv=None) -> int:
     res = run_scan(opts, log, progress)
     if not isinstance(res, ScanResult):
         return res
+    health.check_scan(res, opts, log)  # latency, and the latest firmware where it's shown
     if opts.all_ports:
         log("Note: to intrusion prevention (UniFi's IPS / Threat Management, a firewall's port-scan detection) "
             "this looks like a port scan from this computer: it may raise an alert, a false alarm here, or block "
