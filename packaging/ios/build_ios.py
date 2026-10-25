@@ -39,8 +39,8 @@ NEEDED = ("src", "pyproject.toml", "LICENSE", "CHANGELOG.md")
 SKIP = shutil.ignore_patterns("__pycache__", "*.pyc", ".DS_Store")
 # In src/opendisco, left out of the iOS app (app.py and core.py import none of them there)
 DESKTOP_ONLY = ("update.py", "devicetools.py", "devicegui.py", "sshrun.py", "credstore.py", "terminal.py",
-                "winnet.py", "resources/xterm", "resources/get-npcap.ps1", "resources/update-windows.ps1",
-                "resources/icon.ico", "resources/icon.icns")
+                "winnet.py", "phone_android.py", "resources/xterm", "resources/get-npcap.ps1",
+                "resources/update-windows.ps1", "resources/icon.ico", "resources/icon.icns")
 PROJECT = MIRROR / "build" / "opendisco" / "ios" / "xcode"
 TEAM = "DGUTLQN548"
 APP_ID = "com.michaelfroehlke.opendisco"

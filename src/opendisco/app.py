@@ -19,7 +19,7 @@ import toga
 from toga.style import Pack
 from toga.style.pack import COLUMN, ROW
 
-from opendisco import FULL_NAME, __version__, core, vulns
+from opendisco import FULL_NAME, __version__, core, phone, vulns
 
 if core.platform_name() != "ios":  # left out of the iOS app (packaging/ios/build_ios.py)
     from opendisco import update
@@ -145,18 +145,19 @@ class OpenDiscoApp(toga.App):
         self.multicast_lock = self._android_multicast_lock()
 
         mobile = self.caps["mobile"]
-        ios = self.caps["platform"] == "ios"  # its own screens: iosgui
+        # Phones get screens of their own (phone.py) where a phone_<platform>.py gives the native parts.
+        self.phone_ui = phone_ui = phone.supported(self.caps["platform"])
         self.mode = toga.Selection(items=[m[0] for m in self.modes], on_change=self.on_mode,
                                    style=Pack(flex=1) if mobile else Pack(width=190))
         self.port_names = self._ports()  # what the Port list shows -> the interface name
         self.port = toga.Selection(items=list(self.port_names), style=Pack(width=230))
         self.start_button = toga.Button("Start", on_press=self.on_start, style=Pack(width=90))
         self.stop_button = toga.Button("Stop", on_press=self.on_stop, enabled=False,
-                                       style=Pack(flex=1) if ios else Pack(width=90))
+                                       style=Pack(flex=1) if phone_ui else Pack(width=90))
         self.aliases = toga.Switch("Probe listed networks (temporary addresses)", enabled=self.caps["aliases"])
         self.aliases_choice = None  # the switch as it was set, while a mode that needs it on is picked
         self.deep = toga.Switch("Deep checks (ports, console API)",
-                                value=ios and bool(self.settings.get("deep_checks")))  # iOS: kept in Settings
+                                value=phone_ui and bool(self.settings.get("deep_checks")))  # phones: in Settings
         # GTK draws − and + beside the number, so on Linux the box takes its own width (for "300")
         # instead of a fixed one, which pushed the + outside the box.
         gtk = self.caps["platform"] == "linux"
@@ -171,7 +172,7 @@ class OpenDiscoApp(toga.App):
 
         self.find_buttons = []
         if mobile:
-            if self.caps["platform"] == "ios":  # Toga has no Table there: the address over the model and name
+            if phone_ui:  # the address over the model and name, a row per device
                 self.table = toga.DetailedList(accessors=("ip", "summary", "icon"), on_select=self.on_select,
                                                style=Pack(flex=1))
             else:
@@ -198,14 +199,13 @@ class OpenDiscoApp(toga.App):
         tabs = [("Details", self.details), ("Packets", self.packets)]
         self.term = None
         self.console = None  # iOS: the Tools tab's output
-        if ios:  # ping, the port finder and more, in place of On the wire (a phone hears no wire)
-            from opendisco import iosgui
-            tabs.append(("Tools", iosgui.tools(self)))
+        if phone_ui:  # ping, the port finder and more, in place of On the wire (a phone hears no wire)
+            tabs.append(("Tools", phone.tools(self)))
         elif not mobile:  # SSH and ping sessions to devices
             from opendisco import terminal
             self.term = terminal.TerminalPane(toga, Pack)
             tabs.append(("Terminal", self.term.box))
-        if not ios:
+        if not phone_ui:
             tabs.append(("On the wire", self.wire))
         tabs += [("Notes", self.notes), ("Log", self.log)]
         if self.caps["aliases"]:
@@ -227,8 +227,8 @@ class OpenDiscoApp(toga.App):
         # Phones' title bars have room for the short name only.
         title = f"{self.formal_name if mobile else FULL_NAME} {__version__}"
         self.main_window = toga.MainWindow(title=title, size=(1250, 780))
-        if ios:  # the device list; each device gets a page of its own
-            self.main_window.content = iosgui.main_screen(self)
+        if phone_ui:  # the device list; each device gets a page of its own
+            self.main_window.content = phone.main_screen(self)
         else:
             controls = [toga.Label("Mode"), self.mode]
             if not mobile:
@@ -261,9 +261,9 @@ class OpenDiscoApp(toga.App):
             ])
         self.main_content = self.main_window.content
         self.on_exit = self.handle_exit
-        if ios:  # no menus there: Settings, Export and the scan's Notes and Log are in the title bar
-            iosgui.fit(self)
-        else:
+        if phone_ui:  # Settings, Export and the scan's Notes and Log are in the title bar
+            phone.fit(self)
+        if self.caps["platform"] != "ios":  # iOS shows no menus
             self._add_app_commands()
         if self.caps["platform"] == "android":
             self._fit_phone_table()
@@ -443,33 +443,9 @@ class OpenDiscoApp(toga.App):
             pass  # cosmetic
 
     def _fit_safe_area(self, *args, **kwargs):
-        """iOS: keep the content inside the screen's rounded corners and clear of the home bar
-        (and, turned sideways, the camera cutout). Toga lays it out to the very edges, where the
-        corners cut off Export and the status line."""
-        if self.caps["platform"] != "ios":
-            return
-        try:
-            inset = self.main_window._impl.native.safeAreaInsets
-            style = self.main_content.style
-            style.margin_bottom = max(10, int(inset.bottom))
-            style.margin_left, style.margin_right = max(10, int(inset.left)), max(10, int(inset.right))
-        except Exception:
-            pass  # cosmetic
-
-    def _keep_selection(self, key):
-        """iOS: the list forgets which row was tapped whenever a row changes, and with it which
-        device Tools works on: select the same device again."""
-        if key is None or self.caps["platform"] != "ios":
-            return
-        index = next((i for i, row in enumerate(self.table.data) if getattr(row, "key", None) == key), None)
-        if index is None:
-            return
-        try:
-            from rubicon.objc import ObjCClass
-            path = ObjCClass("NSIndexPath").indexPathForRow(index, inSection=0)
-            self.table._impl.native.selectRowAtIndexPath(path, animated=False, scrollPosition=0)  # no scrolling
-        except Exception:
-            pass
+        """Phones: keep the content clear of the screen's rounded corners, home bar and cutouts."""
+        if self.phone_ui:
+            phone.native(self).fit_safe_area(self)
 
     def _over_main(self, size):
         """Where a window of this size sits centred over the main window, on whatever screen
@@ -684,7 +660,8 @@ class OpenDiscoApp(toga.App):
                         setattr(row, attr, value)
         else:
             self.table.data = [dict(values, key=key) for key, values in rows]
-        self._keep_selection(selected)
+        if self.phone_ui:  # iOS forgets the tapped row whenever a row changes
+            phone.native(self).keep_selection(self, selected)
 
     @staticmethod
     def _phone_row(d) -> dict:
@@ -742,9 +719,8 @@ class OpenDiscoApp(toga.App):
             self._show_packets(d, force=True)
             if self.term:  # its session, if it has one; the others keep running
                 self.term.show_device(d.key, d.ip or d.mac or "this device")
-            if self.caps["platform"] == "ios":  # its own page
-                from opendisco import iosgui
-                iosgui.show_device(self, d)
+            if self.phone_ui:  # its own page
+                phone.show_device(self, d)
             elif self.tabs.current_tab.text not in ("Details", "Packets", "Terminal"):
                 self.tabs.current_tab = "Details"
 
@@ -1205,15 +1181,13 @@ class OpenDiscoApp(toga.App):
         blank line before each tool's run)."""
         self.status.text = text
         if self.console is not None:
-            from opendisco import iosgui
-            iosgui.say(self, ("\n" if begins and self.console.value else "") + text)
+            phone.say(self, ("\n" if begins and self.console.value else "") + text)
 
     def _update_find_buttons(self):
         """Phones: the Find buttons act on the device last tapped, once a scan has finished. (iOS:
         all of Tools.)"""
-        if self.caps["platform"] == "ios":
-            from opendisco import iosgui
-            iosgui.update_tools(self)
+        if self.phone_ui:
+            phone.update_tools(self)
             return
         if not self.find_buttons:
             return
@@ -1223,7 +1197,7 @@ class OpenDiscoApp(toga.App):
             button.enabled = idle
 
     def on_find_button(self, widget, **kwargs):
-        if self.finding and self.caps["platform"] == "ios":  # the button of the search reads Stop
+        if self.finding and self.phone_ui:  # the button of the search reads Stop
             self.on_stop(widget)
             return
         d = self._selected_device()
@@ -1343,9 +1317,8 @@ class OpenDiscoApp(toga.App):
                 board = Gtk.Clipboard.get(Gdk.SELECTION_CLIPBOARD)
                 board.set_text(text, -1)
                 board.store()
-            elif self.caps["platform"] == "ios":
-                from opendisco import iosgui
-                iosgui.copy_text(text)
+            elif self.phone_ui:
+                phone.native(self).copy_text(text)
             else:
                 raise NotImplementedError
             self.status.text = f"Copied {what} {text}"
@@ -1390,12 +1363,11 @@ class OpenDiscoApp(toga.App):
             return
         name = f"opendisco-scan-{time.strftime('%Y%m%d-%H%M')}.html"
         try:
+            if self.phone_ui:  # iOS: the share sheet saves it to Files or sends it
+                phone.native(self).export(self, name)
+                return
             if self.caps["platform"] == "android":  # Toga has no save dialog there: it returned nothing
                 self.status.text = f"Saved {self._save_to_downloads(name, core.export_text(self.result, '.html'))}"
-                return
-            if self.caps["platform"] == "ios":  # nor there: the share sheet saves it to Files or sends it
-                from opendisco import iosgui
-                iosgui.share(self, iosgui.export_file(self, name))
                 return
             path = await self.main_window.dialog(toga.SaveFileDialog(
                 "Export results (.html opens on any phone; .csv, .json)", name, file_types=["html", "csv", "json"]))
@@ -1521,9 +1493,8 @@ class OpenDiscoApp(toga.App):
         """A small window over the main one; on phones, which have one window, a page shown in
         place of the main window's content (iOS: pushed over it, with a back button). Returns what
         closes it. on_close runs when it's closed from its title bar."""
-        if self.caps["platform"] == "ios":
-            from opendisco import iosgui
-            return iosgui.push_panel(self, title, content)
+        if self.phone_ui:
+            return phone.push_panel(self, title, content)
         if self.caps["mobile"]:
             page = toga.Box(style=Pack(direction=COLUMN, margin=12, gap=10), children=[
                 toga.Label(title, style=Pack(font_weight="bold", font_size=18)), content])
@@ -1593,7 +1564,7 @@ class OpenDiscoApp(toga.App):
         switches = [toga.Switch(text, value=self.settings.get(key, True),
                                 on_change=lambda widget, key=key, **kwargs: changed(widget, key))
                     for key, text in SETTINGS.items() if key != "check_app_updates" or self.caps["updates"]]
-        if self.caps["platform"] == "ios":  # the scan buttons there have no options beside them
+        if self.phone_ui:  # the scan buttons there have no options beside them
             def deep(widget, **kwargs):
                 self.deep.value = widget.value
                 changed(widget, "deep_checks")
