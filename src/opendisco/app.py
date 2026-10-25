@@ -6,6 +6,7 @@ Windows can't capture traffic, add addresses or tag VLANs. The iOS app doesn't u
 (Apple allows installs from the App Store, TestFlight or Xcode only) and has no SSH tools.
 """
 import asyncio
+import hashlib
 import json
 import re
 import shutil
@@ -69,12 +70,13 @@ SETTINGS = {"check_app_updates": "Check for OpenDisco updates when opening",
 # What settings.json keeps; "update" remembers an update while the app restarts into it,
 # "deep_checks" is iOS's Deep checks switch (in Settings there) and "sweep_subnets" Settings' list
 # of subnets every scan also sweeps (records.SWEEP_KEY).
-# The terms of use, agreed to the first time each version opens: the version and when.
+# The terms of use, agreed to the first time each version opens: kept as the version, when (UTC)
+# and the SHA-256 of the text shown. TERMS.md at the top of the repository is the same file.
 TERMS_KEY = "terms_accepted"
 TERMS_FILE = Path(__file__).parent / "resources" / "TERMS.md"
-TERMS_TITLE = "Terms of Use"
-TERMS_PROMPT = "OpenDisco opens once these terms are agreed to. They're shown again after each update."
-TERMS_IOS = "To decline, close OpenDisco and delete it."
+TERMS_TITLE = "OpenDisco Terms of Use"
+TERMS_PROMPT = 'Selecting "I agree" accepts these terms, including the sections on risk, liability, indemnity and release.'
+TERMS_IOS = "Anyone who does not agree must close OpenDisco and delete it from this device."
 TERMS_AGREE, TERMS_QUIT = "I agree", "Quit"
 SAVED_SETTINGS = ("hidden", "ssh_user", "skip_port_warning", "device_logins", *SETTINGS, "update", "deep_checks",
                   records.SWEEP_KEY, TERMS_KEY)
@@ -117,8 +119,10 @@ def _menu_target_class():
 
 
 def terms_text() -> str:
-    """The terms of use as plain text, for this version: TERMS.md without its Markdown headings' #."""
+    """The terms of use as plain text, for this version: TERMS.md without its title (the window
+    shows it) and its Markdown headings' #."""
     text = TERMS_FILE.read_text(encoding="utf-8").replace("{version}", __version__)
+    text = re.sub(r"\A#[^\n]*\n+", "", text)
     return re.sub(r"^#+\s*", "", text, flags=re.MULTILINE)
 
 
@@ -356,8 +360,12 @@ class OpenDiscoApp(toga.App):
             command.enabled = False
         close = []
 
+        text = terms_text()
+
         def agreed(widget, **kwargs):
-            self.settings[TERMS_KEY] = {"version": __version__, "agreed": time.strftime("%Y-%m-%d %H:%M:%S %z")}
+            self.settings[TERMS_KEY] = {"version": __version__,
+                                        "agreed": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+                                        "sha256": hashlib.sha256(text.encode("utf-8")).hexdigest()}
             self._save_settings()
             self.terms_waiting = False
             for command, enabled in held.items():
@@ -371,13 +379,15 @@ class OpenDiscoApp(toga.App):
             self.loop.call_later(0.3, self._fit_safe_area)
 
         agree = toga.Button(TERMS_AGREE, on_press=agreed)
-        buttons = [toga.Box(style=Pack(flex=1)), agree]
-        if not ios:
-            buttons.insert(1, toga.Button(TERMS_QUIT, on_press=lambda widget, **kwargs: self.request_exit()))
+        buttons = [agree]
+        if not ios:  # in each system's order: Windows puts going ahead first
+            leave = toga.Button(TERMS_QUIT, on_press=lambda widget, **kwargs: self.request_exit())
+            buttons = [agree, leave] if self.caps["platform"] == "windows" else [leave, agree]
+        buttons.insert(0, toga.Box(style=Pack(flex=1)))
         width = 46 if self.caps["mobile"] else 110
         page = toga.Box(style=Pack(direction=COLUMN, flex=1, margin=14, gap=10), children=[
             toga.Label(TERMS_TITLE, style=Pack(font_weight="bold", font_size=18)),
-            toga.MultilineTextInput(value=terms_text(), readonly=True, style=Pack(flex=1)),
+            toga.MultilineTextInput(value=text, readonly=True, style=Pack(flex=1)),
             toga.Label(textwrap.fill(TERMS_PROMPT + (f" {TERMS_IOS}" if ios else ""), width)),
             toga.Box(style=Pack(direction=ROW, gap=8), children=buttons)])
         if self.phone_ui:
@@ -2174,7 +2184,7 @@ class OpenDiscoApp(toga.App):
         finish = toga.Box(style=Pack(direction=ROW), children=[toga.Box(style=Pack(flex=1)),
                                                               toga.Button("Done", on_press=done)])
         if self.caps["mobile"]:  # (desktops: Help > Terms of Use…)
-            finish.insert(0, toga.Button(TERMS_TITLE, on_press=self.terms))
+            finish.insert(0, toga.Button("Terms of Use", on_press=self.terms))
         size = (760, 740) if self.caps["aliases"] else (560, 480)
         room = self._screen_height()
         scrolls = bool(room) and room < size[1] + 40
