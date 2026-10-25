@@ -14,6 +14,13 @@ here runs in a worker thread.
 - A new login goes into the same file, its password hashed the way the device hashes the one
   it has now (airOS uses MD5-crypt), and only after that hash is checked against the current
   password.
+- Config backups (every family but UniFi, whose controller keeps its config): the device's
+  config file, kept in the app's data folder by MAC with the time it was taken, and uploaded
+  again (Restore) only to the same model. airMAX, airFiber and LTU keep theirs in
+  /tmp/system.cfg; EdgeRouters in /config/config.boot, which is loaded and committed through
+  EdgeOS's own config commands.
+- Reboot, Locate (the LED blinks: UniFi access points and switches only), and Scan from a
+  device given by its address, for devices the app hasn't found itself (over a VPN).
 """
 import hashlib
 import json
@@ -70,14 +77,66 @@ UPDATE_LOG = "/tmp/opendisco-update.log"
 CONFIG_LOG = "/tmp/opendisco-config.log"
 STAGED_CONFIG = "/tmp/system.cfg.opendisco"  # the new config arrives here first, then replaces it at once
 
+# Config backups and uploads, by the kind of config file a family keeps (config_kind):
+#  airos:  airMAX, as above.
+#  isp:    airFiber (classic, 60 and 60 XG/HD), LTU and GigaBeam: the same /tmp/system.cfg, which
+#          the UISP Help Center gives for all of them ("ISP Wireless - Reset Device to Factory
+#          Default Settings": "cp /usr/etc/system.cfg /tmp/system.cfg; save; reboot" for airMAX,
+#          airFiber and LTU). Save and Apply only where the device has airOS's cfgmtd and
+#          rc.softrestart, checked on it first.
+#  edgeos: EdgeRouter. It boots from /config/config.boot ("EdgeRouter - Archiving and Managing
+#          the Configuration Files", UISP Help Center): Save writes that file, for the next boot;
+#          Apply loads it, commits and saves (the article's configure; load; commit; save),
+#          through vyatta-cfg-cmd-wrapper, EdgeOS's config commands for scripts, whose begin,
+#          load, commit, save, discard and end map one to one onto them (Vyatta's
+#          scripts/vyatta-cfg-cmd-wrapper and vyatta-load-config.pl).
+CONFIG_FILES = {"airos": AIROS_CONFIG, "isp": AIROS_CONFIG, "edgeos": "/config/config.boot"}
+CONFIG_NAMES = {"airos": "system.cfg", "isp": "system.cfg", "edgeos": "config.boot"}
+# airFiber classic (AF24, AF5...), airFiber 60 (GP), airFiber 60 XG/HD (AF60), GigaBeam (GBE), by
+# the platform their firmware string starts with; LTU by its platform or model name.
+ISP_PLATFORMS = {"AF24", "AF24HD", "AF5", "AF5U", "AF5X", "AF2X", "AF3X", "AF4X", "AF11FX", "GP", "AF60", "GBE"}
+EDGEOS_CONFIG = "/config/config.boot"
+EDGEOS_STAGED = "/tmp/opendisco-config.boot"
+EDGEOS_SCRIPT = "/tmp/opendisco-config.sh"
+EDGEOS_WRAPPER = "/opt/vyatta/sbin/vyatta-cfg-cmd-wrapper"
+EDGEOS_MARK = "vyatta-config-version"  # EdgeOS's load asks at a terminal before loading a file without it
+# Reboot, by family:
+#  airos, isp: reboot (the UISP Help Center article above: "...; save; reboot").
+#  edgeos:     sudo /sbin/reboot, which EdgeOS's own "reboot now" runs (vyatta-op's templates/reboot/now,
+#              scripts/vyatta-reboot.pl); the admin login may use sudo without a password.
+#  unifi:      syswrapper.sh restart, which the controller's restart runs (ubnt-systool reboot, in
+#              UniFi's /usr/bin/syswrapper.sh; it does nothing while the device is busy upgrading).
+#  unifi-os:   reboot (UniFi OS is Debian; the root login).
+REBOOT = {"airos": "reboot", "isp": "reboot", "edgeos": "sudo -n /sbin/reboot", "unifi": "syswrapper.sh restart",
+          "unifi-os": "reboot"}
+REBOOT_LOG = "/tmp/opendisco-reboot-$(id -u).log"  # one per login: /tmp is shared, and a file of another's can't be replaced
+# Locate: the LED blinks until it's stopped. Only UniFi access points and switches have a command
+# for it that's known: syswrapper.sh set-locate / unset-locate, what the UniFi controller runs
+# (UniFi's /usr/bin/syswrapper.sh), which also sets /proc/ubnthal/status/IsLocated (the
+# "locating" its discovery replies report). airOS, EdgeOS and UniFi OS have none documented.
+LOCATE = {"unifi": ("syswrapper.sh set-locate", "syswrapper.sh unset-locate")}
+LOCATE_STATE = "/proc/ubnthal/status/IsLocated"
+BACKUP_FOLDER = "config-backups"
+BACKUP_ROOT = None  # the backups' folder: the GUI sets it to <its data folder>/config-backups
+# The EdgeSwitch family (by its firmware platform), whose CLI isn't a shell: its config travels
+# only through its web UI or a TFTP/FTP server ("EdgeSwitch & EdgeSwitch X - Backup and Restore
+# the Configuration", UISP Help Center).
+EDGESWITCH_PLATFORMS = {"eswh", "esgh", "esx", "esxp"}
+
 # Why an action isn't offered for a family, as the menu shows it.
+_NO_CONFIG = {"unifi": "set by its UniFi controller", "unifi-os": "UniFi OS: in its own settings",
+              "edgeswitch": "EdgeSwitch: in its web UI", "": "not for this device"}
 NOT_OFFERED = {
     "update": {"edgeos": "not for EdgeOS yet", "": "not for this device"},
-    "config": {"unifi": "set by its UniFi controller", "unifi-os": "UniFi OS: in its own settings",
-               "edgeos": "not for EdgeOS yet", "": "not for this device"},
+    "config": dict(_NO_CONFIG, edgeos="not for EdgeOS here"),
+    "edit": _NO_CONFIG, "backup": _NO_CONFIG, "upload": _NO_CONFIG,
     "login": {"unifi": "set by its UniFi controller", "unifi-os": "UniFi OS: in its own settings",
-              "edgeos": "not for EdgeOS yet", "": "not for this device"},
+              "edgeos": "not for EdgeOS yet", "isp": "airMAX only", "": "not for this device"},
     "scan": {"": "not for this device"},
+    "reboot": {"edgeswitch": "EdgeSwitch: in its web UI", "": "not for this device"},
+    "locate": {"airos": "airOS has no LED command", "isp": "no LED command known",
+               "edgeos": "EdgeOS has no LED command", "unifi-os": "UniFi OS: from its UniFi app",
+               "": "not for this device"},
 }
 # Scan from device: every family's Linux has the kernel's ARP table; airOS lists the stations
 # associated with it (wstalist, the web UI's station list, JSON); lldpd's lldpcli, where the
@@ -121,16 +180,49 @@ def family(d) -> str:
     return ""
 
 
-def offers(d, action: str) -> tuple:
-    """(offered, why not) for "update", "config", "login" or "scan"."""
+def config_kind(d) -> str:
+    """The kind of config file it keeps (CONFIG_FILES): "airos", "isp" (airFiber, LTU,
+    GigaBeam), "edgeos", or "" for none the app can back up (UniFi's is its controller's)."""
     fam = family(d)
+    if fam in ("airos", "edgeos"):
+        return fam
+    if fam:
+        return ""
+    if d.fw_platform.upper() in ISP_PLATFORMS or re.match(
+            r"(?i)ltu", d.fw_platform or d.info.get("platform") or d.model or ""):
+        return "isp"
+    return ""
+
+
+def _kind(d) -> str:
+    """The family an action's reason is looked up by: family(), else "isp" or "edgeswitch"."""
+    fam = family(d)
+    if fam:
+        return fam
+    if config_kind(d) == "isp":
+        return "isp"
+    return "edgeswitch" if d.fw_platform in EDGESWITCH_PLATFORMS else ""
+
+
+def offers(d, action: str) -> tuple:
+    """(offered, why not) for "update", "config" (the airOS editor: system.cfg), "edit" (the
+    config editor for every kind), "backup", "upload", "login", "scan", "reboot" or "locate"."""
+    fam, kind = family(d), config_kind(d)
     if action == "update":
         ok = fam in UPDATE_STEPS
     elif action == "scan":
         ok = fam in SCAN_FAMILIES
+    elif action == "config":
+        ok = kind in ("airos", "isp")
+    elif action in ("edit", "backup", "upload"):
+        ok = bool(kind)
+    elif action == "reboot":
+        ok = (kind or fam) in REBOOT
+    elif action == "locate":
+        ok = fam in LOCATE
     else:
         ok = fam == "airos"
-    return ok, "" if ok else NOT_OFFERED[action].get(fam, NOT_OFFERED[action][""])
+    return ok, "" if ok else NOT_OFFERED[action].get(_kind(d), NOT_OFFERED[action][""])
 
 
 # ---------------------------------------------------------------------------
@@ -514,8 +606,26 @@ def _lines(text: str) -> list:
     return sorted(l for l in text.replace("\r", "").split("\n") if l.strip())
 
 
-def config_problems(text: str) -> list:
-    """Lines that aren't key=value, which airOS wouldn't read."""
+def config_problems(text: str, kind: str = "airos") -> list:
+    """What the device wouldn't read: for airOS (and airFiber, LTU), lines that aren't
+    key=value; for EdgeOS, braces that don't pair up, or no version line (its load would ask
+    at a terminal whether to go on)."""
+    if kind == "edgeos":
+        problems, depth = [], 0
+        body = re.sub(r"/\*.*?\*/", "", text, flags=re.S)
+        for n, line in enumerate(body.replace("\r", "").split("\n"), 1):
+            unquoted = re.sub(r'"(?:[^"\\]|\\.)*"', '""', line)
+            depth += unquoted.count("{") - unquoted.count("}")
+            if depth < 0:
+                problems.append(f"line {n}: a }} with no {{ before it")
+                depth = 0
+        if depth:
+            problems.append(f"{depth} {{ without a }} to close it")
+        if not body.strip():
+            problems.append("it's empty")
+        if EDGEOS_MARK not in text:
+            problems.append(f"no {EDGEOS_MARK} line at the end, which every config EdgeOS saves has")
+        return problems
     return [f"line {n}: {line[:60]}" for n, line in enumerate(text.replace("\r", "").split("\n"), 1)
             if line.strip() and not re.match(r"[A-Za-z0-9_.-]+=", line)]
 
@@ -530,10 +640,11 @@ def lines_changed(old: str, new: str) -> int:
 
 
 def write_config(login: sshrun.Login, text: str, apply: bool, report=None, stop=None,
-                 new_login: sshrun.Login | None = None, confirm_within: float = 240) -> str:
+                 new_login: sshrun.Login | None = None, confirm_within: float = 240, check_tools: bool = False) -> str:
     """Write the config and save it to flash; with apply, apply it in place too (rc.softrestart
     save, which saves it as well). new_login: the login the config sets, which replaces `login`
-    once it's applied. Returns what happened.
+    once it's applied. check_tools: first make sure the device has airOS's cfgmtd (and
+    rc.softrestart to apply), for airFiber and LTU. Returns what happened.
 
     It's done so a broken connection can't leave the device half-changed, and the app can say
     exactly what happened: the config goes to a file of its own and is checked there (a break
@@ -541,12 +652,14 @@ def write_config(login: sshrun.Login, text: str, apply: bool, report=None, stop=
     applies it, detached from the session, logging the outcome (a break here: the device
     finishes on its own, and the app reconnects to read how it went). LostConnection when it
     can't tell, or when the config never got there."""
-    text = text.replace("\r\n", "\n").replace("\r", "\n")
-    if not text.endswith("\n"):
-        text += "\n"
+    text = _unix(text)
     what = "applied" if apply else "saved"
     say = report or (lambda message: None)
     untouched = f"Connection lost: config not {what}. It didn't reach the device, which still has its earlier config."
+    if check_tools:
+        tools = config_tools(login, "isp", stop)
+        if not tools["apply" if apply else "save"]:
+            raise ToolError(tools["why"])
     if apply:
         try:
             running = _fetch(login, AIROS_RUNNING, stop)
@@ -563,15 +676,39 @@ def write_config(login: sshrun.Login, text: str, apply: bool, report=None, stop=
     runs_it = apply and _lines(running) == _lines(text)
 
     say("Copying the config to the device…")
+    _stage(login, [(text, STAGED_CONFIG)], what, untouched, stop)
+    say("Applying it: the device restarts the services the change affects…" if apply else "Saving it to flash…")
+    # Detached: applying can restart SSH itself, which would end a command run in the session.
+    code, said, sent, dropped = _run_staged(
+        login, f"mv -f {STAGED_CONFIG} {AIROS_CONFIG} && " + (AIROS_APPLY if apply and not runs_it else AIROS_SAVE),
+        STAGED_CONFIG, what, apply, [new_login, login] if new_login else [login], confirm_within, stop, say)
+    if code:
+        raise ToolError(("Applying" if apply else "Saving") + " failed" + (f": {said[-300:]}" if said else "."))
+    done = ("It already ran this config: saved to flash, so it runs it after a reboot too." if runs_it
+            else "Applied and saved to flash." if apply else "Saved to flash. It takes effect at the next reboot.")
+    if not sent or (dropped and not apply):  # applying restarts SSH: drops then are expected
+        done += " The connection dropped meanwhile: the device finished on its own, checked after reconnecting."
+    return done
+
+
+def _unix(text: str) -> str:
+    text = text.replace("\r\n", "\n").replace("\r", "\n")
+    return text if text.endswith("\n") else text + "\n"
+
+
+def _stage(login: sshrun.Login, files: list, what: str, untouched: str, stop=None) -> None:
+    """Copy each (text, path on the device) there and check it arrived whole; a break here
+    leaves the device as it was (LostConnection "not done")."""
     folder = Path(tempfile.mkdtemp(prefix="opendisco-"))
     try:
-        local = folder / "system.cfg"
-        local.write_bytes(text.encode("utf-8"))
-        sshrun.upload(login, local, STAGED_CONFIG, stop=stop)
-        arrived = sshrun.run(login, f"md5sum {STAGED_CONFIG} 2>/dev/null; wc -c < {STAGED_CONFIG}", stop=stop).out
-        if not _arrived_whole(arrived, local):
-            sshrun.run(login, f"rm -f {STAGED_CONFIG}", stop=stop)
-            raise ToolError(f"The config arrived damaged, so it wasn't {what}; the device still has its earlier one.")
+        for n, (text, path) in enumerate(files):
+            local = folder / f"file{n}"
+            local.write_bytes(text.encode("utf-8"))
+            sshrun.upload(login, local, path, stop=stop)
+            arrived = sshrun.run(login, f"md5sum {path} 2>/dev/null; wc -c < {path}", stop=stop).out
+            if not _arrived_whole(arrived, local):
+                sshrun.run(login, "rm -f " + " ".join(p for _t, p in files), stop=stop)
+                raise ToolError(f"The config arrived damaged, so it wasn't {what}; the device still has its earlier one.")
     except sshrun.SSHError as e:
         if e.kind in ("auth", "key", "cancelled"):
             raise
@@ -579,32 +716,27 @@ def write_config(login: sshrun.Login, text: str, apply: bool, report=None, stop=
     finally:
         shutil.rmtree(folder, ignore_errors=True)
 
+
+def _run_staged(login: sshrun.Login, command: str, staged: str, what: str, apply: bool, logins: list,
+                within: float, stop, say) -> tuple:
+    """Start the command that takes the staged file, detached, and read how it went (reconnecting
+    as needed). Returns (exit code, what it said, whether the start went through, whether the
+    connection dropped); LostConnection when it never started or the app can't tell."""
     run = secrets.token_hex(6)
-    say("Applying it: the device restarts the services the change affects…" if apply else "Saving it to flash…")
     sent = True
     try:
-        # Detached: applying can restart SSH itself, which would end a command run in the session.
-        sshrun.run(login, detached(f"mv -f {STAGED_CONFIG} {AIROS_CONFIG} && "
-                                   + (AIROS_APPLY if apply and not runs_it else AIROS_SAVE), CONFIG_LOG, run),
-                   timeout=60, stop=stop)
+        sshrun.run(login, detached(command, CONFIG_LOG, run), timeout=60, stop=stop)
     except sshrun.SSHError as e:
         if e.kind in ("auth", "key"):
             raise
         sent = False  # it may or may not have got there
         say(f"Connection lost while starting it ({e}). Reconnecting to find out what the device did…")
-    state, code, said, dropped = _confirm([new_login, login] if new_login else [login], run, confirm_within,
-                                          stop, say)
+    state, code, said, dropped = _confirm(logins, run, within, stop, say, staged)
     if state == "done":
-        if code:
-            raise ToolError(("Applying" if apply else "Saving") + " failed" + (f": {said[-300:]}" if said else "."))
-        done = ("It already ran this config: saved to flash, so it runs it after a reboot too." if runs_it
-                else "Applied and saved to flash." if apply else "Saved to flash. It takes effect at the next reboot.")
-        if not sent or (dropped and not apply):  # applying restarts SSH: drops then are expected
-            done += " The connection dropped meanwhile: the device finished on its own, checked after reconnecting."
-        return done
+        return code, said, sent, dropped
     if state == "not started":
         try:
-            sshrun.run(login, f"rm -f {STAGED_CONFIG}", stop=stop)
+            sshrun.run(login, f"rm -f {staged}", stop=stop)
         except sshrun.SSHError:
             pass
         raise LostConnection(f"Connection lost before the device got the command: config not {what}. It still has "
@@ -629,7 +761,7 @@ def _arrived_whole(said: str, local: Path) -> bool:
     return bool(sizes) and int(sizes[-1]) == local.stat().st_size
 
 
-def _confirm(logins, run: str, within: float, stop, say) -> tuple:
+def _confirm(logins, run: str, within: float, stop, say, staged: str = STAGED_CONFIG) -> tuple:
     """Read the outcome of a detached config command from its log, reconnecting as needed (the
     new login works once it's applied, the old one until then). Returns (state, exit code, what
     it said, whether a reconnect was needed): "done", "not started" (the log doesn't name the
@@ -641,7 +773,7 @@ def _confirm(logins, run: str, within: float, stop, say) -> tuple:
         out = None
         for attempt in logins:
             try:
-                out = sshrun.run(attempt, f"cat {CONFIG_LOG} 2>/dev/null; test -e {STAGED_CONFIG} && echo "
+                out = sshrun.run(attempt, f"cat {CONFIG_LOG} 2>/dev/null; test -e {staged} && echo "
                                           "opendisco-staged", timeout=30, stop=stop).out
                 break
             except sshrun.SSHError as e:
@@ -663,6 +795,389 @@ def _confirm(logins, run: str, within: float, stop, say) -> tuple:
 
 
 # ---------------------------------------------------------------------------
+# Config backups and uploads: airMAX, airFiber, LTU, EdgeOS
+# ---------------------------------------------------------------------------
+
+def config_tools(login: sshrun.Login, kind: str, stop=None) -> dict:
+    """What the device can do with a new config: {"save": bool, "apply": bool, "why": what's
+    missing}. airMAX has both (the airOS SDK); airFiber and LTU are asked for airOS's cfgmtd
+    and rc.softrestart; EdgeOS for its config commands, and a login in their vyattacfg group."""
+    if kind == "airos":
+        return {"save": True, "apply": True, "why": ""}
+    if kind == "isp":
+        out = sshrun.run(login, "command -v cfgmtd >/dev/null && echo has-save; "
+                                f"test -x {AIROS_APPLY.split()[0]} && echo has-apply", stop=stop).out
+        save, apply = "has-save" in out, "has-apply" in out
+        why = ("" if save and apply else "It has no cfgmtd, so the app can't save a config to its flash." if not save
+               else "It has no rc.softrestart to apply a config in place: Save it, then Reboot it.")
+        return {"save": save, "apply": save and apply, "why": why}
+    if kind == "edgeos":
+        out = sshrun.run(login, f"test -x {EDGEOS_WRAPPER} && echo has-wrapper; id -Gn", stop=stop).out
+        if "has-wrapper" not in out:
+            return {"save": False, "apply": False, "why": f"It has no {EDGEOS_WRAPPER}: it doesn't look like EdgeOS."}
+        groups = out.replace("has-wrapper", "").split()
+        if "vyattacfg" not in groups and "root" not in groups:
+            return {"save": False, "apply": False,
+                    "why": f"The login {login.user} isn't in EdgeOS's vyattacfg group, which changing the config "
+                           "needs (an admin login is)."}
+        return {"save": True, "apply": True, "why": ""}
+    return {"save": False, "apply": False, "why": "The app can't write this device's config."}
+
+
+def read_device_config(login: sshrun.Login, kind: str, stop=None) -> tuple:
+    """(its config, whether it has changes not applied yet): airOS's working config
+    /tmp/system.cfg; EdgeOS's boot config /config/config.boot (changes committed since without
+    saving aren't in it)."""
+    if kind in ("airos", "isp"):
+        return read_config(login, stop)
+    if kind == "edgeos":
+        return _fetch(login, EDGEOS_CONFIG, stop), False
+    raise ToolError("The app can't read this device's config.")
+
+
+def push_config(login: sshrun.Login, kind: str, text: str, apply: bool, report=None, stop=None) -> str:
+    """Save the config (it takes effect at the next boot) or apply it now too. Returns what
+    happened; ToolError, LostConnection or SSHError when it didn't."""
+    if kind in ("airos", "isp"):
+        return write_config(login, text, apply, report, stop, check_tools=kind == "isp")
+    if kind == "edgeos":
+        return write_edgeos(login, text, apply, report, stop)
+    raise ToolError("The app can't write this device's config.")
+
+
+def edgeos_script(apply: bool) -> str:
+    """The script that takes the staged config.boot on an EdgeRouter. Apply: begin; load; commit;
+    save; end, as EdgeOS's configure, load, commit and save do. Save: the same load, only to
+    check EdgeOS reads it, then discard; the file becomes /config/config.boot, which the next
+    boot loads. Exit codes: 3 no staged file, 4 no config session, 5 load failed, 6 commit
+    failed, 7 saving failed, 8 writing config.boot failed."""
+    if apply:
+        act = ('  if grep -q "No configuration changes to commit" "$OUT"; then echo "opendisco: nothing to commit"\n'
+               '  elif ! $W commit; then rc=6; echo "commit failed:"; tail -n 20 /var/log/vyatta/vyatta-commit.log; fi\n'
+               '  [ $rc = 0 ] && { $W save || rc=7; }\n'
+               'fi\n'
+               '[ $rc = 0 ] || $W discard\n'
+               '$W end\n')
+    else:
+        act = ('  :  # only checked: nothing is committed\n'
+               'fi\n'
+               '$W discard >/dev/null\n'
+               '$W end\n'
+               f'[ $rc = 0 ] && {{ cat "$F.run" > {EDGEOS_CONFIG} || rc=8; }}\n')
+    return ("#!/bin/sh\n"
+            f"# OpenDisco: {'loads, commits and saves' if apply else 'checks, then saves for the next boot,'} "
+            f"the config in {EDGEOS_STAGED}.\n"
+            "# EdgeOS's config commands run in its vyattacfg group, as its own scripts do.\n"
+            'if [ "$1" != in-group ] && [ "$(id -u)" != 0 ] && [ "$(id -gn)" != vyattacfg ] '
+            "&& command -v sg >/dev/null; then\n"
+            f'  exec sg vyattacfg -c "sh {EDGEOS_SCRIPT} in-group"\n'
+            "fi\n"
+            f"W={EDGEOS_WRAPPER}\n"
+            f"F={EDGEOS_STAGED}\n"
+            "OUT=/tmp/opendisco-load.out\n"
+            'mv -f "$F" "$F.run" || exit 3\n'
+            'cp "$F.run" "$F.load" || exit 3  # load migrates the file it loads in place\n'
+            'trap \'rm -f "$F.run" "$F.load" "$OUT"\' EXIT\n'
+            '$W begin || { echo "EdgeOS did not start a config session."; exit 4; }\n'
+            '$W load "$F.load" >"$OUT" 2>&1\n'
+            "rc=$?\n"
+            'cat "$OUT"\n'
+            '[ $rc = 0 ] && grep -qiE "fail|error|invalid|warning|cannot" "$OUT" && rc=5\n'
+            "if [ $rc = 0 ]; then\n" + act +
+            "exit $rc\n")
+
+
+EDGEOS_FAILURES = {
+    3: "The config didn't arrive in place, so nothing was changed.",
+    4: "EdgeOS didn't start a config session, so nothing was changed",
+    5: "EdgeOS didn't load it, so nothing was changed",
+    6: "EdgeOS loaded it, but the commit failed. Parts of it may be active now; its boot config is unchanged, so a "
+       "reboot returns to that",
+    7: "It's applied, but saving it to the boot config failed: it runs the new config only until the next reboot",
+    8: f"EdgeOS reads it, but writing {EDGEOS_CONFIG} failed, so nothing was changed",
+}
+
+
+def boot_lines(text: str) -> list:
+    """config.boot's lines without comments, quotes or indentation, to compare two of them."""
+    body = re.sub(r"/\*.*?\*/", "", text.replace("\r", ""), flags=re.S)
+    return [l.strip().replace('"', "") for l in body.split("\n") if l.strip()]
+
+
+def write_edgeos(login: sshrun.Login, text: str, apply: bool, report=None, stop=None,
+                 confirm_within: float = 300) -> str:
+    """Save an EdgeRouter's config for the next boot, or load, commit and save it now. Staged and
+    run detached like write_config, so a dropped connection (a commit can restart SSH) leaves
+    the device finishing on its own, and the app reconnects to read how it went."""
+    text = _unix(text)
+    problems = config_problems(text, "edgeos")
+    if problems:
+        raise ToolError("It isn't a config EdgeOS reads: " + "; ".join(problems[:5]) + ".")
+    what = "applied" if apply else "saved"
+    say = report or (lambda message: None)
+    untouched = f"Connection lost: config not {what}. It didn't reach the device, which still has its earlier config."
+    tools = config_tools(login, "edgeos", stop)
+    if not tools["apply"]:
+        raise ToolError(tools["why"])
+    say("Copying the config to the device…")
+    _stage(login, [(edgeos_script(apply), EDGEOS_SCRIPT), (text, EDGEOS_STAGED)], what, untouched, stop)
+    say("Loading and committing it: EdgeOS restarts what the change affects…" if apply
+        else "Checking that EdgeOS reads it, then saving it as the boot config…")
+    code, said, sent, dropped = _run_staged(login, f"sh {EDGEOS_SCRIPT}", EDGEOS_STAGED, what, apply, [login],
+                                            confirm_within, stop, say)
+    nothing = "opendisco: nothing to commit" in said
+    said = "\n".join(l for l in said.split("\n") if not l.startswith("opendisco:")).strip()
+    if code:
+        raise ToolError(EDGEOS_FAILURES.get(code, f"It failed (exit code {code})")
+                        + (f". EdgeOS said: {said[-400:]}" if said and code != 3 else "."))
+    try:
+        stored = _fetch(login, EDGEOS_CONFIG, stop)
+    except sshrun.SSHError:
+        stored = None
+    if apply and nothing:
+        done = "It already runs this config: saved as its boot config too."
+    elif apply:
+        done = "Loaded, committed and saved: it runs the new config, and boots with it."
+    else:
+        done = (f"Checked (EdgeOS reads it) and saved as {EDGEOS_CONFIG}: it takes effect at the next reboot. Until "
+                "then, any other change saved on it (web UI, CLI, UISP) replaces it.")
+    if stored is None:
+        done += f" The app couldn't read {EDGEOS_CONFIG} back to compare."
+    elif boot_lines(stored) != boot_lines(text):
+        changed = lines_changed("\n".join(boot_lines(text)), "\n".join(boot_lines(stored)))
+        done += (f" EdgeOS stored it with {changed} line(s) different from the file: it writes the config in its own "
+                 "order and format.")
+    if not sent or (dropped and not apply):
+        done += " The connection dropped meanwhile: the device finished on its own, checked after reconnecting."
+    return done
+
+
+# -- the backups ---------------------------------------------------------------
+
+@dataclass
+class Backup:
+    """One saved config: the file itself, and what's known of where it came from (meta, from
+    the .json beside it: mac, ip, name, model, platform, firmware, kind, file, reason, saved)."""
+    path: Path
+    when: float  # when it was taken (seconds since 1970)
+    meta: dict
+
+    @property
+    def date(self) -> str:
+        return time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(self.when))
+
+    @property
+    def reason(self) -> str:
+        return str(self.meta.get("reason") or "")
+
+    def text(self) -> str:
+        return self.path.read_bytes().decode("utf-8", "replace")
+
+
+def backup_root(root=None) -> Path:
+    """Where backups are kept: one folder per device, named by its MAC (aa-bb-cc-dd-ee-ff)."""
+    if root:
+        return Path(root)
+    if BACKUP_ROOT:
+        return Path(BACKUP_ROOT)
+    from opendisco import vulns
+    return vulns.default_data_dir() / BACKUP_FOLDER
+
+
+def backup_folder(mac: str, root=None) -> Path:
+    return backup_root(root) / core.norm_mac(mac).replace(":", "-")
+
+
+def save_backup(d, text: str, kind: str, reason: str = "backup", root=None) -> Backup:
+    """Keep a config of the device: <MAC folder>/<date>_<time>_<file name>, and beside it the
+    same name + .json with where it came from."""
+    if not d.mac:
+        raise ToolError("Without its MAC address the app can't file a backup of it.")
+    folder = backup_folder(d.mac, root)
+    folder.mkdir(parents=True, exist_ok=True)
+    when = time.time()
+    stamp, name = time.strftime("%Y-%m-%d_%H%M%S", time.localtime(when)), CONFIG_NAMES[kind]
+    path, n = folder / f"{stamp}_{name}", 2
+    while path.exists():
+        path, n = folder / f"{stamp}-{n}_{name}", n + 1
+    data = text.encode("utf-8")
+    meta = {"mac": d.mac, "ip": d.ip, "name": d.name, "model": d.model,
+            "platform": d.fw_platform or d.info.get("platform") or "",
+            "firmware": d.info.get("firmware") or d.firmware or "", "kind": kind, "file": CONFIG_FILES[kind],
+            "reason": reason, "saved": time.strftime("%Y-%m-%dT%H:%M:%S%z", time.localtime(when)),
+            "sha256": hashlib.sha256(data).hexdigest(), "app": f"OpenDisco {core.__version__}"}
+    for target, content in ((path, data), (_meta_path(path), json.dumps(meta, indent=1).encode("utf-8"))):
+        part = target.with_name(target.name + ".part")
+        part.write_bytes(content)
+        os.replace(part, target)
+    return Backup(path, when, meta)
+
+
+def _meta_path(path: Path) -> Path:
+    return path.with_name(path.name + ".json")
+
+
+def _read_meta(path: Path) -> dict:
+    try:
+        meta = json.loads(_meta_path(path).read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return {}
+    return meta if isinstance(meta, dict) else {}
+
+
+def list_backups(mac: str, root=None) -> list:
+    """The device's saved configs, the newest first: Backups with path and date (and meta)."""
+    folder = backup_folder(mac, root) if mac else None
+    if folder is None or not folder.is_dir():
+        return []
+    found = []
+    for path in folder.iterdir():
+        if path.name.endswith((".json", ".part")) or not path.is_file():
+            continue
+        meta = _read_meta(path)
+        when = None
+        try:
+            when = time.mktime(time.strptime(str(meta.get("saved", ""))[:19], "%Y-%m-%dT%H:%M:%S"))
+        except ValueError:
+            pass
+        found.append(Backup(path, when or path.stat().st_mtime, meta))
+    return sorted(found, key=lambda b: b.when, reverse=True)
+
+
+def delete_backup(backup: Backup) -> None:
+    backup.path.unlink(missing_ok=True)
+    _meta_path(backup.path).unlink(missing_ok=True)
+
+
+def read_config_file(path) -> tuple:
+    """(the text, what's known of it) for a config file to upload: a saved backup's .json
+    when it has one beside it, else nothing."""
+    path = Path(path)
+    if path.stat().st_size > 4_000_000:
+        raise ToolError(f"{path.name} is {path.stat().st_size:,} bytes: far too big for a device's config.")
+    data = path.read_bytes()
+    if b"\0" in data[:4096]:
+        raise ToolError(f"{path.name} isn't a text file (a web UI's backup archive is unpacked first).")
+    return data.decode("utf-8", "replace"), _read_meta(path)
+
+
+def same_model(d, meta: dict) -> bool | None:
+    """Whether a backup's device is the same model as d: None when the backup doesn't say."""
+    theirs = [str(meta.get(k) or "").strip().lower() for k in ("platform", "model")]
+    ours = [(d.fw_platform or d.info.get("platform") or "").strip().lower(), (d.model or "").strip().lower()]
+    pairs = [(a, b) for a, b in zip(theirs, ours) if a and b]
+    return all(a == b for a, b in pairs) if pairs else None
+
+
+def upload_check(d, kind: str, text: str, meta: dict) -> tuple:
+    """(why it can't go to this device, what to confirm first): the file must be the device's
+    kind of config, and a backup of the same model; one that doesn't say which model it's from,
+    or is another device's, is asked about first."""
+    problems = config_problems(text, kind)
+    other = "airos" if kind == "edgeos" else "edgeos"
+    if problems and text.strip() and not config_problems(text, other):
+        return (f"It's {'an EdgeOS' if other == 'edgeos' else 'an airOS-style'} {CONFIG_NAMES[other]}, not the "
+                f"{CONFIG_NAMES[kind]} this device keeps.", "")
+    if problems:
+        return (f"It isn't a {CONFIG_NAMES[kind]} that {_kind_name(kind)} reads: " + "; ".join(problems[:5]) + ".", "")
+    if meta.get("kind") and meta["kind"] != kind:
+        return f"It's a {CONFIG_NAMES.get(meta['kind'], meta['kind'])}, not this device's {CONFIG_NAMES[kind]}.", ""
+    model = d.model or d.fw_platform or "device"
+    match = same_model(d, meta)
+    if match is False:
+        return (f"It's from model {meta.get('model') or meta.get('platform')}, and this device is model {model}: a "
+                "config goes back only to the same model.", "")
+    warn = []
+    if match is None:
+        warn.append(f"The file doesn't say which model it's from. Upload only a config from another {model}: settings "
+                    "for other hardware (radios, ports) can leave it unreachable.")
+    if meta.get("mac") and d.mac and core.norm_mac(meta["mac"]) != d.mac:
+        warn.append(f"It's from another device ({meta['mac']}{', ' + meta['name'] if meta.get('name') else ''}): its "
+                    "address, name and logins come with it.")
+    return "", "\n\n".join(warn)
+
+
+def _kind_name(kind: str) -> str:
+    return {"airos": "airOS", "isp": "the device", "edgeos": "EdgeOS"}.get(kind, "the device")
+
+
+def config_diff(old: str, new: str) -> tuple:
+    """(a unified diff from the device's config to the new one, how many lines change)."""
+    import difflib
+    a, b = old.replace("\r", "").splitlines(), new.replace("\r", "").splitlines()
+    diff = "\n".join(difflib.unified_diff(a, b, "on the device", "to upload", n=2, lineterm=""))
+    return diff, lines_changed(old, new)
+
+
+# ---------------------------------------------------------------------------
+# Reboot and Locate
+# ---------------------------------------------------------------------------
+
+def _uptime(login: sshrun.Login, stop=None) -> float | None:
+    """Its uptime in seconds; None when it doesn't answer."""
+    try:
+        out = sshrun.run(login, "cat /proc/uptime", timeout=25, stop=stop).out.split()
+    except sshrun.SSHError as e:
+        if e.kind in ("key", "cancelled"):
+            raise
+        return None
+    try:
+        return float(out[0])
+    except (IndexError, ValueError):
+        return -1.0  # it answers, but doesn't say
+
+
+def reboot(login: sshrun.Login, d, report=None, stop=None, within: float = 600) -> float:
+    """Restart the device with its family's command (REBOOT) and wait until it's back: it has
+    stopped answering, or its uptime started again. report(text). Returns the seconds it took."""
+    command = REBOOT[config_kind(d) or family(d)]
+    say = report or (lambda message: None)
+    before = _uptime(login, stop)
+    if before is None:
+        raise ToolError(f"{login.where} doesn't answer over SSH.")
+    say("Restarting it…")
+    try:
+        sshrun.run(login, detached(command, REBOOT_LOG), timeout=30, stop=stop)
+    except sshrun.SSHError as e:
+        if e.kind in ("auth", "key", "cancelled"):
+            raise  # otherwise the connection dropping as it goes down
+    start, down = time.monotonic(), False
+    while time.monotonic() - start < within:
+        if stop is not None and stop.is_set():
+            raise ToolError("Stopped waiting. The device carries on restarting by itself.")
+        time.sleep(3)
+        now = _uptime(login)
+        elapsed = time.monotonic() - start
+        if now is None:
+            down = True
+        elif down or 0 <= now < before:
+            return elapsed
+        else:  # still up: the command may have failed (no sudo, say), or not taken
+            try:
+                said = sshrun.run(login, f"cat {REBOOT_LOG} 2>/dev/null", timeout=25).out
+            except sshrun.SSHError:
+                said = ""
+            failed = re.search(r"opendisco-exit=([1-9]\d*)", said)
+            if failed or elapsed > 90:
+                said = re.sub(r"opendisco-exit=\d+\s*", "", said).strip()
+                raise ToolError("It didn't restart" + (f". It said: {said[-300:]}" if said else
+                                                       " (it may be busy, upgrading its firmware)."))
+        say(("Restarting: waiting for it to come back… " if down else "Restarting… ") + f"{elapsed:.0f}s")
+    raise ToolError(f"It hasn't come back after {within // 60:.0f} minutes. Give it a few more before power-cycling it.")
+
+
+def locate(login: sshrun.Login, d, on: bool = True, stop=None) -> bool | None:
+    """Start (or stop) blinking its LED. Returns whether it's locating now, as it says (None:
+    it doesn't say)."""
+    start, end = LOCATE[family(d)]
+    result = sshrun.run(login, f"{start if on else end}; echo; cat {LOCATE_STATE} 2>/dev/null", stop=stop)
+    if "not found" in result.out + result.err:
+        raise ToolError(f"It has no {start.split()[0]}.")
+    state = (result.out.split() or [""])[-1].lower()
+    return True if state == "true" else False if state == "false" else None
+
+
+# ---------------------------------------------------------------------------
 # Scan from a device
 # ---------------------------------------------------------------------------
 
@@ -680,14 +1195,21 @@ class Sighting:
 
 def scan_command(fam: str) -> str:
     """One command that writes everything the device can tell about its neighbours to SCAN_FILE,
-    which then travels by scp (Windows' console would wrap long JSON lines)."""
+    which then travels by scp (Windows' console would wrap long JSON lines). Its own name,
+    interfaces and addresses come too, for a device given only by its address."""
     parts = ["echo @@arp", "cat /proc/net/arp"]
     if fam == "airos":
         parts += ["echo @@stations", "wstalist"]
+    elif not fam:  # not known yet: airOS, airFiber and LTU have wstalist
+        parts += ["echo @@stations", "if command -v wstalist >/dev/null; then wstalist; fi"]
     parts += ["echo @@lldp",
               "if command -v lldpcli >/dev/null; then lldpcli -f keyvalue show neighbors details 2>/dev/null"
-              " || sudo -n lldpcli -f keyvalue show neighbors details; fi", "echo @@end"]
-    return "sh -c '" + "; ".join(f"{p} 2>/dev/null" if not p.startswith(("echo", "if")) else p for p in parts) + \
+              " || sudo -n lldpcli -f keyvalue show neighbors details; fi",
+              "echo @@self", "uname -n",
+              "for i in /sys/class/net/*; do echo link ${i##*/} $(cat $i/address 2>/dev/null); done",
+              "ip -o -4 addr show 2>/dev/null || ifconfig", "echo @@end"]
+    return "sh -c '" + "; ".join(f"{p} 2>/dev/null" if not p.startswith(("echo", "if", "for")) else p
+                                 for p in parts) + \
            f"' >{SCAN_FILE} 2>/dev/null"
 
 
@@ -783,13 +1305,83 @@ def _lldp_sightings(lines) -> list:
     return [s for s in found if s.mac or s.ip]
 
 
+@dataclass
+class Identity:
+    """What a device says of itself in a scan: its name, the MAC of the interface that has the
+    address the app logged in to, and all its interfaces' MACs."""
+    name: str = ""
+    mac: str = ""
+    macs: tuple = ()
+
+
+def parse_self(text: str, ip: str) -> Identity:
+    """The @@self section: uname -n, "link <interface> <MAC>" lines, then ip -o -4 addr's lines
+    ("2: eth0    inet 192.168.1.20/24 brd ...") or ifconfig's blocks ("eth0  Link encap:Ethernet
+    HWaddr ..." with "inet addr:192.168.1.20")."""
+    lines, on = [], False
+    for line in text.replace("\r", "").split("\n"):
+        if line.startswith("@@"):
+            on = line[2:].strip() == "self"
+        elif on:
+            lines.append(line)
+    links, owner, block = {}, "", ""
+    for line in lines:
+        f = line.split()
+        if len(f) == 3 and f[0] == "link" and _MAC.fullmatch(f[2]) and f[2] != "00:00:00:00:00:00":
+            links[f[1]] = f[2].lower()
+            continue
+        m = re.match(r"\d+:\s+(\S+)\s+inet\s+(\d+\.\d+\.\d+\.\d+)", line)
+        if m:
+            owner = owner or (m.group(1) if m.group(2) == ip else "")
+            continue
+        m = re.match(r"(\S+)\s+Link encap", line)
+        if m:
+            block = m.group(1)
+        elif re.search(rf"inet (addr:)?{re.escape(ip)}\b", line) and block:
+            owner = owner or block
+    owner = owner.split("@")[0]  # "eth0.10@eth0"
+    name = lines[0].strip() if lines and not lines[0].startswith("link ") else ""
+    mac = links.get(owner) or links.get(owner.split(":")[0], "")  # an alias such as "eth0:1"
+    return Identity(name, core.norm_mac(mac) if mac else "", tuple(sorted({core.norm_mac(m) for m in links.values()})))
+
+
+def scan_from_address(res, login: sshrun.Login, local: set = frozenset()) -> tuple:
+    """Scan from a device given by its address and login (over a VPN, say), whether or not
+    this computer found it: it becomes the device that what it sees is listed under, the way
+    Scan from device does it. A device already in the table with that address or MAC is that
+    device. local: this computer's MACs. Returns (the device, what it saw, the devices it
+    knows of, the ones that were new)."""
+    text = read_scan(login, "")
+    sightings, me = parse_scan(text), parse_self(text, login.ip)
+    finder = (res.inv.find(mac=me.mac) if me.mac else None) or res.inv.find(ip=login.ip)
+    if finder is None or (me.mac and not finder.mac):
+        finder = res.inv.lookup(mac=me.mac or None, ip=login.ip)  # files a device known by address under its MAC
+    finder.add_ip(login.ip)
+    finder.via.add("ssh")
+    finder.services.setdefault(login.port, "ssh")
+    if me.name:
+        finder.info.setdefault("hostname", me.name)
+    seen, new = merge_scan(res, finder, sightings, set(local) | set(me.macs))
+    return finder, sightings, seen, new
+
+
+def relink(res, old_key: str, d) -> None:
+    """After a device known by its address is filed under its MAC (a discovery reply arrived):
+    what was found through it stays listed under it."""
+    if d is not None and d.key != old_key:
+        for dev in res.inv.devices.values():
+            if dev.found_by.get("key") == old_key:
+                dev.found_by["key"] = d.key
+        res.devices = core.sorted_devices(res.inv)
+
+
 def merge_scan(res, finder, sightings: list, local: set = frozenset()) -> tuple:
     """Add what the finder knows of to the scan's inventory, seen via "from-device". A device
     this computer hadn't found itself is listed under the finder (found_by), and so is one
     attached to it directly (a station or an LLDP neighbour); one this computer found that is
     merely in the finder's ARP table isn't, or a gateway would collect the whole network.
-    local: this computer's MACs (core.local_macs()). Returns (devices it knows of, the ones that
-    were new)."""
+    local: this computer's MACs (core.local_macs()), and any of the finder's own. Returns
+    (devices it knows of, the ones that were new)."""
     from opendisco import core
     above, up = {finder.key}, finder  # the finder's own chain, so no loop is made
     while up and up.found_by.get("key") and up.found_by["key"] not in above:
