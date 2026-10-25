@@ -4,10 +4,10 @@ One tool for finding and diagnosing Ubiquiti devices (UniFi, airMAX, EdgeMAX, UI
 and identifying other WISP gear. It combines the discovery methods of three Ubiquiti tools,
 merges what they find by MAC address, and checks each device for common problems.
 
-![OpenDisco 1.4.1 on Windows 11, listing eight sample radios](docs/images/windows-main.png)
+![OpenDisco 1.6.0 on macOS: ten devices with their firmware, latest release and latency, one radio's details below](docs/images/mac-main.png)
 
-*OpenDisco 1.4.1 on Windows 11. The eight radios are sample data with made-up names and
-addresses.*
+*OpenDisco 1.6.0 on macOS. The devices are sample data, a small WISP's tower with made-up
+names and addresses. More pictures under [Screenshots](#screenshots).*
 
 OpenDisco is an independent project. It isn't made, endorsed or supported by Ubiquiti Inc.
 Ubiquiti, UniFi, airMAX, EdgeMAX, UISP, AmpliFi and WiFiman are trademarks of Ubiquiti Inc.,
@@ -26,6 +26,75 @@ It comes two ways:
   with no public download yet.
 - **The command-line tool,** which needs only Python 3.8 or newer with no packages to
   install, and runs on macOS, Linux and Windows.
+
+## Screenshots
+
+Every picture shows OpenDisco 1.6.0 with the same sample data: made-up names and addresses.
+
+<table>
+<tr>
+<td width="50%"><img src="docs/images/mac-menu.png" alt="The right-click menu for one radio on macOS, listing the device tools"></td>
+<td width="50%"><img src="docs/images/windows-menu.png" alt="The same right-click menu on Windows 11"></td>
+</tr>
+<tr>
+<td>A device's right-click menu (macOS): its web UI, SSH, ping and latency, port finder,
+firmware, config backups and uploads, reboot, a note and its own export.</td>
+<td>The same menu on Windows 11.</td>
+</tr>
+<tr>
+<td><img src="docs/images/windows-main.png" alt="The main window on Windows 11"></td>
+<td><img src="docs/images/linux-main.png" alt="The main window on Ubuntu 24.04"></td>
+</tr>
+<tr>
+<td>Windows 11.</td>
+<td>Ubuntu 24.04.</td>
+</tr>
+<tr>
+<td><img src="docs/images/mac-search.png" alt="The device list searched for tower1, 5 of 10 devices shown"></td>
+<td><img src="docs/images/mac-backups.png" alt="Config backups for one radio: two copies, one of them shown"></td>
+</tr>
+<tr>
+<td>Search: "tower1" keeps 5 of the 10 devices.</td>
+<td>Config backups of one radio, kept by its MAC address, with Restore, Save a copy and Delete.</td>
+</tr>
+<tr>
+<td><img src="docs/images/mac-settings.png" alt="Settings: the checks made when opening and scanning, the subnets every scan sweeps, the networks list"></td>
+<td><img src="docs/images/linux-backups.png" alt="Config backups on Ubuntu 24.04"></td>
+</tr>
+<tr>
+<td>Settings: the update, CVE and firmware checks, the subnets every scan also sweeps, and the
+networks probed through temporary addresses.</td>
+<td>Config backups on Ubuntu 24.04.</td>
+</tr>
+</table>
+
+Phones and tablets ([On phones and tablets](#on-phones-and-tablets)):
+
+<table>
+<tr>
+<td><img src="docs/images/android-phone-list.png" width="200" alt="The device list on an Android phone"></td>
+<td><img src="docs/images/android-phone-tools.png" width="200" alt="A radio's Tools on an Android phone"></td>
+<td><img src="docs/images/iphone-list.png" width="200" alt="The device list on an iPhone"></td>
+<td><img src="docs/images/iphone-tools.png" width="200" alt="A radio's Tools on an iPhone"></td>
+</tr>
+<tr>
+<td>Android: the list, with each device's latency and newer firmware (↑).</td>
+<td>Android: a radio's Tools.</td>
+<td>iPhone (beta): the list.</td>
+<td>iPhone (beta): a radio's Tools.</td>
+</tr>
+</table>
+
+<table>
+<tr>
+<td width="50%"><img src="docs/images/android-tablet.png" alt="An Android tablet: the device list beside a radio's details"></td>
+<td width="50%"><img src="docs/images/ipad.png" alt="An iPad: the device list beside a radio's details"></td>
+</tr>
+<tr>
+<td>Android tablet: the list beside the radio's page.</td>
+<td>iPad (beta), the same.</td>
+</tr>
+</table>
 
 ## Versions and platforms
 
