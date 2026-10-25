@@ -12,6 +12,7 @@ import re
 import socket
 import subprocess
 import sys
+import textwrap
 import threading
 import time
 import traceback
@@ -124,6 +125,13 @@ def _label(d) -> str:
     return f"{d.ip}  {d.name or d.model or d.mac or ''}".strip()
 
 
+def _fit(text: str, width: int) -> str:
+    """Text for a label in a window this many pixels wide, broken into lines: labels don't wrap by
+    themselves, and GTK (Linux) widens a window to its longest line, past the screen's edge."""
+    chars = max(40, (width - 40) // 8)
+    return "\n".join(textwrap.fill(part, chars) for part in text.split("\n"))
+
+
 # ---------------------------------------------------------------------------
 # Logins
 # ---------------------------------------------------------------------------
@@ -207,7 +215,7 @@ async def _login_window(app, d, purpose, user, password, port, remembered, probl
     user_box = toga.TextInput(value=user, placeholder="e.g. ubnt or admin", style=Pack(flex=1))
     password_box = toga.PasswordInput(value=password, style=Pack(flex=1))
     port_box = toga.TextInput(value=str(port), style=Pack(width=80))
-    trouble = toga.Label(problem, style=Pack(flex=1))
+    trouble = toga.Label(_fit(problem, 400), style=Pack(flex=1))
     can_remember = bool(d.mac) and credstore.available()
     remember = toga.Switch(f"Remember for this device (in {credstore.store_name()})", value=remembered and can_remember,
                            enabled=can_remember)
@@ -245,12 +253,12 @@ async def _login_window(app, d, purpose, user, password, port, remembered, probl
                          position=app._over_main(size))
     window.content = toga.Box(style=Pack(direction=COLUMN, margin=14, gap=8), children=[
         toga.Label(_label(d)),
-        toga.Label(purpose),
+        toga.Label(_fit(purpose, size[0])),
         toga.Box(style=row, children=[toga.Label("Username", style=label), user_box]),
         toga.Box(style=row, children=[toga.Label("Password", style=label), password_box]),
         toga.Box(style=row, children=[toga.Label("Port", style=label), port_box, trouble]),
         remember,
-        toga.Label(note),
+        toga.Label(_fit(note, size[0])),
         toga.Box(style=Pack(direction=ROW, gap=8), children=[
             toga.Box(style=Pack(flex=1)),
             toga.Button("Cancel", on_press=lambda w: finish(False)),
@@ -275,7 +283,7 @@ class Progress:
         self.app = app
         self.stop = threading.Event()
         self.closed = False
-        self.heading = toga.Label(heading)
+        self.heading = toga.Label(_fit(heading, 640))
         self.step = toga.Label("", style=Pack(flex=1))
         self.bar = toga.ProgressBar(max=100, value=0, style=Pack(flex=1))
         self.log = toga.MultilineTextInput(readonly=True, style=Pack(flex=1, font_family="monospace", font_size=11))
@@ -735,7 +743,7 @@ class ConfigEditor:
         self.window = toga.Window(title=f"Config: {_label(d)}", size=size, on_close=self.closing,
                                   position=app._over_main(size))
         self.window.content = toga.Box(style=Pack(direction=COLUMN, margin=12, gap=8), children=[
-            toga.Label(about), self.box,
+            toga.Label(_fit(about, size[0])), self.box,
             toga.Box(style=Pack(direction=ROW, align_items="center", gap=8), children=[
                 self.state, *self.buttons, toga.Button("Close", on_press=lambda w: self.window.close())])])
         self._pending(pending)
@@ -930,8 +938,8 @@ async def _new_login_window(app, d, login, text):
                          position=app._over_main(size))
     window.content = toga.Box(style=Pack(direction=COLUMN, margin=14, gap=8), children=[
         toga.Label(_label(d)),
-        toga.Label("The new password is stored on the device hashed the way it hashes the current one, never as "
-                   "plain text; the app checks its hashing against the current password first."),
+        toga.Label(_fit("The new password is stored on the device hashed the way it hashes the current one, never "
+                        "as plain text; the app checks its hashing against the current password first.", size[0])),
         toga.Box(style=row, children=[toga.Label("Username", style=label), user_box]),
         toga.Box(style=row, children=[toga.Label("New password", style=label), first]),
         toga.Box(style=row, children=[toga.Label("Again", style=label), second]),
@@ -1033,7 +1041,7 @@ class BackupsWindow:
         self.window = toga.Window(title=f"Config backups: {_label(d)}", size=size, on_close=self.closing,
                                   position=app._over_main(size))
         self.window.content = toga.Box(style=Pack(direction=COLUMN, margin=12, gap=8), children=[
-            toga.Label(about), self.table, self.text,
+            toga.Label(_fit(about, size[0])), self.table, self.text,
             toga.Box(style=Pack(direction=ROW, align_items="center", gap=8), children=[
                 self.state,
                 toga.Button("Back up now", on_press=self.backup_now, enabled=offered),
@@ -1215,7 +1223,7 @@ async def _diff_window(app, d, kind, current, text, source, tools):
     size = (900, 640)
     window = toga.Window(title=f"Upload config: {d.ip}", size=size, on_close=closing, position=app._over_main(size))
     window.content = toga.Box(style=Pack(direction=COLUMN, margin=12, gap=8), children=[
-        toga.Label(heading), view, toga.Label(note),
+        toga.Label(_fit(heading, size[0])), view, toga.Label(_fit(note, size[0])),
         toga.Box(style=Pack(direction=ROW, gap=8), children=[
             toga.Box(style=Pack(flex=1)),
             toga.Button("Cancel", on_press=lambda w: finish(None)),
@@ -1378,7 +1386,7 @@ async def _address_window(app, ip, port, user, password, remember, problem):
     port_box = toga.TextInput(value=str(port), style=Pack(width=80))
     user_box = toga.TextInput(value=user, placeholder="e.g. ubnt or admin", style=Pack(flex=1))
     password_box = toga.PasswordInput(value=password, style=Pack(flex=1))
-    trouble = toga.Label(problem, style=Pack(flex=1))
+    trouble = toga.Label(_fit(problem, 400), style=Pack(flex=1))
     can_remember = credstore.available()
     keep = toga.Switch(f"Remember for this device (in {credstore.store_name()})", value=remember and can_remember,
                        enabled=can_remember)
@@ -1416,9 +1424,9 @@ async def _address_window(app, ip, port, user, password, remember, problem):
     window = toga.Window(title="Scan from a device", size=size, resizable=False, on_close=closing,
                          position=app._over_main(size))
     window.content = toga.Box(style=Pack(direction=COLUMN, margin=14, gap=8), children=[
-        toga.Label("Log in to a device by its address, one the scan didn't find (over a VPN, say), to list what it "
-                   "sees: its ARP table, LLDP neighbours and, on airOS, its stations. They're listed under it, and "
-                   "the device tools reach them through it."),
+        toga.Label(_fit("Log in to a device by its address, one the scan didn't find (over a VPN, say), to list what "
+                        "it sees: its ARP table, LLDP neighbours and, on airOS, its stations. They're listed under it, "
+                        "and the device tools reach them through it.", size[0])),
         toga.Box(style=row, children=[toga.Label("Address", style=label), ip_box]),
         toga.Box(style=row, children=[toga.Label("Port", style=label), port_box, trouble]),
         toga.Box(style=row, children=[toga.Label("Username", style=label), user_box]),
