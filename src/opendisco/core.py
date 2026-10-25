@@ -622,6 +622,7 @@ class Device:
     services: dict = field(default_factory=dict)  # port -> "ssh" / "https" / "http" / "open"...
     service_info: dict = field(default_factory=dict)  # port -> what answered there (banner, page title...)
     port_search: dict = field(default_factory=dict)  # the last search of its TCP ports (find_ports)
+    tftp: bool = False  # a TFTP server answered on it: TFTP recovery mode
     port_hints: dict = field(default_factory=dict)  # "https"/"ssh" -> {source: port}, beyond discovery
     alias: dict = field(default_factory=dict)  # the temporary alias it was reached through
     direct: bool = False  # answered without an alias (old firmware answers other subnets)
@@ -762,6 +763,7 @@ class Device:
         if other.ports is not None:
             self.ports = sorted(set(self.ports or []) | set(other.ports))
         self.port_search = self.port_search or other.port_search
+        self.tftp = self.tftp or other.tftp
         self.mdns = self.mdns or other.mdns
         self.ssdp = self.ssdp or other.ssdp
         self.api = self.api or other.api
@@ -1872,6 +1874,29 @@ def upnp_port_hint(d) -> None:
             d.port_hints.setdefault(url.scheme, {})["UPnP"] = url.port or (443 if url.scheme == "https" else 80)
     except ValueError:
         pass
+
+
+def probe_tftp(ip: str, timeout: float = 1.0, port: int = 69) -> bool:
+    """Whether a TFTP server answers on ip. Ubiquiti gear in TFTP recovery mode (reset held while
+    powering up) waits there for firmware, silent to discovery. A read request for a file that
+    isn't there gets an error packet back (or data), from another port, as TFTP does."""
+    try:
+        with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as s:
+            s.settimeout(timeout)
+            s.sendto(b"\x00\x01opendisco-probe\x00octet\x00", (ip, port))
+            end = time.monotonic() + timeout
+            while time.monotonic() < end:
+                data, addr = s.recvfrom(1024)
+                if addr[0] == ip and data[:2] in (b"\x00\x03", b"\x00\x05"):  # DATA or ERROR
+                    return True
+    except OSError:  # includes the timeout
+        pass
+    return False
+
+
+def tftp_candidates(devs) -> list:
+    """Ubiquiti gear that's on the network (ARP, the wire) but silent to discovery."""
+    return [d for d in devs if d.ip and not d.ubnt_packets and d.vendor == "Ubiquiti" and _usable_ip(d.ip)]
 
 
 def probe_console_api(ip: str) -> dict:
@@ -3613,7 +3638,7 @@ def run_alias_rounds(sc: Scanner, inv: Inventory, mgr: AliasManager, plans, opts
              so a point-to-point pair isn't disturbed. Blocks with no free address are skipped.
     Round 3  blocks that stayed silent, from their other address: a lone device sitting on
              the address round 2 borrowed would have ignored us."""
-    result = {"arp": {}, "ctx": {}, "skipped": []}
+    result = {"arp": {}, "ctx": {}, "skipped": [], "tftp": set()}
 
     def occupied(seen) -> set:
         # Our own earlier aliases don't count as taken; anything that answered does.
@@ -3642,11 +3667,17 @@ def run_alias_rounds(sc: Scanner, inv: Inventory, mgr: AliasManager, plans, opts
             sc.run(max(3.0, sc.sweep_seconds() + 2.0))
         finally:
             # Read ARP before the aliases go: removing them flushes those entries.
+            heard = []
             for ip, mac in read_arp_table().items():
                 for t, alias_ip in added:
                     if ip != alias_ip and _in_any(ip, [t.network]):
                         result["arp"][ip] = mac
                         result["ctx"].setdefault(ip, alias_context(link, alias_ip, t.network))
+                        if vendor_of(mac) == "Ubiquiti" and ip not in sc.replied:
+                            heard.append(ip)
+            if heard:  # silent Ubiquiti gear: in TFTP recovery mode? Only reachable while the alias is up
+                with ThreadPoolExecutor(16) as ex:
+                    result["tftp"].update(ip for ip, ok in zip(heard, ex.map(probe_tftp, heard)) if ok)
             sc.end_alias_round()
             for t, ip in added:
                 mgr.remove(link.name, ip, t.network.prefixlen)
@@ -3861,6 +3892,16 @@ def enrich(inv: Inventory, sc: Scanner, opts, log, alias_result=None) -> None:
         if d and any(p != opts.port for p in ports):
             d.console = True  # consoles echo discovery requests from an ephemeral port
 
+    for ip in alias_result.get("tftp", ()):  # found during an alias round, while it was reachable
+        d = inv.find(ip=ip)
+        if d:
+            d.tftp = True
+    silent = [d for d in tftp_candidates(inv.devices.values()) if not d.tftp and not d.alias and not opts.listen]
+    if silent:
+        with ThreadPoolExecutor(16) as ex:
+            for d, answered in zip(silent, ex.map(lambda d: probe_tftp(d.ip), silent)):
+                d.tftp = d.tftp or answered
+
     if opts.ports or opts.deep:
         check_ports(inv.devices.values(), opts, log)
 
@@ -4062,7 +4103,7 @@ def diagnose(inv: Inventory, all_ifaces, scan_nets, opts, alias_used=(), skipped
             issues.append(("error", "LINK-LOCAL",
                            "Has a 169.254.x.x self-assigned address: it never got a DHCP lease. "
                            "Check the DHCP server, VLAN/port profile and uplink."))
-        if FALLBACK_IP in d.ips and info.get("dhcp_bound") is not True:
+        if FALLBACK_IP in d.ips and info.get("dhcp_bound") is not True and not d.tftp:  # recovery mode sits there
             issues.append(("warn", "FALLBACK-IP",
                            f"Sitting on the factory fallback address {FALLBACK_IP}, which usually means "
                            "no DHCP lease. Several devices in this state will conflict with each other."))
@@ -4132,12 +4173,20 @@ def diagnose(inv: Inventory, all_ifaces, scan_nets, opts, alias_used=(), skipped
                 advice = " Add -a to probe it through a temporary address (--sniff -a does that automatically)."
             issues.append(("note", "OTHER-SUBNET", f"Heard on the wire, outside this computer's subnets ({nets})."
                            + advice))
+        elif d.tftp:
+            issues.append(("error", "TFTP-RECOVERY",
+                           f"A TFTP server answers on {d.ip} and UBNT discovery doesn't: it's in TFTP recovery "
+                           "mode, waiting for firmware. Upload a firmware image for this model with a TFTP client "
+                           f"in binary mode (tftp -i {d.ip} put <firmware>.bin) and leave it powered until it "
+                           "reboots, which can take 10 minutes."))
         elif not heard_ubnt and not opts.listen and d.via and d.ips and d.vendor == "Ubiquiti":
             seen = "/".join(v for v in VIA_ORDER if v in d.via)
+            hint = (f" Sitting at {FALLBACK_IP} without discovery, it may be in TFTP recovery mode (its LEDs "
+                    "cycle): then it takes firmware over TFTP." if FALLBACK_IP in d.ips else "")
             issues.append(("warn", "NO-DISCOVERY",
                            f"Seen via {seen} but didn't answer UBNT discovery: discovery may be turned "
                            "off on the device, UDP 10001 filtered (firewall, client isolation), or the "
-                           "model doesn't support it."))
+                           "model doesn't support it." + hint))
         for kind, tag, standard in (("https", "HTTPS-PORT", opts.https_ports), ("ssh", "SSH-PORT", opts.ssh_ports)):
             name = "web UI" if kind == "https" else "SSH"
             said = d.said_ports(kind)
@@ -4228,7 +4277,7 @@ STATUS_LABELS = {
     "LOSS": "Missed replies", "NO-DISCOVERY": "No discovery reply", "NO-LEASE": "No DHCP lease",
     "NO-PORTS": "No ports open", "OFF-SUBNET": "Wrong subnet", "REBOOTED": "Rebooted recently",
     "WAN-DOWN": "WAN down", "HTTPS-PORT": "HTTPS port problem", "SSH-PORT": "SSH port problem",
-    "CVE": "CVE risk",
+    "CVE": "CVE risk", "TFTP-RECOVERY": "TFTP recovery mode",
 }
 LEVEL_ORDER = ("ok", "note", "warn", "error")
 NVD_URL = "https://nvd.nist.gov/vuln/detail/{}"
