@@ -35,15 +35,27 @@ SWEEP_KEY = "sweep_subnets"  # settings.json: the list's lines, comments and all
 # worth adds about half a minute to every scan.
 SWEEP_LIMIT = 8192
 SWEEP_RATE = 500  # core.parse_args' --rate default
+SECONDS = "\u00a0s"  # after a number: a no-break space, so a wrapped label never ends a line on it
 
-# Export's choices after the scan report: (kind, button, what it saves, file types, the first the default)
+# Export's choices: (kind, button, what it saves, file types, the first the default and on phones
+# the only one). The scan report comes first, then the site-wide extras.
+SCAN_EXPORT = ("scan", "Scan report…", "Every device as the table lists it, with diagnostics", ["html", "csv", "json"])
 SITE_EXPORTS = [
-    ("security", "Security report…", "Known CVEs and outdated firmware, device by device: HTML or CSV",
-     ["html", "csv"]),
-    ("backups", "Config backups…", "Every saved config backup, in a .zip with an index", ["zip"]),
-    ("notes", "Notes…", "Every device's note, seen in this scan or not: HTML, CSV or JSON", ["html", "csv", "json"]),
-    ("log", "Log…", "The Log, as a text file", ["txt"]),
+    ("security", "Security report…", "Known CVEs and outdated firmware, device by device", ["html", "csv"]),
+    ("backups", "Config backups…", "Every saved config backup, with an index", ["zip"]),
+    ("notes", "Notes…", "Every device's note, seen in this scan or not", ["html", "csv", "json"]),
+    ("log", "Log…", "The Log", ["txt"]),
 ]
+FORMAT_NAMES = {"html": "HTML", "csv": "CSV", "json": "JSON", "zip": "a .zip", "txt": "a text file"}
+
+
+def choice_text(text: str, types, extra: str = "") -> str:
+    """An export choice's line: what it saves, how many (extra), and the formats it's saved in
+    ("Known CVEs ...: HTML or CSV.")."""
+    names = [FORMAT_NAMES.get(t, t.upper()) for t in types]
+    formats = names[0] if len(names) == 1 else f"{', '.join(names[:-1])} or {names[-1]}"
+    return f"{text}{f' ({extra})' if extra else ''}: {formats}."
+
 
 
 # -- search ----------------------------------------------------------------------------
@@ -206,78 +218,98 @@ def _paths(found) -> list:
     return out
 
 
+def _backups(tools, mac: str) -> list:
+    """One device's saved configs (devicetools.list_backups: Backups, newest first) as their paths."""
+    try:
+        return _paths(tools.list_backups(mac))
+    except Exception:
+        return []
+
+
 def backups_for(d) -> list:
-    """d's saved config backups (devicetools.list_backups), newest first; [] where it has none
-    or this platform has no device tools."""
+    """d's saved config backups, newest first, as the config files' paths (each has its
+    devicetools .json beside it); [] where it has none or this platform has no device tools."""
     tools = _devicetools()
     if not d.mac or tools is None or not hasattr(tools, "list_backups"):
         return []
-    try:
-        return _paths(tools.list_backups(d.mac))
-    except Exception:
-        return []
+    return _backups(tools, d.mac)
 
 
 def all_backups() -> list:
-    """[(mac, [backup paths, newest first])] for every device with saved config backups."""
+    """[(mac, [backup paths, newest first])] for every device with saved config backups
+    (devicetools.backup_macs)."""
     tools = _devicetools()
-    if tools is None or not hasattr(tools, "list_backups"):
+    if tools is None or not hasattr(tools, "backup_macs") or not hasattr(tools, "list_backups"):
         return []
     try:
-        found = tools.list_backups()
+        macs = tools.backup_macs()
     except Exception:
         return []
-    if isinstance(found, dict):  # {mac: [paths]}
-        items = [(core.norm_mac(mac), _paths(paths)) for mac, paths in found.items()]
-    else:  # [(mac, path)] or objects with .mac and .path
-        grouped = {}
-        for item in found or ():
-            mac, path = (item if isinstance(item, tuple) else (getattr(item, "mac", ""), item))
-            grouped.setdefault(core.norm_mac(mac) if mac else "", []).extend(_paths([path]))
-        items = list(grouped.items())
-    return sorted((mac, paths) for mac, paths in items if paths)
+    found = [(core.norm_mac(mac), _backups(tools, mac)) for mac in macs]
+    return [(mac, paths) for mac, paths in found if paths]
+
+
+def _sidecar(path: Path) -> Path | None:
+    """The .json devicetools keeps beside a backup (where it came from: model, firmware,
+    reason...), if it's there; a restore checks the model with it."""
+    meta = path.with_name(path.name + ".json")
+    return meta if meta.is_file() else None
+
+
+def _reason(path: Path) -> str:
+    """Why the backup was taken ("backup", "before upload"...), from its .json."""
+    meta = _sidecar(path)
+    try:
+        return str(json.loads(meta.read_text(encoding="utf-8")).get("reason") or "") if meta else ""
+    except (OSError, ValueError, AttributeError):
+        return ""
+
+
+def _pack_backups(z: zipfile.ZipFile, folder: str, paths) -> list:
+    """Put backups and their .json files in the zip under folder/; returns the names given."""
+    names = _unique_names(paths)
+    for path, name in zip(paths, names):
+        z.write(path, f"{folder}/{name}")
+        meta = _sidecar(path)
+        if meta:
+            z.write(meta, f"{folder}/{name}.json")
+    return names
+
+
+def _health():
+    try:
+        from opendisco import health
+        return health
+    except Exception:  # not in this build
+        return None
 
 
 def latency_text(d) -> str:
-    """What the latency check measured for d, in a line; "" when it wasn't measured."""
-    try:
-        from opendisco import health
-    except Exception:
-        health = None
-    if health is not None and hasattr(health, "latency_text"):
-        try:
-            return health.latency_text(d) or ""
-        except Exception:
-            return ""
-    value = getattr(d, "latency", None)
-    if not value:
+    """What the latency check during the scan measured for d (health.py): its Details row
+    (min/avg/max and loss), else its table cell; "" when it wasn't measured."""
+    health = _health()
+    if health is None or not (getattr(d, "health", None) or {}).get("latency"):
         return ""
-    if isinstance(value, dict):
-        return ", ".join(f"{k} {v}" for k, v in value.items() if v is not None)
-    return str(value)
+    try:
+        rows = dict(health.detail_rows(d)) if hasattr(health, "detail_rows") else {}
+        return rows.get("Latency") or health.latency_cell(d) or ""
+    except Exception:
+        return ""
 
 
 def latest_firmware(d) -> tuple:
-    """(the latest firmware for d as text, whether d runs older firmware than that), from what
-    the firmware check during the scan put on the device; ("", None) when it isn't known."""
+    """(the latest firmware for d, whether a newer one than d runs is out), from the firmware
+    check during the scan (health.py, d.health["firmware"]); ("", None) when it wasn't looked up
+    or Ubiquiti's list has none for it."""
+    found = (getattr(d, "health", None) or {}).get("firmware") or {}
+    health = _health()
     try:
-        from opendisco import health
+        latest = health.latest_version(d) if health is not None else found.get("latest") or ""
     except Exception:
-        health = None
-    if health is not None and hasattr(health, "latest_firmware"):
-        try:
-            found = health.latest_firmware(d)
-            if found:
-                return found
-        except Exception:
-            pass
-    value = getattr(d, "latest_firmware", None)
-    if isinstance(value, dict):
-        value = value.get("version") or ""
-    latest = str(value or "")
-    if not latest or not d.firmware:
-        return latest, None
-    return latest, vulns.version_key(d.firmware) < vulns.version_key(latest)
+        latest = found.get("latest") or ""
+    if not latest:
+        return "", None
+    return str(latest), bool(found.get("newer"))
 
 
 def cve_fix(d) -> str:
@@ -366,8 +398,9 @@ def _packets_summary(text: str) -> str:
 def device_report(d, res=None, backups=(), noted: str = "") -> str:
     """A device's own report, HTML that opens on any phone or computer: who it is, its note, what's
     wrong with it, its known CVEs, firmware, latency and ports, then all Details shows and its
-    packets (the summary, with the full listing folded away). backups: the names of the config
-    backups packed with it; noted: when the note was written (Notes.entry's "updated")."""
+    packets (the summary, with the full listing folded away). backups: the config backups packed
+    with it, names or (name, why it was taken); noted: when the note was written (Notes.entry's
+    "updated")."""
     title = _who(d)
     ident = " · ".join(escape(x) for x in (d.ip, d.mac or "", d.model, d.vendor) if x)
     seen = time.strftime("%Y-%m-%d %H:%M", time.localtime(d.last_seen))
@@ -383,8 +416,8 @@ def device_report(d, res=None, backups=(), noted: str = "") -> str:
     firmware = [["Running", escape(d.info.get("firmware") or d.firmware or "not reported")]]
     latest, outdated = latest_firmware(d)
     if latest:
-        firmware.append(["Latest", escape(latest) + (' <b class="warn">(newer than this one)</b>' if outdated else
-                                                     " (this one)" if outdated is False else "")])
+        firmware.append(["Latest", escape(latest) + (' <b class="warn">(newer than this one)</b>' if outdated
+                                                     else " (up to date)")])
     fix = cve_fix(d)
     if fix:
         firmware.append(["Fixes its known CVEs", escape(fix) + " or later"])
@@ -408,8 +441,11 @@ def device_report(d, res=None, backups=(), noted: str = "") -> str:
     out.append(f"<h2>Packets</h2><pre>{escape(_packets_summary(packets))}</pre>"
                f"<details><summary>Every packet kept, decoded</summary><pre>{escape(packets)}</pre></details>")
     if backups:
-        out.append("<h2>Config backups</h2><p>In this .zip's backups folder, newest first:</p><ul>"
-                   + "".join(f'<li><a href="backups/{escape(name)}">{escape(name)}</a></li>' for name in backups)
+        out.append("<h2>Config backups</h2><p>In this .zip's backups folder, newest first, each with a .json "
+                   "of where it came from:</p><ul>"
+                   + "".join(f'<li><a href="backups/{escape(name)}">{escape(name)}</a>'
+                             + (f" ({escape(reason)})" if reason else "") + "</li>"
+                             for name, reason in (b if isinstance(b, tuple) else (b, "") for b in backups))
                    + "</ul>")
     return _page(f"OpenDisco: {title}", "\n".join(out))
 
@@ -451,16 +487,15 @@ def device_file_name(d, ext: str) -> str:
 
 
 def write_device_export(path, d, res=None, backups=(), noted: str = "") -> None:
-    """A device's report: a .zip holds it and the config backups given (backups/<file>);
-    anything else is the report alone, as HTML."""
+    """A device's report: a .zip holds it and the config backups given, each with its .json
+    (backups/<file>); anything else is the report alone, as HTML."""
     path = Path(path)
     backups = [Path(b) for b in backups]
     if path.suffix.lower() == ".zip":
-        names = _unique_names(backups)
+        listed = [(name, _reason(b)) for b, name in zip(backups, _unique_names(backups))]
         with zipfile.ZipFile(path, "w", zipfile.ZIP_DEFLATED) as z:
-            z.writestr(path.stem + ".html", device_report(d, res, names, noted))
-            for backup, name in zip(backups, names):
-                z.write(backup, f"backups/{name}")
+            z.writestr(path.stem + ".html", device_report(d, res, listed, noted))  # first: what to open
+            _pack_backups(z, "backups", backups)
         return
     path.write_text(device_report(d, res, (), noted), encoding="utf-8")
 
@@ -607,7 +642,8 @@ def notes_json(notes: Notes, devices=()) -> str:
 
 def write_backups_zip(path, backups, notes: Notes | None = None, devices=()) -> int:
     """Every config backup given ([(mac, [paths])], as all_backups() lists them) in a .zip, a
-    folder a device, with an index.txt naming the devices. Returns how many files went in."""
+    folder a device named like devicetools' (aa-bb-cc-dd-ee-ff), each backup with its .json, and an
+    index.txt naming the devices. Returns how many backups went in."""
     known = {d.mac: d for d in devices if d.mac}
     lines, count = ["OpenDisco config backups, " + time.strftime("%Y-%m-%d %H:%M"), ""], 0
     with zipfile.ZipFile(path, "w", zipfile.ZIP_DEFLATED) as z:
@@ -618,9 +654,10 @@ def write_backups_zip(path, backups, notes: Notes | None = None, devices=()) -> 
             ip = d.ip if d else entry.get("ip") or ""
             folder = (mac or "unknown").replace(":", "-")
             lines.append(f"{folder}/  {ip}  {who}".rstrip())
-            for p, name in zip(paths, _unique_names(paths)):
-                z.write(p, f"{folder}/{name}")
-                lines.append(f"    {name}  {time.strftime('%Y-%m-%d %H:%M', time.localtime(p.stat().st_mtime))}")
+            for p, name in zip(paths, _pack_backups(z, folder, paths)):
+                why = _reason(p)
+                lines.append(f"    {name}  {time.strftime('%Y-%m-%d %H:%M', time.localtime(p.stat().st_mtime))}"
+                             + (f"  ({why})" if why else ""))
                 count += 1
         z.writestr("index.txt", "\n".join(lines) + "\n")
     return count
@@ -699,7 +736,7 @@ def parse_sweep_list(text: str) -> tuple:
             total += _addresses(net)
             targets.append(str(net.network_address) if net.prefixlen == 32 else str(net))
     if total > SWEEP_LIMIT:
-        problems.append(f"These add up to {total:,} addresses, about {sweep_seconds(total):.0f} s more on every "
+        problems.append(f"These add up to {total:,} addresses, about {sweep_seconds(total):.0f}{SECONDS} more on every "
                         f"scan; the limit is {SWEEP_LIMIT:,} (a /19's worth). List the subnets the gear is on.")
     return targets, problems
 
@@ -722,4 +759,4 @@ def sweep_targets(saved) -> list:
 def describe_targets(targets) -> str:
     total = sum(_addresses(ipaddress.IPv4Network(t)) for t in targets)
     return (f"{', '.join(targets[:4])}{f' and {len(targets) - 4} more' if len(targets) > 4 else ''} "
-            f"({total:,} address{'es' if total != 1 else ''}, about {max(1, round(sweep_seconds(total)))} s)")
+            f"({total:,} address{'es' if total != 1 else ''}, about {max(1, round(sweep_seconds(total)))}{SECONDS})")
