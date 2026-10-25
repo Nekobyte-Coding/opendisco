@@ -8,7 +8,8 @@ Packets, Tools, Notes and Log. Tools pings the device (core.ping: the app's own 
 SSH session to it (phonessh: the app's own SSH), finds its ports, opens its web UI, rescans it,
 reads what it sees of its neighbours (Scan from device, as on the desktop: devicetools), checks
 and updates its firmware, edits its config, changes its login (phonetools) and copies its
-addresses, with what they find, and the SSH session, in a console underneath.
+addresses, with what they find, and the SSH session, in a console underneath. On a tablet
+(wide), the device's page sits beside the list instead of over it, turned either way.
 
 This module is what both phones share. What each does natively is in phone_<platform>.py
 (phone_ios.py: UIKit through rubicon-objc; phone_android.py), which provides:
@@ -33,7 +34,12 @@ This module is what both phones share. What each does natively is in phone_<plat
                                 new_password: no password manager taking it over
     end_editing(app)            finish typing, so a field's value has its last character
     done_bar(app, widget)       a way to put the keyboard away from a many-line text view
-    side_by_side(app)           True while the device list stays in view beside the pages (a tablet)
+    wide(app)                   True on a tablet: the list and the device page side by side, laid
+                                out here (Detail)
+    side_by_side(app)           True while the platform's own layout keeps the list in view beside
+                                the pages (iOS: an iPad at a regular width, in a split view)
+    clear_selection(app)        a tablet: no row marked as the one beside the list (the scan's
+                                Notes and Log are showing there)
 app.py makes the widgets every platform shares and calls in here; it all runs on the UI thread.
 """
 import importlib
@@ -52,6 +58,7 @@ DEVICE_TABS = ("Details", "Packets", "Tools")  # hidden while the page shows the
 FIND_KINDS = {"HTTP": "find_http", "HTTPS": "find_https", "SSH": "find_ssh", "All ports": "all_ports"}
 CONSOLE_KEEP = 200_000  # characters of console output kept
 SHELL_COLUMNS = 64  # what the console shows in a line on an iPhone
+LIST_WIDTH = 320  # a tablet's device list, beside the device page
 
 
 def supported(platform: str) -> bool:
@@ -80,12 +87,19 @@ def _nothing(*args, **kwargs):
 
 
 FALLBACKS = {"Picker": _SelectionPicker, "watch_keyboard": _nothing, "plain_entry": _nothing,
-             "end_editing": _nothing, "done_bar": _nothing, "side_by_side": _nothing}
+             "end_editing": _nothing, "done_bar": _nothing, "wide": lambda app: False,
+             "side_by_side": lambda app: False, "clear_selection": _nothing}
 
 
 def hook(app, name: str):
     """A phone_<platform> function that not every platform has, or its plain fallback."""
     return getattr(native(app), name, None) or FALLBACKS[name]
+
+
+def beside(app) -> bool:
+    """True while the list is in view beside the device page: a tablet, laid out here (wide) or
+    by the platform (side_by_side)."""
+    return app.wide or hook(app, "side_by_side")(app)
 
 
 class Mirror:
@@ -107,7 +121,7 @@ class Mirror:
 # -- the device list ---------------------------------------------------------------
 def main_screen(app) -> toga.Box:
     """Quick Scan, Full Scan and Stop across the top, the devices under them, the status line at
-    the bottom."""
+    the bottom; on a tablet, the device page (Detail) to their right."""
     quick = toga.Button("Quick Scan", on_press=lambda w, **kw: _scan(app, "Quick"), style=Pack(flex=1))
     full = toga.Button("Full Scan", on_press=lambda w, **kw: _scan(app, "Full scan"), style=Pack(flex=1))
     status_here = app.status
@@ -122,11 +136,41 @@ def main_screen(app) -> toga.Box:
     style(quick)
     style(full)
     style(app.stop_button, "tinted", "systemRedColor")
-    return content
+    app.wide = hook(app, "wide")(app)
+    if not app.wide:
+        return content
+    content.style.update(width=LIST_WIDTH)
+    app.tool_status.parent.remove(app.tool_status)  # the list's, beside Tools, says it already
+    app.page = Detail(app)
+    return toga.Box(style=Pack(direction=ROW, flex=1), children=[
+        content, toga.Divider(direction=toga.Divider.VERTICAL), app.page.box])
+
+
+class Detail:
+    """A tablet's device page, beside the list rather than over it: the title and subtitle a
+    page shows in the title bar, over the tabs. With no device showing, it shows the scan's
+    Notes and Log (show_scan). Shows and closes like the phones' Page."""
+
+    def __init__(self, app):
+        self.app = app
+        self.title = toga.Label("", style=Pack(font_size=20, font_weight="bold", color="#1c1c1e"))
+        self.subtitle = toga.Label("", style=Pack(font_size=14, color="#8a8a8e"))
+        self.box = toga.Box(style=Pack(direction=COLUMN, flex=1), children=[
+            toga.Box(style=Pack(direction=COLUMN, gap=2, margin=(12, 16, 4, 16)),
+                     children=[self.title, self.subtitle]),
+            app.tabs])
+
+    def show(self, title: str, subtitle: str = ""):
+        self.title.text, self.subtitle.text = title, subtitle
+
+    def close(self):
+        show_scan(self.app)
 
 
 def _scan(app, mode: str):
     app.mode.value = mode
+    if beside(app):  # the new scan clears the shown device's tabs; its Log shows how it goes
+        show_scan(app)
     app.loop.create_task(app.on_start(None))
 
 
@@ -137,7 +181,8 @@ def fit(app):
         text.style.update(margin_left=8, margin_right=8)
         ui.monospaced(text, 10)
     ui.monospaced(app.console, 10)
-    app.page = ui.Page(app, toga.Box(style=Pack(direction=COLUMN, flex=1), children=[app.tabs]))
+    if not app.wide:  # (a tablet's is beside the list: Detail)
+        app.page = ui.Page(app, toga.Box(style=Pack(direction=COLUMN, flex=1), children=[app.tabs]))
     ui.fit(app, export=lambda: app.loop.create_task(app.on_export(None)), notes=lambda: show_scan(app),
            settings=app.preferences)
     for button in (app.ping_button, app.ssh_button, app.web_button, app.rescan_button, app.scan_from_button,
@@ -147,6 +192,8 @@ def fit(app):
         ui.style_button(button, "gray")
     hook(app, "watch_keyboard")(app, app.console)
     hook(app, "plain_entry")(app.ssh_input, send=True)
+    if app.wide:  # beside the list until a device is tapped
+        show_scan(app)
     update_tools(app)
 
 
@@ -187,16 +234,25 @@ def show_device(app, d):
     update_tools(app)
 
 
-def show_scan(app):
-    """Open the page on the scan's Notes and Log, with no device."""
-    _device_tabs(app, False)
+def _showing_scan(app) -> bool:
+    return not app.tabs.content["Details"].enabled
+
+
+def _scan_summary(app) -> str:
     if app.running:
-        summary = f"{app.mode.value}: scanning"
-    elif app.result:
-        summary = f"{app.mode.value}: {len(app.result.devices)} device(s), {app.result.elapsed:.0f}s"
-    else:
-        summary = "No scan yet"
-    app.page.show("Scan", summary)
+        return f"{app.mode.value}: scanning"
+    if app.result:
+        return f"{app.mode.value}: {len(app.result.devices)} device(s), {app.result.elapsed:.0f}s"
+    return "No scan yet"
+
+
+def show_scan(app):
+    """Open the page on the scan's Notes and Log, with no device (a tablet: beside the list,
+    with no device's row marked)."""
+    _device_tabs(app, False)
+    if beside(app):
+        hook(app, "clear_selection")(app)
+    app.page.show("Scan", _scan_summary(app))
 
 
 # -- Tools -------------------------------------------------------------------------------
@@ -317,6 +373,8 @@ def update_tools(app):
     retitle = native(app).retitle
     d = app._selected_device()
     state = app._menu_state(d)
+    if beside(app) and _showing_scan(app):  # a scan started or ended beside it
+        app.page.show("Scan", _scan_summary(app))
     idle = bool(d and d.ip and app.result) and not (app.running or app.rescanning or app.finding or app.device_job)
     retitle(app.find_button, "Stop" if app.finding else "Find")
     app.find_button.enabled = idle or app.finding
@@ -535,7 +593,7 @@ async def scan_from(app):
     app._tool_said(lines[0])
     if lines[1:]:
         say(app, "\n".join(lines[1:]))
-    if not hook(app, "side_by_side")(app):
+    if not beside(app):  # (a tablet shows the list already)
         app.page.close()  # back to the list
 
 

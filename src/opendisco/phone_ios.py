@@ -146,7 +146,7 @@ class Page:
         split = _split(self.app)
         if index == 0:  # the device page beside the list: none any more
             nav.setViewControllers([split.empty], animated=False)
-            split.deselect()
+            clear_selection(self.app)
         else:  # this page, and any pushed over it
             nav.popToViewController(stack[index - 1], animated=True)
         split.fit_list()
@@ -254,12 +254,6 @@ class _Split:
         if getattr(self.app, "_ios_edge", None) is not None:
             self.app._ios_edge.hidden = self.view is None
 
-    def deselect(self):
-        native = self.app.table._impl.native
-        path = native.indexPathForSelectedRow
-        if path is not None:
-            native.deselectRowAtIndexPath(path, animated=True)
-
 
 def _pad() -> bool:
     return _objc("UIDevice").currentDevice.userInterfaceIdiom == 1  # UIUserInterfaceIdiomPad
@@ -274,6 +268,14 @@ def _split(app) -> _Split:
 def side_by_side(app) -> bool:
     """True while the device list stays in view beside the pages (an iPad at a regular width)."""
     return _split(app).view is not None
+
+
+def clear_selection(app):
+    """No row marked as the device beside the list (the scan's Notes and Log are there, or nothing)."""
+    native = app.table._impl.native
+    path = native.indexPathForSelectedRow
+    if path is not None:
+        native.deselectRowAtIndexPath(path, animated=True)
 
 
 def fit(app, export, notes, settings):
