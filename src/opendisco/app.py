@@ -139,6 +139,25 @@ def fit_columns(need: list, least: list, width: float) -> list:
     return [max(head, min(n, low)) for n, head in zip(need, least)]
 
 
+def _fix_gtk_text_flush():
+    """Linux: setting a text box's text makes Toga run GTK's pending events until none are left.
+    PyGObject's asyncio loop can't run meanwhile, yet counts as pending while a callback of its
+    own is due, so text set from a GTK signal at such a moment never returned: the terms of use,
+    at startup, hung the app every time. Stop once a round runs nothing."""
+    try:
+        from gi.repository import GLib
+        from toga_gtk.widgets.base import Widget
+    except ImportError:
+        return
+
+    def flush_gtk_events(self):
+        context = GLib.MainContext.default()
+        while context.pending() and context.iteration(False):
+            pass
+
+    Widget.flush_gtk_events = flush_gtk_events
+
+
 class OpenDiscoApp(toga.App):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
@@ -152,6 +171,8 @@ class OpenDiscoApp(toga.App):
         self._toga_commands = {c.id for c in self.commands if isinstance(c, toga.Command)}  # Quit, About...
         self.terms_waiting = False
         self.caps = core.capabilities()
+        if self.caps["platform"] == "linux":
+            _fix_gtk_text_flush()
         self.caps["vlans"] = self.caps["aliases"] and self.caps["listen"]
         self.caps["updates"] = self.caps["platform"] != "ios"  # OpenDisco updates itself
         offered = dict(self.caps)
