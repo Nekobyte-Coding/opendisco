@@ -1510,22 +1510,21 @@ class OpenDiscoApp(toga.App):
         if error:
             self._update_failed(release, error)
             return
+        if kind == "android":
+            if self._may_install_apps():
+                self._hand_apk_over(release, path, folder)
+            else:
+                self._install_when_allowed(release, path, folder)
+            return
         self.settings["update"] = {"version": release.version, "folder": str(folder)}
         self._save_settings()
         try:
             if kind == "windows":
                 update.start_windows_update(path, target, folder / "update.log")
-            elif kind == "android":
-                self._install_apk(path)
-                self.updating = False  # the install is Android's now; backing out of it allows another try
-                self._append_log(f"Android's installer takes over to install OpenDisco {release.version}; it may "
-                                 "first ask to allow installing apps from OpenDisco.", status=False)
-                self.status.text = "Android's installer takes over."
-                return
             else:
                 update.relaunch_after_exit(update.relaunch_command(kind, target))
         except Exception as e:
-            if kind in ("windows", "android"):  # nothing was installed
+            if kind == "windows":  # nothing was installed
                 self.settings.pop("update", None)
                 self._save_settings()
                 shutil.rmtree(folder, ignore_errors=True)
@@ -1577,6 +1576,64 @@ class OpenDiscoApp(toga.App):
             if item.name != keep:
                 shutil.rmtree(item) if item.is_dir() else item.unlink()
         return folder
+
+    def _may_install_apps(self) -> bool:
+        """Android 8 and later install apps from OpenDisco only once Settings allows it."""
+        from java import jclass
+        if jclass("android.os.Build$VERSION").SDK_INT < 26:
+            return True
+        return bool(self._impl.native.getPackageManager().canRequestPackageInstalls())
+
+    def _install_when_allowed(self, release, path, folder):
+        """Android: open the setting that allows installing apps from OpenDisco, and hand the
+        .apk over as soon as the app is back in front with it allowed. (Android's installer can
+        ask for the setting itself, but then leaves the install behind.)"""
+        def hand_over(*args, **kwargs):
+            self.main_window.on_gain_focus = None
+            close()
+            self._hand_apk_over(release, path, folder)
+
+        def not_now(*args, **kwargs):
+            self.main_window.on_gain_focus = None
+            close()
+            self.updating = False
+
+        def back(*args, **kwargs):
+            if self._may_install_apps():
+                hand_over()
+
+        text = (f"OpenDisco {release.version} is downloaded and checked. Android installs it once installing "
+                "apps from OpenDisco is allowed: turn on Allow from this source in the settings that open, then "
+                "come back to OpenDisco.")
+        content = toga.Box(style=Pack(direction=COLUMN, gap=10), children=[
+            toga.Label(self._wrap(text)),
+            toga.Box(style=Pack(direction=ROW, gap=8), children=[
+                toga.Button("Not now", on_press=not_now),
+                toga.Button("Settings", on_press=lambda w, **kwargs: self._open_install_setting()),
+                toga.Button("Install", on_press=hand_over)])])
+        close = self._show_panel(f"Install OpenDisco {release.version}", content, (480, 200), on_close=not_now)
+        self.main_window.on_gain_focus = back
+        self._open_install_setting()
+
+    def _open_install_setting(self):
+        from java import jclass
+        intent = jclass("android.content.Intent")(jclass("android.provider.Settings").ACTION_MANAGE_UNKNOWN_APP_SOURCES,
+                                                  jclass("android.net.Uri").parse(f"package:{self.app_id}"))
+        self._impl.native.startActivity(intent)
+
+    def _hand_apk_over(self, release, path, folder):
+        self.updating = False  # the install is Android's now; backing out of it allows another try
+        self.settings["update"] = {"version": release.version, "folder": str(folder)}
+        self._save_settings()
+        try:
+            self._install_apk(path)
+        except Exception as e:
+            self.settings.pop("update", None)
+            self._save_settings()
+            self._update_failed(release, f"Android's installer didn't start ({e})")
+            return
+        self._append_log(f"Android's installer takes over to install OpenDisco {release.version}.", status=False)
+        self.status.text = "Android's installer takes over."
 
     def _install_apk(self, path: Path):
         """Android: hand the .apk to the system's installer, which asks before installing."""
