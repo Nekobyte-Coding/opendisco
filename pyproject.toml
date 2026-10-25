@@ -150,9 +150,19 @@ entitlement."com.apple.developer.networking.multicast" = true
 [tool.briefcase.app.opendisco.android]
 requires = [
     "toga-android~=0.5.0",
+    "asyncssh==2.23.1",  # SSH for the device tools (phonessh); 2.24 needs a newer cryptography than Chaquopy has
 ]
+# asyncssh needs cryptography, which Chaquopy's package repository has for Python 3.13 at the newest
+# (42.0.8). Building needs python3.13 on this computer, for Chaquopy's pip (e.g. Homebrew's python@3.13).
+build_gradle_extra_content = """
+chaquopy {
+    defaultConfig {
+        version = "3.13"
+    }
+}
+"""
 base_theme = "Theme.MaterialComponents.Light.DarkActionBar"
-# Blue like the iPhone's; the title bar and status bar are drawn light at startup (androidgui).
+# Blue like the iPhone's; the title bar and status bar are drawn light at startup (phone_android).
 primary_color = "#007AFF"
 primary_color_dark = "#F9F9F9"
 accent_color = "#007AFF"
