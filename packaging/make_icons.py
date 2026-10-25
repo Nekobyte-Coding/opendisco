@@ -1,8 +1,9 @@
 #!/usr/bin/env python3
 """Draw the app icon and write it in every format the platforms want (needs Pillow).
 
-Writes src/opendisco/resources/icon.png (Linux, Android, iOS and Toga's default),
+Writes src/opendisco/resources/icon.png (Linux, Android and Toga's default),
 icon.ico (Windows) and icon.icns (macOS). Run: .venv/bin/python packaging/make_icons.py
+packaging/ios/build_ios.py draws the iOS sizes itself, with draw(full_bleed=True).
 """
 from pathlib import Path
 
@@ -12,7 +13,9 @@ OUT = Path(__file__).resolve().parent.parent / "src" / "opendisco" / "resources"
 SIZE = 1024
 
 
-def draw() -> Image.Image:
+def draw(full_bleed: bool = False) -> Image.Image:
+    """The icon on a rounded square; full_bleed fills the whole square instead, for iOS, which
+    rounds the corners itself."""
     top, bottom = (31, 111, 235), (11, 61, 145)
     gradient = Image.new("RGB", (SIZE, SIZE))
     pixels = gradient.load()
@@ -21,8 +24,9 @@ def draw() -> Image.Image:
         row = tuple(round(a + (b - a) * t) for a, b in zip(top, bottom))
         for x in range(SIZE):
             pixels[x, y] = row
-    mask = Image.new("L", (SIZE, SIZE), 0)
-    ImageDraw.Draw(mask).rounded_rectangle((40, 40, SIZE - 40, SIZE - 40), radius=210, fill=255)
+    mask = Image.new("L", (SIZE, SIZE), 255 if full_bleed else 0)
+    if not full_bleed:
+        ImageDraw.Draw(mask).rounded_rectangle((40, 40, SIZE - 40, SIZE - 40), radius=210, fill=255)
     icon = Image.new("RGBA", (SIZE, SIZE), (0, 0, 0, 0))
     icon.paste(gradient, mask=mask)
 

@@ -138,10 +138,13 @@ requires = [
 requires = [
     "toga-iOS~=0.5.0",
 ]
-# iOS asks before an app may talk to the local network. Broadcast discovery also needs the
-# com.apple.developer.networking.multicast entitlement, which Apple grants on request; without
-# it the app still finds gear by sweeping the phone's Wi-Fi subnet.
-info."NSLocalNetworkUsageDescription" = "OpenDisco finds network devices on the Wi-Fi network."
+# Shown when iOS asks to let the app reach devices on the local network.
+info."NSLocalNetworkUsageDescription" = "OpenDisco finds network devices on the local network by discovery broadcasts, multicast and a sweep of the subnet, and checks which ports they answer on."
+# Only standard HTTPS (the CVE list): no export compliance paperwork.
+info."ITSAppUsesNonExemptEncryption" = false
+# UBNT discovery's broadcasts and multicast (and mDNS, SSDP). Apple granted it for the app ID
+# com.michaelfroehlke.opendisco (team DGUTLQN548).
+entitlement."com.apple.developer.networking.multicast" = true
 
 [tool.briefcase.app.opendisco.android]
 requires = [

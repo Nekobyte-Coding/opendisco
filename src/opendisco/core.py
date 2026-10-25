@@ -65,6 +65,7 @@ CHECK_PORTS = (22, 80, 443, 8080, 8443)
 PORT_SOURCES = {"discovery": "its discovery reply", "redirect": "its HTTP redirect",
                 "mDNS": "its mDNS services", "UPnP": "its UPnP description"}
 IS_WINDOWS = sys.platform.startswith("win")
+IS_APPLE = sys.platform in ("darwin", "ios")  # macOS and iOS: the same BSD socket options
 
 STOP = threading.Event()  # a GUI's Stop button: ends the scan early, the way Ctrl+C does
 SUDO_ASKPASS = None  # a GUI sets this to fn(reason) -> password or None; the CLI lets sudo prompt
@@ -82,7 +83,8 @@ def platform_name() -> str:
 
 def capabilities() -> dict:
     """What this platform lets the scanner do. Phones can't capture traffic, add addresses or
-    tag VLANs; iOS also blocks broadcasts unless Apple grants the app the multicast entitlement."""
+    tag VLANs. iOS blocks broadcasts and multicast unless the app has Apple's multicast
+    entitlement (the iOS app has it) and Local Network access."""
     plat = platform_name()
     unix_desktop = plat in ("macos", "linux")
     caps = {"platform": plat, "mobile": plat in ("ios", "android"),
@@ -1071,15 +1073,63 @@ def _parse_ipconfig(text: str) -> list:
     return out
 
 
+IFF_UP, IFF_BROADCAST, IFF_LOOPBACK, IFF_RUNNING = 0x1, 0x2, 0x8, 0x40  # <net/if.h>
+
+
+def _getifaddrs() -> list:
+    """IPv4 interfaces that are up and can broadcast, from getifaddrs() (iOS, where no program
+    such as ifconfig can be run). That leaves out cellular data and VPN tunnels: Wi-Fi and
+    Ethernet adapters are where gear is."""
+    import ctypes
+
+    class Ifaddrs(ctypes.Structure):  # struct ifaddrs, <ifaddrs.h>
+        pass
+
+    Ifaddrs._fields_ = [("ifa_next", ctypes.POINTER(Ifaddrs)), ("ifa_name", ctypes.c_char_p),
+                        ("ifa_flags", ctypes.c_uint), ("ifa_addr", ctypes.c_void_p),
+                        ("ifa_netmask", ctypes.c_void_p), ("ifa_dstaddr", ctypes.c_void_p),
+                        ("ifa_data", ctypes.c_void_p)]
+    libc = ctypes.CDLL(None)
+    libc.getifaddrs.argtypes = [ctypes.POINTER(ctypes.POINTER(Ifaddrs))]
+    libc.freeifaddrs.argtypes = [ctypes.POINTER(Ifaddrs)]
+    head = ctypes.POINTER(Ifaddrs)()
+    if libc.getifaddrs(ctypes.byref(head)) != 0:
+        return []
+    out = []
+    try:
+        node = head
+        while node:
+            ifa = node.contents
+            node = ifa.ifa_next
+            wanted = IFF_UP | IFF_RUNNING | IFF_BROADCAST
+            if ifa.ifa_flags & (wanted | IFF_LOOPBACK) != wanted or not ifa.ifa_addr or not ifa.ifa_netmask:
+                continue
+            addr = ctypes.string_at(ifa.ifa_addr, 8)  # BSD sockaddr_in: length, family, port, address
+            if addr[1] != socket.AF_INET:
+                continue
+            mask = socket.inet_ntoa(ctypes.string_at(ifa.ifa_netmask, 8)[4:8])
+            prefix = _mask_to_prefix(mask)
+            if prefix is not None:
+                out.append(Iface(ifa.ifa_name.decode(errors="replace"), socket.inet_ntoa(addr[4:8]), prefix))
+    finally:
+        libc.freeifaddrs(head)
+    return out
+
+
 def local_interfaces() -> list:
     if IS_WINDOWS:
         from opendisco import winnet
         ifaces = ([Iface(name, ip, prefix) for name, ip, prefix in winnet.ipv4_addresses()]
                   or _parse_ipconfig(_run(["ipconfig"])))
+    elif platform_name() == "ios":
+        try:
+            ifaces = _getifaddrs()
+        except (OSError, AttributeError, ValueError):
+            ifaces = []
     else:
         ifaces = _parse_ip_addr(_run(["ip", "-o", "-4", "addr", "show"])) or _parse_ifconfig(_run(["ifconfig"]))
     ifaces = [i for i in ifaces if not i.ip.startswith("127.")]
-    if not ifaces:
+    if not ifaces and platform_name() != "ios":  # there, the default route may be cellular data
         try:  # last resort: the address of the default route, assume a /24
             with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as s:
                 s.connect(("192.0.2.1", 9))
@@ -2160,7 +2210,7 @@ def udp_socket(port: int = 0, broadcast: bool = False, reuse: bool = False) -> s
     try:
         if reuse and not IS_WINDOWS:  # Windows SO_REUSEADDR would steal the port
             s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-            if sys.platform == "darwin":  # lets the per-interface broadcast sockets share the port
+            if IS_APPLE:  # lets the per-interface broadcast sockets share the port
                 s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEPORT, 1)
         if broadcast:
             s.setsockopt(socket.SOL_SOCKET, socket.SO_BROADCAST, 1)
@@ -2188,7 +2238,7 @@ def scoped_broadcast_socket(iface: Iface, port: int):
         s.setsockopt(socket.SOL_SOCKET, socket.SO_BROADCAST, 1)
         if IS_WINDOWS:  # Windows sends it out of the adapter that owns the socket's address;
             addr = iface.ip  # SO_REUSEADDR would let it take the port from another program
-        elif sys.platform == "darwin":
+        elif IS_APPLE:
             s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
             s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEPORT, 1)
             s.setsockopt(socket.IPPROTO_IP, IP_BOUND_IF, socket.if_nametoindex(iface.name))
@@ -2540,7 +2590,10 @@ class Scanner:
         if not self.opts.listen and self.bcast_errors and self.bcast_ok == 0:
             reason = "; ".join(sorted(set(self.bcast_errors.values())))
             msg = f"Every discovery broadcast failed to send ({reason})."
-            if sys.platform == "darwin":
+            if platform_name() == "ios":
+                msg += (" On iOS this usually means OpenDisco lacks Local Network access: Settings > Privacy & "
+                        "Security > Local Network.")
+            elif sys.platform == "darwin":
                 msg += (" On macOS this usually means the app running the scan (OpenDisco, or the terminal) "
                         "lacks Local Network access: System Settings > Privacy & Security > Local Network.")
             else:
@@ -5163,6 +5216,9 @@ def run_scan(opts, log, progress=None, on_inventory=None):
         extra_notes += [("note", f"{l.name} ({l.label}) has link but no IPv4 address (no DHCP?). Run with -a "
                                  "to probe the listed networks on it through temporary aliases.")
                         for l in unaddressed]
+    if not all_ifaces and not opts.alias_mode and not links:  # an IPv6-only network, or none at all
+        raise SystemExit("error: no IPv4 network here. UBNT discovery, the sweep, mDNS and SSDP all work over "
+                         "IPv4, so an IPv6-only network (or none) leaves nothing to scan.")
     if not ifaces and not opts.alias_mode:
         names = ", ".join(str(i) for i in all_ifaces) or "none found"
         hint = f" {', '.join(l.name for l in unaddressed)} has link but no address: try -a." if unaddressed else ""

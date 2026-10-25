@@ -2,7 +2,8 @@
 
 The scanning is opendisco.core; this module only builds the window, runs scans in a
 worker thread and shows what they find. Each platform offers the modes it allows: phones and
-Windows can't capture traffic, add addresses or tag VLANs.
+Windows can't capture traffic, add addresses or tag VLANs. The iOS app doesn't update itself
+(Apple allows installs from the App Store, TestFlight or Xcode only) and has no SSH tools.
 """
 import asyncio
 import json
@@ -18,7 +19,10 @@ import toga
 from toga.style import Pack
 from toga.style.pack import COLUMN, ROW
 
-from opendisco import FULL_NAME, __version__, core, update, vulns
+from opendisco import FULL_NAME, __version__, core, vulns
+
+if core.platform_name() != "ios":  # left out of the iOS app (packaging/ios/build_ios.py)
+    from opendisco import update
 
 # (name, description, command-line flags, needs) where needs is a capability from core.capabilities()
 MODES = [
@@ -108,6 +112,7 @@ class OpenDiscoApp(toga.App):
     def startup(self):
         self.caps = core.capabilities()
         self.caps["vlans"] = self.caps["aliases"] and self.caps["listen"]
+        self.caps["updates"] = self.caps["platform"] != "ios"  # OpenDisco updates itself
         offered = dict(self.caps)
         if self.caps["platform"] == "windows":  # listed before Npcap is installed: starting one offers it
             offered.update(listen=True, vlans=self.caps["aliases"])
@@ -162,7 +167,12 @@ class OpenDiscoApp(toga.App):
 
         self.find_buttons = []
         if mobile:
-            self.table = toga.Table(columns=PHONE_COLUMNS, on_select=self.on_select, style=Pack(flex=1, font_size=16))
+            if self.caps["platform"] == "ios":  # Toga has no Table there: the address over the model and name
+                self.table = toga.DetailedList(accessors=("ip", "summary", "icon"), on_select=self.on_select,
+                                               style=Pack(flex=1))
+            else:
+                self.table = toga.Table(columns=PHONE_COLUMNS, on_select=self.on_select,
+                                        style=Pack(flex=1, font_size=16))
             # No right-click on a phone: the port finder's buttons act on the device last tapped.
             self.find_buttons = [toga.Button(text, id=action, on_press=self.on_find_button, enabled=False,
                                              style=Pack(flex=1))
@@ -214,6 +224,8 @@ class OpenDiscoApp(toga.App):
         if not mobile:
             options += [toga.Box(style=Pack(flex=1)), self.hidden_button]
         footer = [self.spinner, self.status, self.export_button]
+        if self.caps["platform"] == "ios":  # a label there is never narrower than its text: a long one
+            footer = [self.export_button, self.spinner, self.status]  # runs off the edge, not the button
         if self.caps["aliases"]:
             footer.append(self.hold_button)
 
@@ -237,9 +249,12 @@ class OpenDiscoApp(toga.App):
         ])
         self.main_content = self.main_window.content
         self.on_exit = self.handle_exit
-        self._add_app_commands()
+        if self.caps["platform"] != "ios":  # iOS shows no menus: Settings is a gear in the title bar there
+            self._add_app_commands()
         if self.caps["platform"] == "android":
             self._fit_phone_table()
+        elif self.caps["platform"] == "ios":
+            self._fit_ios()
         self.on_mode(self.mode)
         if not mobile:
             self._add_device_menu()
@@ -413,6 +428,63 @@ class OpenDiscoApp(toga.App):
         except Exception:
             pass  # cosmetic
 
+    # iOS: SF Symbols for the tabs, in place of Toga's star on every one
+    TAB_SYMBOLS = {"Details": "info.circle", "Packets": "doc.text.magnifyingglass", "On the wire": "cable.connector",
+                   "Notes": "text.bubble", "Log": "list.bullet.rectangle"}
+
+    def _fit_ios(self):
+        """iOS: Settings as a gear in the title bar (an iOS app has no menus), a Done button over
+        the Mode wheel, a thin line between devices (Toga's list draws none) and an icon for each
+        tab."""
+        from rubicon.objc import Block, ObjCClass, objc_id
+        UIAction, UIBarButtonItem, UIImage = ObjCClass("UIAction"), ObjCClass("UIBarButtonItem"), ObjCClass("UIImage")
+        self._ios_handlers = [Block(lambda action: self.preferences(), None, objc_id),  # kept alive
+                              Block(lambda action: self._close_picker(), None, objc_id)]
+        try:
+            gear = UIAction.actionWithTitle("Settings", image=UIImage.systemImageNamed("gearshape"),
+                                            identifier=None, handler=self._ios_handlers[0])
+            bar = self.main_window._impl.container.content_controller.navigationItem
+            bar.rightBarButtonItem = UIBarButtonItem.alloc().initWithPrimaryAction(gear)
+        except Exception:  # Settings has to be somewhere
+            self.main_content.children[-1].add(toga.Button("Settings…", on_press=self.preferences))
+        try:
+            done = UIAction.actionWithTitle("Done", image=None, identifier=None, handler=self._ios_handlers[1])
+            toolbar = ObjCClass("UIToolbar").alloc().init()
+            toolbar.items = ObjCClass("NSArray").arrayWithArray([UIBarButtonItem.flexibleSpaceItem(),
+                                                                 UIBarButtonItem.alloc().initWithPrimaryAction(done)])
+            toolbar.sizeToFit()
+            self.mode._impl.native.inputAccessoryView = toolbar
+        except Exception:
+            pass  # picking a mode or starting a scan still puts the wheel away
+        try:
+            self.table._impl.native.separatorStyle = 1  # UITableViewCellSeparatorStyleSingleLine
+            for tab in self.tabs._impl.sub_containers:
+                image = UIImage.systemImageNamed(self.TAB_SYMBOLS.get(str(tab.controller.tabBarItem.title), ""))
+                if image:
+                    tab.controller.tabBarItem.image = image
+        except Exception:
+            pass  # cosmetic
+
+    def _close_picker(self):
+        """iOS: put the Mode wheel away; it stays up over the tabs and Export until told."""
+        if self.caps["platform"] == "ios":
+            self.mode._impl.native.resignFirstResponder()
+
+    def _keep_selection(self, key):
+        """iOS: the list forgets which row was tapped whenever a row changes, and the Find buttons
+        then went grey: select the same device again."""
+        if key is None or self.caps["platform"] != "ios":
+            return
+        index = next((i for i, row in enumerate(self.table.data) if getattr(row, "key", None) == key), None)
+        if index is None:
+            return
+        try:
+            from rubicon.objc import ObjCClass
+            path = ObjCClass("NSIndexPath").indexPathForRow(index, inSection=0)
+            self.table._impl.native.selectRowAtIndexPath(path, animated=False, scrollPosition=0)  # no scrolling
+        except Exception:
+            pass
+
     def _over_main(self, size):
         """Where a window of this size sits centred over the main window, on whatever screen
         that's on (a new window otherwise opens on the primary screen)."""
@@ -477,6 +549,7 @@ class OpenDiscoApp(toga.App):
         return next(m for m in self.modes if m[0] == self.mode.value)
 
     def on_mode(self, widget, **kwargs):
+        self._close_picker()
         name, description, flags, needs = self._selected_mode()
         self.mode_help.text = textwrap.fill(description, 44) if self.caps["mobile"] else description
         forced = needs == "vlans"  # these always probe through temporary addresses
@@ -505,8 +578,10 @@ class OpenDiscoApp(toga.App):
         port = self.port_names.get(self.port.value)
         if port:
             args += ["-i", port]
-        if self.caps["mobile"]:  # phones can't do these, so don't waste the time
+        if self.caps["platform"] == "android":  # phones can't do these, so don't waste the time
             args += ["--no-mdns", "--no-ssdp", "--no-arp"]
+        elif self.caps["platform"] == "ios":  # no ARP table to read; the multicast entitlement covers mDNS, SSDP
+            args.append("--no-arp")
         return args
 
     async def _windows_ready(self) -> bool:
@@ -544,6 +619,7 @@ class OpenDiscoApp(toga.App):
         return True
 
     async def on_start(self, widget, **kwargs):
+        self._close_picker()
         if self.running:
             return
         if self.caps["platform"] == "windows" and not await self._windows_ready():
@@ -616,6 +692,7 @@ class OpenDiscoApp(toga.App):
                 values["ip"] = core.nested_ip(d, depth)
                 rows.append((d.key, values))
         data = self.table.data
+        selected = getattr(self.table.selection, "key", None)
         if [key for key, _ in rows] == [getattr(row, "key", None) for row in data]:
             for row, (_, values) in zip(data, rows):
                 for attr, value in values.items():
@@ -623,11 +700,14 @@ class OpenDiscoApp(toga.App):
                         setattr(row, attr, value)
         else:
             self.table.data = [dict(values, key=key) for key, values in rows]
+        self._keep_selection(selected)
 
     @staticmethod
     def _phone_row(d) -> dict:
-        """A device as a phone lists it: address, model and name (Details has the rest)."""
-        return {"ip": d.ip or "-", "model": d.model or "?", "name": d.name or d.mac or ""}
+        """A device as a phone lists it: address, model and name (Details has the rest). iOS
+        lists the model and name under the address."""
+        model, name = d.model or "?", d.name or d.mac or ""
+        return {"ip": d.ip or "-", "model": model, "name": name, "summary": f"{model}  ·  {name}" if name else model}
 
     def _all_devices(self) -> list:
         if self.result:
@@ -1303,6 +1383,9 @@ class OpenDiscoApp(toga.App):
             if self.caps["platform"] == "android":  # Toga has no save dialog there: it returned nothing
                 self.status.text = f"Saved {self._save_to_downloads(name, core.export_text(self.result, '.html'))}"
                 return
+            if self.caps["platform"] == "ios":  # nor there: the share sheet saves it to Files or sends it
+                self._share(self._export_file(name))
+                return
             path = await self.main_window.dialog(toga.SaveFileDialog(
                 "Export results (.html opens on any phone; .csv, .json)", name, file_types=["html", "csv", "json"]))
             if not path:
@@ -1343,6 +1426,38 @@ class OpenDiscoApp(toga.App):
         except Exception:
             pass
         return f"{name} in Downloads"
+
+    def _export_file(self, name: str) -> Path:
+        """iOS: write the report into the app's own folder for the share sheet, in place of the
+        last one (shared already, or not wanted)."""
+        folder = Path(self.paths.cache) / "exports"
+        shutil.rmtree(folder, ignore_errors=True)
+        folder.mkdir(parents=True)
+        path = folder / name
+        core.write_export(self.result, str(path))
+        return path
+
+    def _share(self, path: Path):
+        """iOS: offer a file to the share sheet: Save to Files, Mail, AirDrop, Messages…"""
+        from rubicon.objc import Block, ObjCClass, objc_id
+        url = ObjCClass("NSURL").fileURLWithPath(str(path))
+        sheet = ObjCClass("UIActivityViewController").alloc().initWithActivityItems(
+            ObjCClass("NSArray").arrayWithObject(url), applicationActivities=None)
+        button = self.export_button._impl.native
+        popover = sheet.popoverPresentationController  # iPad: the sheet points at the button
+        if popover:
+            popover.sourceView, popover.sourceRect = button, button.bounds
+
+        def done(activity, completed: bool, items, error) -> None:
+            self.status.text = f"Shared {path.name}" if completed else "Export not shared."
+
+        self._share_done = Block(done, None, objc_id, bool, objc_id, objc_id)  # kept alive while it's up
+        sheet.completionWithItemsHandler = self._share_done
+        shown = self.main_window._impl.native.rootViewController
+        while shown.presentedViewController:
+            shown = shown.presentedViewController
+        shown.presentViewController(sheet, animated=True, completion=None)
+        self.status.text = f"Saved {path.name}: share it to Files, Mail or AirDrop."
 
     async def on_hold(self, widget, **kwargs):
         if self.holding:
@@ -1424,10 +1539,10 @@ class OpenDiscoApp(toga.App):
         self.commands.add(settings, check)
 
     def _show_panel(self, title, content, size, on_close=None, resizable=False):
-        """A small window over the main one; on Android, which has one window, a page shown in
+        """A small window over the main one; on phones, which have one window, a page shown in
         place of the main window's content. Returns what closes it. on_close runs when it's
         closed from its title bar."""
-        if self.caps["platform"] == "android":
+        if self.caps["mobile"]:
             page = toga.Box(style=Pack(direction=COLUMN, margin=12, gap=10), children=[
                 toga.Label(title, style=Pack(font_weight="bold", font_size=18)), content])
             self._panels.append(page)
@@ -1495,7 +1610,7 @@ class OpenDiscoApp(toga.App):
 
         switches = [toga.Switch(text, value=self.settings.get(key, True),
                                 on_change=lambda widget, key=key, **kwargs: changed(widget, key))
-                    for key, text in SETTINGS.items()]
+                    for key, text in SETTINGS.items() if key != "check_app_updates" or self.caps["updates"]]
         content = toga.Box(style=Pack(direction=COLUMN, margin=14, gap=10), children=[
             *switches,
             toga.Box(style=Pack(direction=ROW), children=[toga.Box(style=Pack(flex=1)),
@@ -1504,9 +1619,10 @@ class OpenDiscoApp(toga.App):
                                                on_close=lambda: setattr(self, "close_settings", None))
 
     def _launch_checks(self):
-        failed = self._after_update()
-        if self.settings.get("check_app_updates", True) and not failed:  # not the same offer straight away
-            self._check_for_update(quiet=True)
+        if self.caps["updates"]:
+            failed = self._after_update()
+            if self.settings.get("check_app_updates", True) and not failed:  # not the same offer straight away
+                self._check_for_update(quiet=True)
         if self.settings.get("check_cve_updates", True):
             self._refresh_cves()
 
