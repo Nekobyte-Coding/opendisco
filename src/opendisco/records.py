@@ -238,46 +238,40 @@ def all_backups() -> list:
     return sorted((mac, paths) for mac, paths in items if paths)
 
 
-def latency_text(d) -> str:
-    """What the latency check measured for d, in a line; "" when it wasn't measured."""
+def _health():
     try:
         from opendisco import health
-    except Exception:
-        health = None
-    if health is not None and hasattr(health, "latency_text"):
-        try:
-            return health.latency_text(d) or ""
-        except Exception:
-            return ""
-    value = getattr(d, "latency", None)
-    if not value:
+        return health
+    except Exception:  # not in this build
+        return None
+
+
+def latency_text(d) -> str:
+    """What the latency check during the scan measured for d (health.py): its Details row
+    (min/avg/max and loss), else its table cell; "" when it wasn't measured."""
+    health = _health()
+    if health is None or not (getattr(d, "health", None) or {}).get("latency"):
         return ""
-    if isinstance(value, dict):
-        return ", ".join(f"{k} {v}" for k, v in value.items() if v is not None)
-    return str(value)
+    try:
+        rows = dict(health.detail_rows(d)) if hasattr(health, "detail_rows") else {}
+        return rows.get("Latency") or health.latency_cell(d) or ""
+    except Exception:
+        return ""
 
 
 def latest_firmware(d) -> tuple:
-    """(the latest firmware for d as text, whether d runs older firmware than that), from what
-    the firmware check during the scan put on the device; ("", None) when it isn't known."""
+    """(the latest firmware for d, whether a newer one than d runs is out), from the firmware
+    check during the scan (health.py, d.health["firmware"]); ("", None) when it wasn't looked up
+    or Ubiquiti's list has none for it."""
+    found = (getattr(d, "health", None) or {}).get("firmware") or {}
+    health = _health()
     try:
-        from opendisco import health
+        latest = health.latest_version(d) if health is not None else found.get("latest") or ""
     except Exception:
-        health = None
-    if health is not None and hasattr(health, "latest_firmware"):
-        try:
-            found = health.latest_firmware(d)
-            if found:
-                return found
-        except Exception:
-            pass
-    value = getattr(d, "latest_firmware", None)
-    if isinstance(value, dict):
-        value = value.get("version") or ""
-    latest = str(value or "")
-    if not latest or not d.firmware:
-        return latest, None
-    return latest, vulns.version_key(d.firmware) < vulns.version_key(latest)
+        latest = found.get("latest") or ""
+    if not latest:
+        return "", None
+    return str(latest), bool(found.get("newer"))
 
 
 def cve_fix(d) -> str:
@@ -383,8 +377,8 @@ def device_report(d, res=None, backups=(), noted: str = "") -> str:
     firmware = [["Running", escape(d.info.get("firmware") or d.firmware or "not reported")]]
     latest, outdated = latest_firmware(d)
     if latest:
-        firmware.append(["Latest", escape(latest) + (' <b class="warn">(newer than this one)</b>' if outdated else
-                                                     " (this one)" if outdated is False else "")])
+        firmware.append(["Latest", escape(latest) + (' <b class="warn">(newer than this one)</b>' if outdated
+                                                     else " (up to date)")])
     fix = cve_fix(d)
     if fix:
         firmware.append(["Fixes its known CVEs", escape(fix) + " or later"])
