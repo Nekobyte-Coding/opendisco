@@ -595,6 +595,26 @@ def retitle(button, text: str):
         button.refresh()
 
 
+def fix_text_scrolling():
+    """Toga pins a many-line text box's placeholder to the box's edges, which in a scroll view
+    are its content's: Auto Layout then sized the content to the empty placeholder (4×8 points),
+    so a finger couldn't scroll the text (the terms of use, the licenses, Details) until the app
+    had scrolled it itself. Pinned to the box's frame instead, where it shows, and nothing else."""
+    try:
+        from toga_iOS.widgets.multilinetextinput import MultilineTextInput
+    except ImportError:
+        return
+
+    def constrain_placeholder_label(self):
+        label, frame = self.placeholder_label, self.native.frameLayoutGuide
+        _objc("NSLayoutConstraint").activateConstraints([
+            label.leadingAnchor.constraintEqualToAnchor(frame.leadingAnchor, constant=4.0),
+            label.trailingAnchor.constraintEqualToAnchor(frame.trailingAnchor),
+            label.topAnchor.constraintEqualToAnchor(frame.topAnchor, constant=8.0)])
+
+    MultilineTextInput.constrain_placeholder_label = constrain_placeholder_label
+
+
 def monospaced(text, size: float):
     """The system's monospaced font (SF Mono), which reads better than the Courier Toga picks."""
     try:
