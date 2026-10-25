@@ -1008,14 +1008,19 @@ class OpenDiscoApp(toga.App):
         if not self.caps["mobile"]:
             buttons.insert(1 if d.note else 0, toga.Box(style=Pack(flex=1)))
         content = toga.Box(style=Pack(direction=COLUMN, flex=1, margin=14, gap=8), children=[
-            toga.Label(self._wrap(f"Kept with {d.mac} in "
-                                  + ("OpenDisco's data on this phone" if self.caps["mobile"]
-                                     else "this computer's OpenDisco data")
-                                  + ", through rescans, restarts and updates; Details, the search and the exports "
-                                    "include it.")),
+            toga.Label(self._wrap(f"Kept with {d.mac} in OpenDisco's data on {self._here()}, through rescans, "
+                                  "restarts and updates; Details, the search and the exports include it.")),
             text, toga.Box(style=Pack(direction=ROW, gap=8), children=buttons)])
         close = self._show_panel(f"Note: {who}", content, (560, 300), resizable=True)
         text.focus()
+
+    def _here(self) -> str:
+        """What the app's text calls the device it runs on: this computer, or on phones the platform's
+        own word where phone_<platform> has here() ("this iPhone", "this iPad"), else "this phone"."""
+        if not self.caps["mobile"]:
+            return "this computer"
+        here = getattr(phone.native(self), "here", None) if self.phone_ui else None
+        return here(self) if here else "this phone"
 
     def _notes_changed(self, d):
         """After a note changed: its ✎ in the list, and Details if it's the device shown."""
@@ -1827,7 +1832,8 @@ class OpenDiscoApp(toga.App):
                  toga.Label(self._wrap("Routed or VPN subnets that every scan also probes with UBNT discovery, so "
                                        "gear there turns up from here: a subnet or an address a line, # starts a "
                                        f"comment. Up to {records.SWEEP_LIMIT:,} addresses in all, about "
-                                       f"{records.sweep_seconds(records.SWEEP_LIMIT):.0f} s more per scan.")),
+                                       f"{records.sweep_seconds(records.SWEEP_LIMIT):.0f}{records.SECONDS} more per "
+                                       "scan.")),
                  sweep,
                  toga.Box(style=Pack(direction=ROW, align_items="center", gap=8), children=[
                      sweep_said, toga.Button("Save", on_press=save_sweep)])]

@@ -35,6 +35,7 @@ SWEEP_KEY = "sweep_subnets"  # settings.json: the list's lines, comments and all
 # worth adds about half a minute to every scan.
 SWEEP_LIMIT = 8192
 SWEEP_RATE = 500  # core.parse_args' --rate default
+SECONDS = "\u00a0s"  # after a number: a no-break space, so a wrapped label never ends a line on it
 
 # Export's choices: (kind, button, what it saves, file types, the first the default and on phones
 # the only one). The scan report comes first, then the site-wide extras.
@@ -704,7 +705,7 @@ def parse_sweep_list(text: str) -> tuple:
             total += _addresses(net)
             targets.append(str(net.network_address) if net.prefixlen == 32 else str(net))
     if total > SWEEP_LIMIT:
-        problems.append(f"These add up to {total:,} addresses, about {sweep_seconds(total):.0f} s more on every "
+        problems.append(f"These add up to {total:,} addresses, about {sweep_seconds(total):.0f}{SECONDS} more on every "
                         f"scan; the limit is {SWEEP_LIMIT:,} (a /19's worth). List the subnets the gear is on.")
     return targets, problems
 
@@ -727,4 +728,4 @@ def sweep_targets(saved) -> list:
 def describe_targets(targets) -> str:
     total = sum(_addresses(ipaddress.IPv4Network(t)) for t in targets)
     return (f"{', '.join(targets[:4])}{f' and {len(targets) - 4} more' if len(targets) > 4 else ''} "
-            f"({total:,} address{'es' if total != 1 else ''}, about {max(1, round(sweep_seconds(total)))} s)")
+            f"({total:,} address{'es' if total != 1 else ''}, about {max(1, round(sweep_seconds(total)))}{SECONDS})")
