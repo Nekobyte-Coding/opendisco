@@ -8,9 +8,10 @@ its own page, titled with its name and address, with its tabs along the bottom: 
 Packets, Tools, Notes and Log. Tools pings the device (core.ping: the app's own ICMP), opens an
 SSH session to it (phonessh: the app's own SSH), finds its ports, opens its web UI, rescans it,
 reads what it sees of its neighbours (Scan from device, as on the desktop: devicetools), checks
-and updates its firmware, edits its config, changes its login (phonetools), keeps a note on it,
-exports its own report and copies its addresses, with what they find, and the SSH session, in a
-console underneath. On a tablet
+and updates its firmware, edits its config, keeps backups of it and uploads one, changes its
+login, reboots it, blinks its LED (phonetools), keeps a note on it, exports its own report and
+copies its addresses, with what they find, and the SSH session, in a console underneath. The
+title bar's + scans from a device given by its address (one the scan didn't find). On a tablet
 (wide), the device's page sits beside the list instead of over it, turned either way.
 
 This module is what both phones share. What each does natively is in phone_<platform>.py
@@ -48,6 +49,13 @@ This module is what both phones share. What each does natively is in phone_<plat
                                 (without it, Export saves the scan report)
     here(app)                   what the app's text calls the device it runs on ("this phone")
     text_box(widget)            a text view for typing many lines into, drawn so it can be seen
+    menu_button(app, title, items)   a button that opens a menu: items() lists (title, enabled,
+                                action) when it's tapped (None where there's none: phone.py lays
+                                out a button for each instead)
+    bar_button(app, symbol, title, action)   one more title-bar button (the + for Scan from an
+                                address)
+    open_file(app)              (async) a file the user picks (iOS: from Files), as a local path;
+                                None when cancelled
 app.py makes the widgets every platform shares and calls in here; it all runs on the UI thread.
 """
 import importlib
@@ -98,7 +106,8 @@ def _nothing(*args, **kwargs):
 FALLBACKS = {"Picker": _SelectionPicker, "watch_keyboard": _nothing, "plain_entry": _nothing,
              "end_editing": _nothing, "done_bar": _nothing, "wide": lambda app: False,
              "side_by_side": lambda app: False, "clear_selection": _nothing, "search_field": _nothing,
-             "export_menu": _nothing, "here": lambda app: "this phone", "text_box": _nothing}
+             "export_menu": _nothing, "here": lambda app: "this phone", "text_box": _nothing,
+             "menu_button": _nothing, "bar_button": _nothing, "open_file": None}
 
 
 def hook(app, name: str):
@@ -201,12 +210,14 @@ def fit(app):
     ui.fit(app, export=lambda: app.loop.create_task(app.on_export(None)), notes=lambda: show_scan(app),
            settings=app.preferences)
     for button in (app.ping_button, app.ssh_button, app.web_button, app.rescan_button, app.scan_from_button,
-                   app.firmware_button, app.config_button, app.login_button, app.find_button):
+                   app.firmware_button, app.config_button, app.login_button, app.backups_button, app.reboot_button,
+                   app.locate_button, app.find_button):
         ui.style_button(button, "tinted")
     for button in (app.note_button, app.export_device_button, app.copy_ip_button, app.copy_mac_button,
                    *app.ssh_row.children[1:]):
         ui.style_button(button, "gray")
     hook(app, "export_menu")(app, lambda: export_choices(app), lambda kind: app.loop.create_task(app._export(kind)))
+    hook(app, "bar_button")(app, "plus", "Scan from an address", lambda: app.loop.create_task(_tool(app, "scan_address")))
     hook(app, "watch_keyboard")(app, app.console)
     hook(app, "plain_entry")(app.ssh_input, send=True)
     if app.wide:  # beside the list until a device is tapped
@@ -356,21 +367,22 @@ def tools(app) -> toga.Box:
     app.rescan_button = toga.Button("Rescan", on_press=action("rescan"), style=grow)
     app.scan_from_button = toga.Button("Scan from device", on_press=later(scan_from), style=grow)
 
-    def tool(name):  # phonetools' (devicetools'), loaded when first used
-        async def run(app):
-            from opendisco import phonetools
-            await getattr(phonetools, name)(app)
-        return later(run)
+    def tool(name):
+        return lambda w, **kw: app.loop.create_task(_tool(app, name))
 
     app.firmware_button = toga.Button("Firmware", on_press=tool("firmware"), style=grow)
     app.config_button = toga.Button("Config", on_press=tool("config"), style=grow)
     app.login_button = toga.Button("Login", on_press=tool("change_login"), style=grow)
+    app.backups_button = toga.Button("Backups", on_press=tool("backups"), style=grow)
+    app.reboot_button = toga.Button("Reboot", on_press=tool("reboot"), style=grow)
+    app.locate_button = toga.Button("Locate", on_press=tool("locate"), style=grow)
     app.port_picker = hook(app, "Picker")(app, list(FIND_KINDS))
     app.find_button = toga.Button("Find", on_press=lambda w, **kw: find_port(app), style=grow)
     app.note_button = toga.Button("Note", on_press=action("note"), style=grow)
     app.export_device_button = toga.Button("Export device", on_press=action("export_device"), style=grow)
     app.copy_ip_button = toga.Button("Copy IP", on_press=action("copy_ip"), style=grow)
     app.copy_mac_button = toga.Button("Copy MAC", on_press=action("copy_mac"), style=grow)
+    app.copy_menu = hook(app, "menu_button")(app, "Copy", lambda: _copy_items(app))
     app.tool_status = toga.Label("", style=Pack(margin_left=2))
     app.console = toga.MultilineTextInput(readonly=True, placeholder="What the tools find shows here.",
                                           style=Pack(flex=1, font_family="monospace", font_size=10,
@@ -384,22 +396,43 @@ def tools(app) -> toga.Box:
     app.pinging = None  # (device key, Event that stops it) while a ping runs
     app.ssh = None  # (device key, phonessh.Shell) while an SSH session is open
     app.find_from = None  # app.py's; the phone has one Find button
-    app.device_job = None  # phonetools: {"key", "name", "stop"} while a firmware update or a new login runs
+    app.device_job = None  # phonetools: {"key", "name", "stop"} while a firmware update, reboot... runs
+    app.phone_locating = {}  # device key -> the login its LED was set blinking with (phonetools.locate)
     app.phone_passwords = {}  # device key -> its SSH password, for this run only: phones keep none
+    if app.copy_menu is not None:  # three to a row: the short name
+        app.export_device_button.text = "Export"
     row = Pack(direction=ROW, gap=8)
     app.tools_box = toga.Box(style=Pack(direction=COLUMN, margin=12, gap=8), children=[
         toga.Box(style=row, children=[app.ping_button, app.ssh_button, app.web_button]),
         toga.Box(style=row, children=[app.rescan_button, app.scan_from_button]),
         toga.Box(style=row, children=[app.firmware_button, app.config_button, app.login_button]),
+        toga.Box(style=row, children=[app.backups_button, app.reboot_button, app.locate_button]),
         toga.Box(style=Pack(direction=ROW, align_items="center", gap=8), children=[
             toga.Label("Find port", style=Pack(font_weight="bold", margin_left=2)), app.port_picker.widget,
             app.find_button]),
-        toga.Box(style=row, children=[app.note_button, app.export_device_button]),
-        toga.Box(style=row, children=[app.copy_ip_button, app.copy_mac_button]),
+        *([toga.Box(style=row, children=[app.note_button, app.export_device_button, app.copy_menu])]
+          if app.copy_menu is not None else
+          [toga.Box(style=row, children=[app.note_button, app.export_device_button]),
+           toga.Box(style=row, children=[app.copy_ip_button, app.copy_mac_button])]),
         app.tool_status,
         app.console,
     ])
     return app.tools_box
+
+
+async def _tool(app, name: str):
+    """One of phonetools' device tools (devicetools' work), loaded when first used."""
+    from opendisco import phonetools
+    await getattr(phonetools, name)(app)
+
+
+def _copy_items(app) -> list:
+    """The Copy menu: the open device's IP and MAC address."""
+    d = app._selected_device()
+    return [(f"IP address  {d.ip}" if d and d.ip else "IP address", bool(d and d.ip),
+             lambda: app._device_action("copy_ip")),
+            (f"MAC address  {d.mac}" if d and d.mac else "MAC address", bool(d and d.mac),
+             lambda: app._device_action("copy_mac"))]
 
 
 def say(app, text: str):
@@ -480,7 +513,8 @@ def update_tools(app):
         from opendisco import phonetools
         phonetools.update_buttons(app, d)
     else:
-        for button in (app.firmware_button, app.config_button, app.login_button):
+        for button in (app.firmware_button, app.config_button, app.login_button, app.backups_button,
+                       app.reboot_button, app.locate_button):
             button.enabled = False
 
 

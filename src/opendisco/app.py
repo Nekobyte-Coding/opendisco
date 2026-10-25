@@ -712,9 +712,13 @@ class OpenDiscoApp(toga.App):
     @staticmethod
     def _phone_row(d) -> dict:
         """A device as a phone lists it: address, model and name (Details has the rest). iOS
-        lists the model and name under the address."""
+        lists the model and name under the address, then the newer firmware that's out and its
+        latency, once known (what doesn't fit ends in …)."""
         model, name = d.model or "?", d.name or d.mac or ""
-        return {"ip": d.ip or "-", "model": model, "name": name, "summary": f"{model}  ·  {name}" if name else model}
+        fw = d.health.get("firmware") or {}
+        extra = [f"update {fw['latest']}" if fw.get("newer") else "", health.latency_cell(d)]
+        return {"ip": d.ip or "-", "model": model, "name": name,
+                "summary": " · ".join(x for x in (model, name, *extra) if x)}
 
     def _all_devices(self) -> list:
         if self.result:
