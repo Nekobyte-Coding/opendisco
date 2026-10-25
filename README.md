@@ -53,7 +53,8 @@ Installers are on the [Releases](https://github.com/Nekobyte-Coding/opendisco/re
   1.5.0's launcher has its own ID.
 - **Linux before 1.3.2:** 1.1.0 to 1.3.1 were never released for Linux. Their Linux packages
   were built later, from each version's source with 1.3.2's Linux packaging, for
-  completeness. They run, but those versions weren't made or tested for Linux at the time.
+  completeness. They run, but those versions weren't made or tested for Linux at the time,
+  and the 1.3.0 and 1.3.1 Linux packages have no right-click menu.
 - **Linux before 1.4.0:** the Listen box's − and + buttons are drawn partly outside it
   (cosmetic, fixed in 1.4.0).
 - **The 1.3.0 to 1.3.2 Windows app** stops at startup: it reads a bundled file with Windows'
