@@ -48,6 +48,8 @@ DEVICE_ACTIONS = [("web", "Open Web UI"), ("ssh", "Open SSH…"), ("ping", "Ping
                   ("all_ports", "Scan all ports"), None,
                   ("fw_check", "Check for firmware update"), ("fw_update", "Update firmware…"),
                   ("config", "Edit config…"), ("login", "Change login…"), None,
+                  ("backup", "Back up config"), ("backups", "Config backups…"), ("upload", "Upload config…"), None,
+                  ("reboot", "Reboot…"), ("locate", "Locate (blink LED)"), None,
                   ("copy_ip", "Copy IP address"), ("copy_mac", "Copy MAC address"), None,
                   ("forget", "Forget SSH key"), ("forget_login", "Forget saved login"), ("hide", "Hide device")]
 FINDS = {"find_http": "http", "find_https": "https", "find_ssh": "ssh", "all_ports": "all"}
@@ -139,6 +141,8 @@ class OpenDiscoApp(toga.App):
         self.settings_path = Path(self.paths.data) / "settings.json"
         self.known_hosts = Path(self.paths.data) / "known_hosts"  # SSH host keys, filed by MAC
         vulns.CACHE_DIR = Path(self.paths.data)  # where a downloaded CVE list is kept (vulns.refresh)
+        from opendisco import devicetools  # its SSH parts load only when used
+        devicetools.BACKUP_ROOT = Path(self.paths.data) / devicetools.BACKUP_FOLDER  # config backups, by MAC
         self.settings = self._load_settings()
         self.hidden = self.settings.setdefault("hidden", {})  # device key (its MAC) -> what it was
         if not self.caps["mobile"]:
@@ -913,6 +917,10 @@ class OpenDiscoApp(toga.App):
 
     def _device_action(self, name):
         d = self._selected_device()
+        if d is None and name == "scan_from" and not self.caps["mobile"]:  # from a device given by its address
+            from opendisco import devicegui
+            asyncio.create_task(devicegui.scan_address(self))
+            return
         if d is None:
             self.status.text = "Select a device first."
             return

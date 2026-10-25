@@ -257,7 +257,8 @@ UBNT_HINT = re.compile(
     re.I,
 )
 
-VIA_ORDER = ("ubnt", "mcast", "announce", "sniff", "wifi", "mdns", "ssdp", "arp", "from-device")
+# "ssh": a device the device tools logged in to by its address (Scan from device with none selected)
+VIA_ORDER = ("ubnt", "mcast", "announce", "sniff", "wifi", "mdns", "ssdp", "arp", "from-device", "ssh")
 
 
 # ---------------------------------------------------------------------------
