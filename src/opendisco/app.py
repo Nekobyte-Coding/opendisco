@@ -39,8 +39,11 @@ PHONE_COLUMNS = ["IP", "Model", "Name"]
 ANY_PORT = "Any port"
 # What a device's right-click menu (and the Device menu) offers; None separates groups.
 DEVICE_ACTIONS = [("web", "Open Web UI"), ("ssh", "Open SSH…"), ("ping", "Ping"), ("rescan", "Rescan device"), None,
+                  ("find_https", "Find HTTPS port"), ("find_http", "Find HTTP port"), ("find_ssh", "Find SSH port"),
+                  ("all_ports", "Scan all ports"), None,
                   ("copy_ip", "Copy IP address"), ("copy_mac", "Copy MAC address"), None,
                   ("forget", "Forget SSH key"), ("hide", "Hide device")]
+FINDS = {"find_https": "https", "find_http": "http", "find_ssh": "ssh", "all_ports": "all"}
 NO_SESSION = "Right-click a device to get started: Open SSH or Ping."
 # Where earlier versions kept their data, by the parts of the data folder's path that changed:
 # folder name now -> patterns for its earlier names. macOS names the folder after the app ID
@@ -100,6 +103,7 @@ class OpenDiscoApp(toga.App):
         self.live_inv = None  # the inventory of the scan that's running
         self.running = False
         self.rescanning = False
+        self.finding = False  # a port search on one device
         self.holding = False
         self.cancel_password = None
         self.cancel_ssh_login = None
@@ -135,8 +139,14 @@ class OpenDiscoApp(toga.App):
         self.hidden_button = toga.Button("", on_press=self.on_hidden)
         self._update_hidden_button()
 
+        self.find_buttons = []
         if mobile:
             self.table = toga.Table(columns=PHONE_COLUMNS, on_select=self.on_select, style=Pack(flex=1, font_size=16))
+            # No right-click on a phone: the port finder's buttons act on the device last tapped.
+            self.find_buttons = [toga.Button(text, id=action, on_press=self.on_find_button, enabled=False,
+                                             style=Pack(flex=1))
+                                 for action, text in (("find_https", "HTTPS"), ("find_http", "HTTP"),
+                                                      ("find_ssh", "SSH"), ("all_ports", "All ports"))]
         else:
             self.table = toga.Table(columns=COLUMNS, on_select=self.on_select, style=Pack(flex=1))
         mono = Pack(flex=1, font_family="monospace", font_size=12 if mobile else 11)
@@ -187,7 +197,9 @@ class OpenDiscoApp(toga.App):
 
         row = Pack(direction=ROW, align_items="center", gap=8)
         if mobile:  # phones: one column, no splitter
-            body = toga.Box(style=Pack(direction=COLUMN, flex=1, gap=6), children=[self.table, self.tabs])
+            finder = toga.Box(style=Pack(direction=ROW, align_items="center", gap=4),
+                              children=[toga.Label("Find port"), *self.find_buttons])
+            body = toga.Box(style=Pack(direction=COLUMN, flex=1, gap=6), children=[self.table, finder, self.tabs])
         else:
             body = toga.SplitContainer(content=[self.table, self.tabs], direction=toga.SplitContainer.HORIZONTAL,
                                        style=Pack(flex=1))
@@ -293,7 +305,7 @@ class OpenDiscoApp(toga.App):
         except Exception:
             pass  # purely cosmetic
 
-    COLUMN_WEIGHTS = (1.1, 0.5, 0.9, 1.3, 1.0, 1.4, 0.9, 0.7, 0.6, 0.7, 1.1, 1.3)  # IP ... Status
+    COLUMN_WEIGHTS = (1.1, 0.5, 0.9, 1.3, 1.0, 1.4, 0.9, 0.7, 0.6, 0.6, 0.7, 1.1, 1.3)  # IP ... Status
 
     def _size_columns(self, *args, **kwargs):
         """Windows: toga sizes the table's columns once, before the window has its width, which left
@@ -524,6 +536,7 @@ class OpenDiscoApp(toga.App):
         self.start_button.enabled, self.stop_button.enabled = False, True
         self.export_button.enabled = self.hold_button.enabled = False
         self.spinner.start()
+        self._update_find_buttons()
         threading.Thread(target=self._scan, args=(opts,), daemon=True).start()
         asyncio.create_task(self._refresh_while_running())
 
@@ -611,6 +624,7 @@ class OpenDiscoApp(toga.App):
                             f"{result.elapsed:.0f}s" + (f", {hidden} hidden" if hidden else "")
                             + (" (stopped early)" if result.interrupted else ""))
         self.export_button.enabled = bool(result.devices or result.trunks)
+        self._update_find_buttons()
         self.hold_button.enabled = bool(result.mgr) and any(d.alias for d in result.devices)
         if self.shown_packets:  # now with the interface counters and the final checks
             self.details.value = core.render_details(self.shown_packets[0])
@@ -627,6 +641,7 @@ class OpenDiscoApp(toga.App):
 
     def on_select(self, widget, **kwargs):
         d = self._selected_device()
+        self._update_find_buttons()
         if d is not None:
             self.details.value = core.render_details(d)
             self._show_packets(d, force=True)
@@ -772,11 +787,17 @@ class OpenDiscoApp(toga.App):
         ip = bool(d.ip)
         ssh = self.term.find(d.key, "ssh") if self.term else None
         ping = self.term.find(d.key, "ping") if self.term else None
+        idle = ip and bool(self.result) and not (self.running or self.rescanning or self.finding)
+        finds = {}
+        for name, kind in FINDS.items():
+            ports = ", ".join(str(p) for p, k in sorted(d.services.items()) if k == kind)
+            finds[name] = (titles[name] + (f"  (answers on {ports})" if ports else ""), idle)
         return {
             "web": (f"Open Web UI  ({core.web_url(d, fallback=True)})" if ip else titles["web"], ip),
             "ssh": ("Show SSH session" if ssh else f"Open SSH…  (port {d.port('ssh')})", ip),
             "ping": ("Show ping" if ping and ping.alive else titles["ping"], ip),
-            "rescan": (titles["rescan"], ip and bool(self.result) and not self.running and not self.rescanning),
+            "rescan": (titles["rescan"], idle),
+            **finds,
             "copy_ip": (f"Copy IP address  ({d.ip})" if ip else titles["copy_ip"], ip),
             "copy_mac": (f"Copy MAC address  ({d.mac})" if d.mac else titles["copy_mac"], bool(d.mac)),
             "forget": (titles["forget"], ip),
@@ -790,7 +811,7 @@ class OpenDiscoApp(toga.App):
             return
         title, enabled = self._menu_state(d)[name]
         if not enabled:
-            self.status.text = ("Rescan works once a scan has finished." if name == "rescan"
+            self.status.text = ("Works once a scan has finished, one device at a time." if name == "rescan" or name in FINDS
                                 else f"{title}: not available for this device.")
             return
         if name == "web":
@@ -803,6 +824,8 @@ class OpenDiscoApp(toga.App):
             self._open_ping(d)
         elif name == "rescan":
             self._rescan(d)
+        elif name in FINDS:
+            self._find(d, FINDS[name])
         elif name == "copy_ip":
             self._copy(d.ip, "IP address")
         elif name == "copy_mac":
@@ -961,6 +984,72 @@ class OpenDiscoApp(toga.App):
         ports = ", ".join(f"{p} {k}" for p, k in sorted(d.services.items())) or "no management ports open"
         self.status.text = (f"Rescanned {d.ip}: " + ("answered discovery" if answered else "no discovery reply")
                             + f"; {ports}.")
+
+    # -- chasing one device's ports ---------------------------------------------------
+    def _find(self, d, kind):
+        """Look for one device's SSH, HTTPS or HTTP port, or every open port ("all"): the deep
+        check, then all 65535 TCP ports until it turns up. Stop ends it."""
+        self.finding = True
+        self.start_button.enabled, self.stop_button.enabled = False, True
+        self._update_find_buttons()
+        self.spinner.start()
+        name = core.SERVICE_NAMES[kind]
+        self.status.text = f"Looking for {'every open port' if kind == 'all' else name} on {d.ip}…"
+        result = self.result
+
+        def progress(done, total, found):
+            self._from_worker(setattr, self.status, "text",
+                              f"{d.ip}: checked {done:,} of {total:,} TCP ports for {name}, {found} open…")
+
+        def work():
+            error, ports = None, []
+            try:
+                ports = core.find_ports(result, d, kind, lambda m: self._from_worker(self._append_log, m), progress)
+            except Exception as e:
+                error = f"{type(e).__name__}: {e}"
+            self._from_worker(self._found_ports, result, d, kind, ports, error)
+
+        threading.Thread(target=work, daemon=True).start()
+
+    def _found_ports(self, result, d, kind, ports, error):
+        self.finding = False
+        self.spinner.stop()
+        self.start_button.enabled, self.stop_button.enabled = True, False
+        self._update_find_buttons()
+        if result is not self.result:
+            return
+        self._show_devices(result.devices)
+        if self._selected_device() is d:
+            self.details.value = core.render_details(d)
+            self._show_packets(d, force=True)
+        if error:
+            self.status.text = f"Port search on {d.ip} failed: {error}"
+            return
+        name = core.SERVICE_NAMES[kind]
+        search = d.port_search
+        everything = ", ".join(f"{p} {d.services[p]}" for p in d.ports or []) or "none"
+        if kind == "all":
+            self.status.text = f"{d.ip}: open TCP ports: {everything}" + (" (stopped early)" if search.get("stopped") else "")
+        elif ports:
+            self.status.text = f"{name} on {d.ip}: port {', '.join(map(str, ports))}."
+        else:
+            where = ("any of the 65,535 TCP ports" if not search.get("stopped")
+                     else f"the {search['checked']:,} ports checked before stopping")
+            self.status.text = f"No {name} on {d.ip} in {where}. Open: {everything}."
+
+    def _update_find_buttons(self):
+        """Phones: the Find buttons act on the device last tapped, once a scan has finished."""
+        if not self.find_buttons:
+            return
+        d = self._selected_device()
+        idle = bool(d and d.ip and self.result) and not (self.running or self.rescanning or self.finding)
+        for button in self.find_buttons:
+            button.enabled = idle
+
+    def on_find_button(self, widget, **kwargs):
+        d = self._selected_device()
+        if d is not None:
+            self._device_action(widget.id)
 
     # -- clipboard and hidden devices -----------------------------------------------
     def _copy(self, text, what):

@@ -21,7 +21,9 @@ from __future__ import annotations
 import argparse
 import atexit
 import bisect
+import collections
 import copy
+import errno
 import http.client
 import ipaddress
 import json
@@ -29,6 +31,7 @@ import os
 import random
 import re
 import select
+import selectors
 import shutil
 import signal
 import socket
@@ -616,7 +619,9 @@ class Device:
     ssdp: dict = field(default_factory=dict)
     api: dict = field(default_factory=dict)
     ports: list | None = None  # TCP ports that answered a deep check (None = not checked)
-    services: dict = field(default_factory=dict)  # port -> "ssh" / "https" / "http" / "open"
+    services: dict = field(default_factory=dict)  # port -> "ssh" / "https" / "http" / "open"...
+    service_info: dict = field(default_factory=dict)  # port -> what answered there (banner, page title...)
+    port_search: dict = field(default_factory=dict)  # the last search of its TCP ports (find_ports)
     port_hints: dict = field(default_factory=dict)  # "https"/"ssh" -> {source: port}, beyond discovery
     alias: dict = field(default_factory=dict)  # the temporary alias it was reached through
     direct: bool = False  # answered without an alias (old firmware answers other subnets)
@@ -682,13 +687,15 @@ class Device:
         return port if isinstance(port, int) and port else None
 
     def said_ports(self, kind: str) -> dict:
-        """What the device says its "https" or "ssh" port is, {source: port}, best source first."""
-        reported = self.web_port if kind == "https" else self.reported_ssh_port
+        """What the device says its "https", "http" or "ssh" port is, {source: port}, best
+        source first."""
+        reported = {"https": self.web_port, "ssh": self.reported_ssh_port}.get(kind)
         said = dict(self.port_hints.get(kind, {}), **({"discovery": reported} if reported else {}))
         return {source: said[source] for source in PORT_SOURCES if source in said}
 
     def said_port(self, kind: str) -> int | None:
-        """The port the device says its web UI ("https") or SSH ("ssh") is on, if it says."""
+        """The port the device says its web UI ("https"), plain web page ("http") or SSH ("ssh")
+        is on, if it says."""
         return next(iter(self.said_ports(kind).values()), None)
 
     def port(self, kind: str) -> int:
@@ -696,7 +703,7 @@ class Device:
         says, when it's there), else the one it says, else the standard one."""
         said = self.said_port(kind)
         found = sorted((p for p, k in self.services.items() if k == kind), key=lambda p: p != said)
-        return found[0] if found else said or (443 if kind == "https" else 22)
+        return found[0] if found else said or {"https": 443, "http": 80}.get(kind, 22)
 
     @property
     def vendor(self) -> str:
@@ -726,6 +733,14 @@ class Device:
         m = re.search(r"\.v(\d+(?:\.\d+){1,3})", fw)
         return m.group(1) if m else (fw or self.info.get("version") or "")
 
+    @property
+    def fw_platform(self) -> str:
+        """The platform its firmware is built for, as Ubiquiti's firmware server names it: the start
+        of the firmware string ("XC" in XC.qca955x.v8.7.11..., "UXMAX" in UXMAX.ipq5322.v5.2.10...,
+        "e50" in e50.v2.0.9-hotfix.7...), else the platform field consoles send ("UCGF")."""
+        m = re.match(r"([A-Za-z0-9-]+)(?:\.[A-Za-z0-9_-]+)?\.v\d", self.info.get("firmware") or "")
+        return m.group(1) if m else (self.info.get("platform") or "")
+
     def merge(self, other: "Device") -> None:
         for ip in other.ips:
             self.add_ip(ip)
@@ -740,6 +755,13 @@ class Device:
         self.console = self.console or other.console
         for kind, hints in other.port_hints.items():
             self.port_hints.setdefault(kind, {}).update(hints)
+        for port, kind in other.services.items():
+            self.services.setdefault(port, kind)
+        for port, info in other.service_info.items():
+            self.service_info.setdefault(port, info)
+        if other.ports is not None:
+            self.ports = sorted(set(self.ports or []) | set(other.ports))
+        self.port_search = self.port_search or other.port_search
         self.mdns = self.mdns or other.mdns
         self.ssdp = self.ssdp or other.ssdp
         self.api = self.api or other.api
@@ -1672,37 +1694,97 @@ class SsdpBrowser:
 # Deep checks: TCP ports and the UniFi OS console API
 # ---------------------------------------------------------------------------
 
-def probe_service(ip: str, port: int, timeout: float = 1.5) -> str | None:
-    """What answers on one TCP port: "ssh", "https", "http", "open" (something else), or None
-    when nothing does. SSH greets first; HTTPS and HTTP wait for the client."""
+def _cert_name(der: bytes | None) -> str:
+    """The common name (CN) a DER certificate was issued to, read without a certificate library:
+    the issuer's name comes first, so the subject's is the last CN in it."""
+    names = [der[m.end():m.end() + m.group(1)[0]].decode("utf-8", "replace")
+             for m in re.finditer(rb"\x06\x03\x55\x04\x03[\x0c\x13\x14\x16](.)", der or b"", re.S)]
+    return names[-1] if names else ""
+
+
+def _http_summary(reply: bytes) -> str:
+    """An HTTP reply in a few words: status, server, where it redirects, the page title."""
+    head, _, body = reply.partition(b"\r\n\r\n")
+    lines = head.decode("latin-1").split("\r\n")
+    status = lines[0].split(" ", 2)
+    headers = {k.strip().lower(): v.strip() for k, _, v in (line.partition(":") for line in lines[1:])}
+    bits = [status[1] if len(status) > 1 else "", headers.get("server", "")]
+    if headers.get("location"):
+        bits.append("-> " + headers["location"][:60])
+    m = re.search(rb"(?is)<title[^>]*>(.*?)</title>", body)
+    title = " ".join(m.group(1).decode("utf-8", "replace").split())[:60] if m else ""
+    if title:
+        bits.append(f'"{title}"')
+    return " ".join(b for b in bits if b)
+
+
+def _ask_http(s, ip: str, timeout: float, limit: int = 16384) -> bytes:
+    """Send GET / on a connected socket; the start of the reply (to the page title)."""
+    s.settimeout(timeout)
+    s.sendall(f"GET / HTTP/1.0\r\nHost: {ip}\r\nUser-Agent: opendisco/{__version__}\r\n\r\n".encode())
+    reply = b""
+    try:
+        while len(reply) < limit and b"</title>" not in reply.lower():
+            chunk = s.recv(4096)
+            if not chunk:
+                break
+            reply += chunk
+    except OSError:  # a timeout, or the server closing on us
+        pass
+    return reply
+
+
+def identify_service(ip: str, port: int, timeout: float = 1.5) -> tuple:
+    """What answers on one TCP port, the way a port scanner's version detection tells:
+    (kind, detail). kind is "ssh", "https", "http", "telnet", "ftp", "smtp", "tls" (TLS, but not
+    a web page) or "open" (something else), or None when nothing answers. detail is what it
+    gave away: the SSH banner, the web page's status, server and title, the certificate's name.
+    Services that speak first (SSH, telnet, FTP) say so; for the rest, TLS then HTTP is tried,
+    the way curl -k would."""
     try:
         with socket.create_connection((ip, port), timeout=timeout) as s:
             s.settimeout(1.0)
             try:
-                greeting = s.recv(64)
+                greeting = s.recv(256)
             except socket.timeout:
                 greeting = b""
     except OSError:
-        return None
+        return None, ""
+    first = "".join(c if c.isprintable() else "." for c in
+                    greeting.split(b"\n", 1)[0].strip().decode("latin-1"))[:80]
     if greeting.startswith(b"SSH-"):
-        return "ssh"
+        return "ssh", first
+    if greeting[:1] == b"\xff":  # telnet option negotiation
+        return "telnet", ""
+    if greeting.startswith(b"220"):
+        upper = greeting.upper()
+        return ("ftp" if b"FTP" in upper else "smtp" if b"SMTP" in upper else "open"), first
     if greeting:
-        return "open"
+        return "open", first
     try:
         with socket.create_connection((ip, port), timeout=timeout) as raw:
-            with _insecure_ctx().wrap_socket(raw):
-                return "https"
-    except OSError:  # includes ssl.SSLError
+            with _insecure_ctx().wrap_socket(raw) as s:
+                cert = _cert_name(s.getpeercert(binary_form=True))
+                reply = _ask_http(s, ip, timeout)
+        cert = f"certificate {cert}" if cert else ""
+        if reply.startswith(b"HTTP/"):
+            return "https", "  ".join(b for b in (_http_summary(reply), cert) if b)
+        return "tls", cert
+    except OSError:  # includes ssl.SSLError: not TLS
         pass
     try:
         with socket.create_connection((ip, port), timeout=timeout) as s:
-            s.settimeout(timeout)
-            s.sendall(b"HEAD / HTTP/1.0\r\n\r\n")
-            if s.recv(16).startswith(b"HTTP/"):
-                return "http"
+            reply = _ask_http(s, ip, timeout)
+        if reply.startswith(b"HTTP/"):
+            return "http", _http_summary(reply)
     except OSError:
         pass
-    return "open"
+    return "open", ""
+
+
+def probe_service(ip: str, port: int, timeout: float = 1.5) -> str | None:
+    """What answers on one TCP port: identify_service's kind alone."""
+    return identify_service(ip, port, timeout)[0]
 
 
 def web_redirect_port(ip: str, timeout: float = 2.0) -> int | None:
@@ -1743,18 +1825,21 @@ def check_ports(devs, opts, log, everyone=()) -> None:
                    for p in [d.said_port(kind)] if p)
     common = sorted(set(CHECK_PORTS) | set(opts.https_ports) | set(opts.ssh_ports)
                     | {p for p, _ in used.most_common(8)})
-    pairs = [(d, p) for d in devs
-             for p in sorted(set(common) | {q for kind in ("https", "ssh") for q in [d.said_port(kind)] if q})]
+    pairs = [(d, p) for d in devs  # and whatever a port search found open before
+             for p in sorted(set(common) | set(d.services)
+                             | {q for kind in ("https", "http", "ssh") for q in [d.said_port(kind)] if q})]
     log(f"Checking TCP {', '.join(map(str, common))} and the ports each device reports, "
         f"on {len(devs)} device(s)...")
     with ThreadPoolExecutor(64) as ex:
-        results = list(ex.map(lambda dp: probe_service(dp[0].ip, dp[1]), pairs))
+        results = list(ex.map(lambda dp: identify_service(dp[0].ip, dp[1]), pairs))
     for d in devs:
-        d.ports, d.services = [], {}
-    for (d, p), service in zip(pairs, results):
+        d.ports, d.services, d.service_info = [], {}, {}
+    for (d, p), (service, detail) in zip(pairs, results):
         if service:
             d.ports.append(p)
             d.services[p] = service
+            if detail:
+                d.service_info[p] = detail
     web = [d for d in devs if d.services.get(80) == "http"]
     with ThreadPoolExecutor(16) as ex:
         redirects = list(ex.map(lambda d: web_redirect_port(d.ip), web))
@@ -1762,27 +1847,29 @@ def check_ports(devs, opts, log, everyone=()) -> None:
         if port:
             d.port_hints.setdefault("https", {})["redirect"] = port
             if port not in d.services:
-                service = probe_service(d.ip, port)
+                service, detail = identify_service(d.ip, port)
                 if service:
                     d.ports = sorted(d.ports + [port])
                     d.services[port] = service
+                    if detail:
+                        d.service_info[port] = detail
 
 
 def mdns_port_hints(d) -> None:
-    """SSH and HTTPS ports from the device's mDNS service records (_ssh._tcp, _https._tcp)."""
+    """SSH, HTTPS and HTTP ports from the device's mDNS service records (_ssh._tcp...)."""
     for name, target in d.mdns.get("srv", {}).items():
         port = target.rsplit(":", 1)[-1]
-        for kind, service in (("ssh", "._ssh._tcp."), ("https", "._https._tcp.")):
+        for kind, service in (("ssh", "._ssh._tcp."), ("https", "._https._tcp."), ("http", "._http._tcp.")):
             if service in name.lower() + "." and port.isdigit():
                 d.port_hints.setdefault(kind, {})["mDNS"] = int(port)
 
 
 def upnp_port_hint(d) -> None:
-    """The HTTPS port in the device's UPnP presentation URL (its web UI)."""
+    """The HTTPS (or HTTP) port in the device's UPnP presentation URL (its web UI)."""
     try:
         url = urllib.parse.urlparse(d.ssdp.get("presentationURL", ""))
-        if url.scheme == "https" and url.hostname in (None, d.ip):
-            d.port_hints.setdefault("https", {})["UPnP"] = url.port or 443
+        if url.scheme in ("https", "http") and url.hostname in (None, d.ip):
+            d.port_hints.setdefault(url.scheme, {})["UPnP"] = url.port or (443 if url.scheme == "https" else 80)
     except ValueError:
         pass
 
@@ -1809,6 +1896,225 @@ def probe_console_api(ip: str) -> dict:
     if apps:
         out["apps"] = apps
     return out
+
+
+# ---------------------------------------------------------------------------
+# Port search: one device's every TCP port, for a service that isn't where it should be
+# ---------------------------------------------------------------------------
+
+SERVICE_NAMES = {"https": "HTTPS", "http": "HTTP", "ssh": "SSH", "all": "services"}
+# Where web UIs and SSH most often live, tried first so a search can stop early.
+SEARCH_FIRST = {
+    "https": (443, 8443, 4443, 7443, 9443, 10443, 8843, 444, 1443, 2443, 3443, 5443, 6443, 8444, 18443,
+              20443, 28443, 50443),
+    "http": (80, 8080, 8000, 8008, 81, 8081, 8088, 8888, 8880, 9080, 7080, 5000, 3000, 8001, 82, 88,
+             9000, 9090, 10080, 18080),
+    "ssh": (22, 2222, 222, 2200, 22222, 2022, 8022, 10022, 1022, 4022, 9022, 830, 3022, 5022, 2220),
+}
+_CONNECTING = {errno.EINPROGRESS, errno.EWOULDBLOCK, errno.EALREADY, 10035}  # 10035: Windows' WSAEWOULDBLOCK
+
+
+def _typos(port: int) -> list:
+    """The ports one keystroke away from this one: a digit changed, added, dropped or swapped."""
+    s, out = str(port), set()
+    for i in range(len(s) + 1):
+        for c in "0123456789":
+            out.add(s[:i] + c + s[i:])
+            if i < len(s):
+                out.add(s[:i] + c + s[i + 1:])
+    for i in range(len(s)):
+        out.add(s[:i] + s[i + 1:])
+        if i + 1 < len(s):
+            out.add(s[:i] + s[i + 1] + s[i] + s[i + 2:])
+    return sorted(int(t) for t in out if t and t[0] != "0" and int(t) < 65536 and int(t) != port)
+
+
+def search_order(kind: str, everyone=()) -> list:
+    """All 65535 TCP ports, in the order a search for this service ("all": SSH and the web) tries
+    them: its usual ports, the ports the rest of the gear here uses for it, typos of those (a
+    fat-fingered config), then the rest."""
+    kinds = ("https", "http", "ssh") if kind == "all" else (kind,)
+    fleet = Counter(p for d in everyone for k in kinds
+                    for p in {d.said_port(k), *(q for q, s in d.services.items() if s == k)} if p)
+    first = [p for k in kinds for p in SEARCH_FIRST[k]] + [p for p, _ in fleet.most_common()]
+    first += [t for p, _ in fleet.most_common(4) for t in _typos(p)]
+    ordered = list(dict.fromkeys(first))
+    tried = set(ordered)
+    return ordered + [p for p in range(1, 65536) if p not in tried]
+
+
+def _socket_budget() -> int:
+    """How many connections a search can have open at once. A Mac app may open only 256 files
+    unless it asks for more, so ask; Windows' select() takes at most 512 sockets."""
+    if IS_WINDOWS:
+        return 450
+    try:
+        import resource
+        soft, hard = resource.getrlimit(resource.RLIMIT_NOFILE)
+        want = 1152 if hard == resource.RLIM_INFINITY else min(hard, 1152)
+        if soft != resource.RLIM_INFINITY and soft < want:
+            resource.setrlimit(resource.RLIMIT_NOFILE, (want, hard))
+            soft = want
+        return max(32, min(1024, (1152 if soft == resource.RLIM_INFINITY else soft) - 128))
+    except (ImportError, ValueError, OSError):
+        return 200
+
+
+def scan_tcp(ip: str, ports, on_open=None, progress=None, stop=None, timeout: float = 0.8,
+             rate: int = 3000) -> tuple:
+    """Which of these TCP ports accept a connection: a connect scan (nmap -sT), which needs no
+    administrator rights, tried in the order given. At most `rate` new connections a second, so
+    small radios aren't swamped; a port silent for `timeout` counts as closed. on_open(port) is
+    called as each open port is found, progress(checked, total, open) now and then; stop()
+    ends it early. Returns (open ports, ports checked)."""
+    ports = list(ports)
+    lock = threading.Lock()
+    state = {"next": 0, "done": 0, "tokens": 0.0, "at": time.monotonic()}
+    found = []
+    # Windows holds a refused connection for a second while it retries, so it needs more at
+    # once, through more select() calls.
+    workers = 4 if IS_WINDOWS else 1
+    budget = max(8, _socket_budget() // workers)
+
+    def take(n: int) -> list:
+        with lock:
+            now = time.monotonic()
+            state["tokens"] = min(rate * 0.1, state["tokens"] + (now - state["at"]) * rate)
+            state["at"] = now
+            n = min(n, int(state["tokens"]), len(ports) - state["next"])
+            if n <= 0:
+                return []
+            state["tokens"] -= n
+            state["next"] += n
+            return ports[state["next"] - n:state["next"]]
+
+    def finished(port: int, ok: bool) -> None:
+        with lock:
+            state["done"] += 1
+            if ok:
+                found.append(port)
+        if ok and on_open:
+            on_open(port)
+
+    def work() -> None:
+        sel = selectors.DefaultSelector()
+        live, waiting, retry = {}, collections.deque(), []  # waiting: (deadline, socket), oldest first
+        limit = budget
+        try:
+            while not (stop and stop()):
+                todo = retry[:limit - len(live)] + take(limit - len(live) - len(retry))
+                del retry[:limit - len(live)]
+                for port in todo:
+                    try:
+                        sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+                    except OSError:  # out of file handles after all: fewer at once
+                        retry.append(port)
+                        limit = max(8, len(live))
+                        continue
+                    sock.setblocking(False)
+                    err = sock.connect_ex((ip, port))
+                    if err == 0 or err not in _CONNECTING:
+                        sock.close()
+                        finished(port, err == 0)
+                        continue
+                    sel.register(sock, selectors.EVENT_WRITE, port)
+                    live[sock] = port
+                    waiting.append((time.monotonic() + timeout, sock))
+                if not live:
+                    with lock:
+                        if state["next"] >= len(ports) and not retry:
+                            return
+                    time.sleep(0.005)
+                    continue
+                for key, _ in sel.select(0.02):
+                    sock = key.fileobj
+                    try:
+                        err = sock.getsockopt(socket.SOL_SOCKET, socket.SO_ERROR)
+                    except OSError:
+                        err = -1
+                    sel.unregister(sock)
+                    live.pop(sock, None)
+                    sock.close()
+                    finished(key.data, err == 0)
+                now = time.monotonic()
+                while waiting and (waiting[0][1] not in live or waiting[0][0] <= now):
+                    _, sock = waiting.popleft()
+                    if sock in live:
+                        port = live.pop(sock)
+                        sel.unregister(sock)
+                        sock.close()
+                        finished(port, False)
+        finally:
+            for sock in live:
+                sel.unregister(sock)
+                sock.close()
+            sel.close()
+
+    halted = threading.Event()  # Ctrl+C
+    asked = stop
+    stop = lambda: halted.is_set() or bool(asked and asked())  # noqa: E731
+    threads = [threading.Thread(target=work, daemon=True) for _ in range(workers)]
+    for t in threads:
+        t.start()
+    while True:
+        alive = [t for t in threads if t.is_alive()]
+        try:
+            if alive:
+                alive[0].join(0.25)
+            if progress:
+                progress(state["done"], len(ports), len(found))
+        except KeyboardInterrupt:
+            halted.set()
+        if not alive:
+            return sorted(found), state["done"]
+
+
+def find_ports(res: "ScanResult", d: Device, kind: str, log, progress=None) -> list:
+    """Chase one device's SSH, HTTPS or HTTP port ("all": every service it runs). First the deep
+    check (the ports it reports, the common ones, the ones the rest of the gear uses, where its
+    HTTP page redirects); when that doesn't find it, all 65535 TCP ports, likeliest first, naming
+    what answers on each open one, until the service turns up. STOP ends it early. Updates the
+    device and every device's diagnostics; returns the ports the service answers on."""
+    STOP.clear()
+    everyone = list(res.inv.devices.values())
+
+    def answering() -> list:
+        return sorted(p for p, k in d.services.items() if k == kind)
+
+    if kind != "all":
+        check_ports([d], res.opts, log, everyone)
+    if kind == "all" or not answering():
+        lock, hit = threading.Lock(), threading.Event()
+        if d.ports is None:
+            d.ports = []
+
+        def identify(port: int) -> None:
+            service, detail = identify_service(d.ip, port)
+            with lock:
+                if service:
+                    d.services[port] = service
+                    d.ports = sorted(set(d.ports) | {port})
+                    if detail:
+                        d.service_info[port] = detail
+                    else:
+                        d.service_info.pop(port, None)
+            if service == kind:
+                hit.set()
+
+        local = any(_in_any(d.ip, [i.network]) for i in res.ifaces)
+        log(f"Checking every TCP port on {d.ip}" + ("" if kind == "all" else f" for {SERVICE_NAMES[kind]}")
+            + ", likeliest first...")
+        with ThreadPoolExecutor(16) as pool:
+            _, checked = scan_tcp(d.ip, search_order(kind, everyone), lambda port: pool.submit(identify, port),
+                                  progress, lambda: STOP.is_set() or hit.is_set(), 0.8 if local else 1.5)
+        d.port_search = {"for": kind, "checked": checked, "at": time.time(),
+                         "stopped": checked < 65535 and not hit.is_set()}
+        found = ", ".join(f"{p} {d.services[p]}" for p in d.ports) or "none"
+        log(f"  {d.ip}: {checked} TCP ports checked; open: {found}")
+    if res.diag_args:
+        diagnose(res.inv, *res.diag_args)
+    res.devices = sorted_devices(res.inv)
+    return d.ports if kind == "all" else answering()
 
 
 # ---------------------------------------------------------------------------
@@ -4035,12 +4341,22 @@ def render_details(d: Device) -> str:
             row("Console API", "  ".join(bits))
         if d.api.get("apps"):
             row("Console apps", ", ".join(d.api["apps"]))
-    for kind, label in (("https", "HTTPS port"), ("ssh", "SSH port")):
+    for kind, label in (("https", "HTTPS port"), ("http", "HTTP port"), ("ssh", "SSH port")):
         said = d.said_ports(kind)
         if said:
             row(label, "; ".join(f"{port} ({PORT_SOURCES[source]})" for source, port in said.items()))
     if d.ports is not None:
-        row("Open TCP ports", ", ".join(f"{p} {d.services.get(p, '')}".strip() for p in d.ports) or "none")
+        if not d.ports:
+            row("Open TCP ports", "none")
+        for n, p in enumerate(d.ports):
+            row("Open TCP ports" if n == 0 else "",
+                f"{p:<5} {d.services.get(p, ''):<6} {d.service_info.get(p, '')}".rstrip())
+    if d.port_search:
+        ps = d.port_search
+        what = "every TCP port" if ps["checked"] >= 65535 else f"{ps['checked']} of 65535 TCP ports"
+        why = (" (stopped)" if ps.get("stopped") else
+               f" (stopped once {SERVICE_NAMES[ps['for']]} turned up)" if ps["checked"] < 65535 else "")
+        row("Port search", f"{what}{why}, {time.strftime('%H:%M', time.localtime(ps['at']))}")
     url = web_url(d)
     if url:
         row("Web UI URL", url)
@@ -4170,8 +4486,11 @@ def device_to_dict(d: Device) -> dict:
         "vendor": d.vendor or None, "ubiquiti_oui": is_ubnt_mac(d.mac), "ubnt": d.info, "unknown_tlvs": d.unknown_tlvs,
         "mdns": d.mdns, "ssdp": d.ssdp, "console_api": d.api, "open_ports": d.ports,
         "services": {str(p): k for p, k in d.services.items()} or None,
-        "https_port": d.said_port("https"), "ssh_port": d.said_port("ssh"),
-        "port_sources": {kind: d.said_ports(kind) for kind in ("https", "ssh") if d.said_ports(kind)} or None,
+        "service_details": {str(p): v for p, v in d.service_info.items()} or None,
+        "port_search": {"for": d.port_search["for"], "ports_checked": d.port_search["checked"],
+                        "stopped": d.port_search.get("stopped", False)} if d.port_search else None,
+        "https_port": d.said_port("https"), "http_port": d.said_port("http"), "ssh_port": d.said_port("ssh"),
+        "port_sources": {kind: d.said_ports(kind) for kind in ("https", "http", "ssh") if d.said_ports(kind)} or None,
         "alias": d.alias or None, "answered_without_alias": d.direct,
         "vlan": int(d.vlan_label) if d.vlan_label.isdigit() else None,
         "vlan_tagged": bool(d.vlan), "vlan_parent": d.vlan_parent or None, "answered_on": sorted(d.seen_on), "lldp": d.lldp or None, "wifi_ap": d.wifi or None,
@@ -4268,6 +4587,9 @@ def parse_args(argv=None):
     g.add_argument("--no-arp", dest="arp", action="store_false", help="skip ARP table vendor matching")
     g.add_argument("--ports", action="store_true", help=f"check TCP {', '.join(map(str, CHECK_PORTS))}")
     g.add_argument("--deep", action="store_true", help="--ports plus the UniFi OS console API")
+    g.add_argument("--all-ports", action="store_true",
+                   help="check every TCP port on the TARGET addresses given and name what answers on each "
+                        "(SSH, HTTPS, HTTP...), the way a port scanner would; about 20-60s a device")
     g.add_argument("--https-port", action="append", default=[], metavar="PORTS",
                    help="the standard web UI port(s), e.g. 8443: gear reporting another is flagged, and "
                         "--ports/--deep check them")
@@ -4355,6 +4677,11 @@ def parse_args(argv=None):
             p.error("--listen sends nothing, so it can't be combined with targets")
     if opts.watch and opts.json:
         p.error("--watch prints a live event log; it can't be combined with --json")
+    if opts.all_ports:
+        if not opts.targets or opts.listen or opts.watch:
+            p.error("--all-ports needs the devices' addresses as targets, e.g. --all-ports 192.168.1.20")
+        if any("/" in t and not t.endswith(("/32", "/31")) for t in opts.targets):
+            p.error("--all-ports takes single addresses, not subnets: it checks 65535 ports on each")
     if opts.timeout is None:
         opts.timeout = 30.0 if opts.listen else 6.0
     opts.rate = max(10, opts.rate)
@@ -4506,26 +4833,28 @@ def result_to_dict(res: ScanResult) -> dict:
     }
 
 
-EXPORT_COLUMNS = ("IP", "VLAN", "Vendor", "MAC", "Model", "Name", "Firmware", "HTTPS", "SSH", "Uptime", "Via",
-                  "Status")
+EXPORT_COLUMNS = ("IP", "VLAN", "Vendor", "MAC", "Model", "Name", "Firmware", "HTTPS", "HTTP", "SSH", "Uptime",
+                  "Via", "Status")
 
 
 def port_cell(d: Device, kind: str) -> str:
-    """The HTTPS or SSH column: the port the device reports, with a deep check's verdict
-    (✓ that service answers there, ✗ nothing does); otherwise whatever a deep check found."""
+    """The HTTPS, HTTP or SSH column: the port the device reports, with a deep check's verdict
+    (✓ that service answers there, ✗ nothing does), then any other port it was found on."""
     reported = d.said_port(kind)
-    if reported:
-        if d.ports is None:
-            return str(reported)
-        found = d.services.get(reported)
-        return f"{reported} ✓" if found == kind else f"{reported} ✗" if found is None else f"{reported} ({found})"
-    return ", ".join(f"{p} ✓" for p, k in sorted(d.services.items()) if k == kind)
+    elsewhere = [f"{p} ✓" for p, k in sorted(d.services.items()) if k == kind and p != reported]
+    if not reported:
+        return ", ".join(elsewhere)
+    if d.ports is None:
+        return str(reported)
+    found = d.services.get(reported)
+    verdict = f"{reported} ✓" if found == kind else f"{reported} ✗" if found is None else f"{reported} ({found})"
+    return ", ".join([verdict] + elsewhere)
 
 
 def device_row(d: Device) -> list:
     """The values the table, CSV and HTML exports show for a device."""
     return [d.ip or "", d.vlan_label, d.vendor, d.mac or "", d.model, d.name, d.firmware,
-            port_cell(d, "https"), port_cell(d, "ssh"), fmt_uptime(d.info.get("uptime")),
+            port_cell(d, "https"), port_cell(d, "http"), port_cell(d, "ssh"), fmt_uptime(d.info.get("uptime")),
             ",".join(v for v in VIA_ORDER if v in d.via), status_cell(d)[0]]
 
 
@@ -4934,9 +5263,19 @@ def main(argv=None) -> int:
             sys.stderr.write(f"\r  {elapsed:4.1f}/{total:.0f}s  {n} heard via UBNT discovery ")
         sys.stderr.flush()
 
+    def port_progress(done, total, n):
+        if tty:
+            sys.stderr.write("\r" + " " * 60 + "\r" if done is None else f"\r  {done}/{total} ports, {n} open ")
+            sys.stderr.flush()
+
     res = run_scan(opts, log, progress)
     if not isinstance(res, ScanResult):
         return res
+    if opts.all_ports:
+        for ip in expand_targets(opts.targets, lambda m: sys.exit(f"error: {m}"))[0]:
+            d = res.inv.find(ip=ip) or res.inv.lookup(ip=ip)  # checked even if it didn't answer discovery
+            find_ports(res, d, "all", log, port_progress)
+            port_progress(None, None, None)
     for path in opts.export:
         write_export(res, path)
         log(f"Saved {path}")
