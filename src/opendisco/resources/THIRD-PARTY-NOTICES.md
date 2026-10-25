@@ -19,7 +19,7 @@ Not included in OpenDisco's own files:
 Some of these licenses require the source code to be available to anyone who receives the program:
 - asyncssh (Android, iPhone and iPad): OpenDisco distributes asyncssh under the Eclipse Public License 2.0, and its source code is available under that license. The exact source distribution, asyncssh-2.23.1.tar.gz, is attached to each OpenDisco release at github.com/Nekobyte-Coding/opendisco/releases, and is also at pypi.org/project/asyncssh/2.23.1.
 - PyGObject and pycairo (Linux .deb and .rpm): both are used under the GNU Lesser General Public License 2.1. Their complete source distributions, pygobject-3.58.1.tar.gz and pycairo-1.29.2.tar.gz, are attached to each OpenDisco release, and are also at pypi.org/project/PyGObject/3.58.1 and pypi.org/project/pycairo/1.29.2. They are installed as separate files, in /usr/lib/opendisco/app_packages (the .deb) or /usr/lib64/opendisco/app_packages (the .rpm), so they can be replaced with modified versions. Modifying them for one's own use, and reverse engineering OpenDisco to debug such modifications, are permitted.
-- certifi (iPhone and iPad) and Mozilla's CA certificate bundle (Android): both are under the Mozilla Public License 2.0. Their Source Code Form is in certifi-2026.10.23.tar.gz, attached to each OpenDisco release and also at pypi.org/project/certifi/2026.10.23. The certificate bundle is itself a text file in that form.
+- certifi (iPhone and iPad) and Mozilla's CA certificate bundle (Android): both are under the Mozilla Public License 2.0. certifi's Source Code Form is in certifi-2026.10.23.tar.gz, attached to each OpenDisco release and also at pypi.org/project/certifi/2026.10.23. Android's bundle is Chaquopy's own copy, assets/chaquopy/cacert.pem in the APK: a text file, which is itself its Source Code Form.
 - NSIS (the Windows installer): the setup .exe is built with NSIS 3.13, whose LZMA decompression module is under the Common Public License 1.0. NSIS's source code, nsis-3.13-src.tar.bz2, is attached to each OpenDisco release, and is also at nsis.sourceforge.io/Download.
 - OpenDisco's own source code is at github.com/Nekobyte-Coding/opendisco.
 
@@ -202,7 +202,7 @@ Some of these licenses require the source code to be available to anyone who rec
 - Copyright (c) Individual contributors.
 
 ### certifi and Mozilla's CA certificate bundle
-- Version: certifi 2026.10.23 (iPhone and iPad). Android carries the same Mozilla CA bundle as Chaquopy's cacert.pem.
+- Version: certifi 2026.10.23 (iPhone and iPad). Android carries Chaquopy 17.1.0's own copy of Mozilla's CA bundle (cacert.pem), not certifi's file.
 - In: Android, iPhone and iPad.
 - License: Mozilla Public License 2.0. See "Source code" above.
 
