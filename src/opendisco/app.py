@@ -45,7 +45,7 @@ PHONE_COLUMNS = ["IP", "Model", "Name"]
 ANY_PORT = "Any interface"
 # What a device's right-click menu (and the Device menu) offers; None separates groups.
 DEVICE_ACTIONS = [("web", "Open Web UI"), ("ssh", "Open SSH…"), ("ping", "Ping"), ("latency", "Measure latency"),
-                  ("rescan", "Rescan device"),
+                  ("link", "Link health…"), ("rescan", "Rescan device"),
                   ("scan_from", "Scan from device…"), ("issues", "Show issues…"), None,
                   ("find_http", "Find HTTP port"), ("find_https", "Find HTTPS port"), ("find_ssh", "Find SSH port"),
                   ("all_ports", "Scan all ports"), None,

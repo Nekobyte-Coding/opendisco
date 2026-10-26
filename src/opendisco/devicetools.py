@@ -22,6 +22,7 @@ here runs in a worker thread.
   EdgeOS's own config commands.
 - Reboot, Locate (the LED blinks: UniFi access points and switches only), and Scan from a
   device given by its address, for devices the app hasn't found itself (over a VPN).
+- Link health (airMAX): the radio's mca-status and wstalist, which linkhealth reads.
 """
 import hashlib
 import json
@@ -39,7 +40,7 @@ import urllib.request
 from dataclasses import dataclass
 from pathlib import Path
 
-from opendisco import core
+from opendisco import core, linkhealth
 
 if core.platform_name() in ("ios", "android"):  # no ssh program there: asyncssh, with the same calls
     from opendisco import phonessh as sshrun
@@ -134,6 +135,7 @@ NOT_OFFERED = {
     "login": {"unifi": "set by its UniFi controller", "unifi-os": "UniFi OS: in its own settings",
               "edgeos": "not for EdgeOS yet", "isp": "airMAX only", "": "not for this device"},
     "scan": {"": "not for this device"},
+    "link": {"": "airMAX only"},
     "reboot": {"edgeswitch": "EdgeSwitch: in its web UI", "": "not for this device"},
     "locate": {"airos": "airOS has no LED command", "isp": "no LED command known",
                "edgeos": "EdgeOS has no LED command", "unifi-os": "UniFi OS: from its UniFi app",
@@ -144,6 +146,7 @@ NOT_OFFERED = {
 # device runs lldpd, lists its LLDP neighbours.
 SCAN_FAMILIES = {"airos", "unifi", "unifi-os", "edgeos"}
 SCAN_FILE = "/tmp/opendisco-scan.txt"
+LINK_FILE = "/tmp/opendisco-link.txt"
 SCAN_HOW = {"stations": "its station list", "lldp": "its LLDP neighbours", "arp": "its ARP table"}
 FROM_DEVICE = "from-device"
 
@@ -207,7 +210,8 @@ def _kind(d) -> str:
 
 def offers(d, action: str) -> tuple:
     """(offered, why not) for "update", "config" (the airOS editor: system.cfg), "edit" (the
-    config editor for every kind), "backup", "upload", "login", "scan", "reboot" or "locate"."""
+    config editor for every kind), "backup", "upload", "login", "scan", "reboot", "locate" or
+    "link" (link health)."""
     fam, kind = family(d), config_kind(d)
     if action == "update":
         ok = fam in UPDATE_STEPS
@@ -1236,33 +1240,44 @@ def scan_command(fam: str) -> str:
            f"' >{SCAN_FILE} 2>/dev/null"
 
 
-def read_scan(login: sshrun.Login, fam: str, stop=None) -> str:
-    sshrun.run(login, scan_command(fam), timeout=90, stop=stop)
+def _read_written(login: sshrun.Login, command: str, path: str, stop=None) -> str:
+    """Run a command that writes its output to path on the device, then bring the file back."""
+    sshrun.run(login, command, timeout=90, stop=stop)
     try:
         try:
-            return _fetch(login, SCAN_FILE, stop)
+            return _fetch(login, path, stop)
         except sshrun.SSHError as e:
             if e.kind != "forwarding":
                 raise
-            return sshrun.run(login, f"cat {SCAN_FILE}", timeout=90, stop=stop).out  # through the hop's client
+            return sshrun.run(login, f"cat {path}", timeout=90, stop=stop).out  # through the hop's client
     finally:
         try:
-            sshrun.run(login, f"rm -f {SCAN_FILE}", stop=stop)
+            sshrun.run(login, f"rm -f {path}", stop=stop)
         except sshrun.SSHError:
             pass
 
 
-def parse_scan(text: str) -> list:
-    sections, name = {}, None
+def read_scan(login: sshrun.Login, fam: str, stop=None) -> str:
+    return _read_written(login, scan_command(fam), SCAN_FILE, stop)
+
+
+def sections(text: str) -> dict:
+    """What the scan and link commands write: {section: [lines]}, each after its "@@name" line."""
+    found, name = {}, None
     for line in text.replace("\r", "").split("\n"):
         if line.startswith("@@"):
             name = line[2:].strip()
-            sections[name] = []
+            found[name] = []
         elif name:
-            sections[name].append(line)
-    found = _arp_sightings(sections.get("arp", []))
-    found += _station_sightings("\n".join(sections.get("stations", [])))
-    found += _lldp_sightings(sections.get("lldp", []))
+            found[name].append(line)
+    return found
+
+
+def parse_scan(text: str) -> list:
+    parts = sections(text)
+    found = _arp_sightings(parts.get("arp", []))
+    found += _station_sightings("\n".join(parts.get("stations", [])))
+    found += _lldp_sightings(parts.get("lldp", []))
     return found
 
 
@@ -1287,15 +1302,9 @@ def _arp_sightings(lines) -> list:
 def _station_sightings(text: str) -> list:
     """wstalist: a JSON list of stations, each with mac, lastip and name, and on airOS 8 a
     "remote" object with what the station says about itself (hostname, platform, version)."""
-    try:
-        stations = json.loads(text) if text.strip() else []
-    except ValueError:
-        return []
-    if isinstance(stations, dict):
-        stations = stations.get("stations") or stations.get("sta") or []
     found = []
-    for s in stations if isinstance(stations, list) else []:
-        if not isinstance(s, dict) or not _MAC.fullmatch(str(s.get("mac", ""))):
+    for s in linkhealth.station_list(text):
+        if not _MAC.fullmatch(str(s.get("mac", ""))):
             continue
         remote = s.get("remote") if isinstance(s.get("remote"), dict) else {}
         ip = str(s.get("lastip") or "")
@@ -1386,6 +1395,22 @@ def scan_from_address(res, login: sshrun.Login, local: set = frozenset()) -> tup
         finder.info.setdefault("hostname", me.name)
     seen, new = merge_scan(res, finder, sightings, set(local) | set(me.macs))
     return finder, sightings, seen, new
+
+
+# Link health (airMAX): mca-status, airOS's summary of the radio (its mode, channel, noise floor
+# and, on a station, its signal and rates: what the web UI's dashboard shows), and wstalist, its
+# station list, both written to LINK_FILE and brought back by scp like a scan's.
+LINK_COMMAND = (f"sh -c 'echo @@status; mca-status 2>/dev/null; echo @@stations; wstalist 2>/dev/null; "
+                f"echo @@end' >{LINK_FILE} 2>/dev/null")
+
+
+def read_link(login: sshrun.Login, stop=None) -> dict:
+    """The radio's link health (linkhealth.parse); a ToolError when it isn't an airOS radio."""
+    parts = sections(_read_written(login, LINK_COMMAND, LINK_FILE, stop))
+    status = [line for line in parts.get("status", []) if line.strip()]
+    if not any("=" in line for line in status):
+        raise ToolError(f"{login.where} has no mca-status: it isn't an airOS radio.")
+    return linkhealth.parse(status, "\n".join(parts.get("stations", [])))
 
 
 def relink(res, old_key: str, d) -> None:

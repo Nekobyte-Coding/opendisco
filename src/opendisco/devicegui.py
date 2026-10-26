@@ -1,6 +1,7 @@
 """The device tools' windows (desktop only): firmware check and update, the config editor, config
 backups (list, restore, upload with a diff first), reboot, locate, the new login, Scan from
-device (also from an address, for a device not in the table), and the login window they share,
+device (also from an address, for a device not in the table), link health (airMAX: into
+Details), and the login window they share,
 which can remember a device's login in the operating system's credential store. The work itself
 is opendisco.devicetools, run in worker threads.
 
@@ -24,10 +25,10 @@ import toga
 from toga.style import Pack
 from toga.style.pack import COLUMN, ROW
 
-from opendisco import core, credstore, devicetools, sshrun, terminal, terms
+from opendisco import core, credstore, devicetools, linkhealth, sshrun, terminal, terms
 
 ACTIONS = ("scan_from", "fw_check", "fw_update", "config", "login", "backup", "backups", "upload", "reboot", "locate",
-           "forget_login")
+           "forget_login", "link")
 _busy: dict = {}  # device key -> what's running on it
 _in_use: dict = {}  # downloaded firmware path -> updates using it
 _locating: dict = {}  # device key -> the login its LED was set blinking with
@@ -66,7 +67,8 @@ def menu_state(app, d, titles: dict) -> dict:
     ubiquiti = bool(d.info.get("firmware") or d.info.get("platform"))
     state["fw_check"] = (titles["fw_check"], ubiquiti and not busy)
     for name, action in (("scan_from", "scan"), ("fw_update", "update"), ("config", "edit"), ("login", "login"),
-                         ("backup", "backup"), ("upload", "upload"), ("reboot", "reboot"), ("locate", "locate")):
+                         ("backup", "backup"), ("upload", "upload"), ("reboot", "reboot"), ("locate", "locate"),
+                         ("link", "link")):
         offered, why = devicetools.offers(d, action)
         title = "Stop locating (LED)" if name == "locate" and d.key in _locating else titles[name]
         if busy:
@@ -98,7 +100,7 @@ def menu_state(app, d, titles: dict) -> dict:
 def act(app, d, name: str) -> None:
     flow = {"scan_from": scan_flow, "fw_check": check_flow, "fw_update": update_flow, "config": config_flow,
             "login": login_flow, "backup": backup_flow, "backups": backups_flow, "upload": upload_flow,
-            "reboot": reboot_flow, "locate": locate_flow, "ssh": routed_ssh, "ping": routed_ping,
+            "reboot": reboot_flow, "locate": locate_flow, "link": link_flow, "ssh": routed_ssh, "ping": routed_ping,
             "web": routed_web}.get(name)
     if name in ("find_http", "find_https", "find_ssh", "all_ports"):
         kind = {"find_http": "http", "find_https": "https", "find_ssh": "ssh", "all_ports": "all"}[name]
@@ -391,6 +393,41 @@ def _report_scan(app, d, sightings, seen, new):
     selected = app._selected_device()
     if selected is not None:
         app.details.value = core.render_details(selected)
+
+
+# ---------------------------------------------------------------------------
+# Link health (airMAX)
+# ---------------------------------------------------------------------------
+
+async def link_flow(app, d):
+    """Read a radio's link health (linkhealth): its own link, and each station's on an access
+    point, into Details' Link section, with weak links flagged and said in the Log."""
+    if _busy.get(d.key):
+        return
+    login = await ask_route(app, d, "Log in to read its link health: signal, noise floor, SNR, capacity, airtime "
+                                    "and distance, its own and, on an access point, each station's.")
+    if not login:
+        return
+    _busy[d.key] = "reading its link"
+    app.spinner.start()
+    app.status.text = f"Reading the link health of {d.ip}…"
+    try:
+        try:
+            reading = await _work(devicetools.read_link, login)
+        except (sshrun.SSHError, devicetools.ToolError) as e:
+            app.status.text = f"Link health of {d.ip}: {e}"
+            return
+    finally:
+        _busy.pop(d.key, None)
+        app.spinner.stop()
+    linkhealth.keep(d, reading)
+    app._rediagnose()  # its issues, in the list and Details (at the end of a scan that's running)
+    if app._selected_device() is d:
+        app.details.value = core.render_details(d)
+        app.tabs.current_tab = "Details"
+    found = [f"  [{tag}] {msg}" for _, tag, msg in linkhealth.issues(d)]
+    app._append_log("\n".join([linkhealth.summary(d)] + found), status=False)
+    app.status.text = linkhealth.summary(d)
 
 
 # ---------------------------------------------------------------------------

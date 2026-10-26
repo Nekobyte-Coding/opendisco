@@ -1,7 +1,7 @@
 """The device tools on the phones, as devicegui does them on the desktop, from the Tools tab
 (phone.py): firmware check and update, the config editor (airMAX, airFiber, LTU, EdgeOS), config
-backups (back up, restore, upload a file, share, delete), a new login, Reboot, Locate, and Scan
-from a device given by its address (the title bar's +).
+backups (back up, restore, upload a file, share, delete), a new login, Reboot, Locate, Link health
+(airMAX: into Details), and Scan from a device given by its address (the title bar's +).
 
 The work is devicetools', over phonessh (devicetools uses it on phones). What the desktop shows
 in windows is a page here (the config, the backups, what an upload changes, a new login, an
@@ -19,7 +19,7 @@ import toga
 from toga.style import Pack
 from toga.style.pack import COLUMN, ROW
 
-from opendisco import core, devicetools, phone, phonessh, terms
+from opendisco import core, devicetools, linkhealth, phone, phonessh, terms
 
 
 def _label(d) -> str:
@@ -55,6 +55,7 @@ def update_buttons(app, d):
     locating = bool(d and d.key in app.phone_locating)
     retitle(app.locate_button, "Stop locating" if locating else "Locate")
     app.locate_button.enabled = locating or (idle and devicetools.offers(d, "locate")[0] and ssh)
+    app.link_button.enabled = idle and devicetools.offers(d, "link")[0] and ssh
 
 
 def _begin(app, d, name: str, stop: threading.Event | None = None):
@@ -772,6 +773,36 @@ async def locate(app):
                              else " It doesn't say whether it took.")
     _say(app, f"{d.ip}: its LED is blinking.{said} Stop locating stops it.", begins=True)
     phone.update_tools(app)
+
+
+# -- link health (airMAX) ------------------------------------------------------------
+async def link(app):
+    """Read the open radio's link health (linkhealth): its own link, and each station's on an
+    access point, into Details, with what's flagged in the console."""
+    d = app._selected_device()
+    if d is None or app.device_job or not _offered(app, d, "link"):
+        return
+    login = await phone.ask_route(app, d, "Log in to read its link health: signal, noise floor, SNR, capacity, "
+                                          "airtime and distance, its own and each station's on an access point.")
+    if not login:
+        return
+    _begin(app, d, "link")
+    _say(app, f"Reading the link health of {d.ip}…", begins=True)
+    try:
+        reading = await _work(app, devicetools.read_link, login)
+    except (devicetools.ToolError, phonessh.SSHError) as e:
+        _say(app, f"Link health of {d.ip}: {e}")
+        return
+    finally:
+        _end(app)
+    linkhealth.keep(d, reading)
+    app._rediagnose()  # its issues, in the list and Details
+    if app._selected_device() is d:
+        app.details.value = core.render_details(d)
+    found = [msg.split(". ")[0] + "." for _, _, msg in linkhealth.issues(d)]  # what, without the advice
+    if found:
+        phone.say(app, "\n".join(found))
+    _say(app, linkhealth.summary(d) + " Details has every number.")
 
 
 # -- scan from a device given by its address -----------------------------------------
