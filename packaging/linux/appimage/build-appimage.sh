@@ -64,6 +64,13 @@ LIB=$(dirname "$SITE")
 rm -rf "$LIB"/{test,idlelib,tkinter,turtledemo,turtle.py,ensurepip,lib2to3} \
        "$LIB"/lib-dynload/{_tkinter,readline,_gdbm,_dbm,_curses,_curses_panel}* "$LIB"/curses "$APPDIR"/usr/python/lib/{tcl,tk,itcl,thread,Tix}* \
        "$APPDIR"/usr/python/lib/lib{tcl,tk}* "$APPDIR"/usr/python/share "$APPDIR"/usr/python/include
+# python-build-standalone builds its modules into libpython, except _tkinter and _dbm, which links
+# Berkeley DB (Sleepycat licence: copyleft over the whole app). Anything else showing up here in a
+# newer Python needs its licence checked (THIRD-PARTY-NOTICES.md) before it ships.
+if [ -n "$(ls -A "$LIB/lib-dynload" 2>/dev/null)" ]; then
+    echo "error: new modules in lib-dynload: $(ls "$LIB/lib-dynload" | tr '\n' ' ')" >&2
+    exit 1
+fi
 find "$APPDIR" -name __pycache__ -prune -exec rm -rf {} +
 SOURCE_DATE_EPOCH=$STAMP "$PY" -m compileall -q -j0 --invalidation-mode unchecked-hash "$LIB" "$APPDIR/usr/bin" >/dev/null
 
