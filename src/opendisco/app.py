@@ -2409,7 +2409,7 @@ class OpenDiscoApp(toga.App):
             try:
                 path = update.download(asset, folder, lambda done, total: self._from_worker(shown, done, total), cancel)
                 log(f"Downloaded {asset.name}: its SHA-256 matches the one GitHub lists.")
-                if kind in ("macos", "deb", "rpm", "tarball"):
+                if kind in ("macos", "deb", "rpm", "tarball", "appimage"):
                     self._from_worker(installing, f"Installing OpenDisco {release.version}…")
                 if kind == "macos":
                     update.install_macos(path, target, release.version, log)
@@ -2417,6 +2417,8 @@ class OpenDiscoApp(toga.App):
                     update.install_package(path, kind, log)
                 elif kind == "tarball":
                     update.install_tarball(path, target, release.version, log)
+                elif kind == "appimage":
+                    update.install_appimage(path, target, release.version, log)
             except update.UpdateError as e:
                 error = str(e)
             except Exception as e:

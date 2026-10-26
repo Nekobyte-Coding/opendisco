@@ -126,7 +126,7 @@ def excerpt(markdown: str, limit: int = 700) -> str:
 def installed_as() -> tuple:
     """(kind, what an update replaces) for this copy of the app:
       ("macos", the .app)  ("windows", the install folder)  ("deb" or "rpm", None)
-      ("tarball", the portable folder)  ("android", None)
+      ("tarball", the portable folder)  ("appimage", the AppImage file)  ("android", None)
       ("source", None): a checkout, a pip install or anything else, which updates its own way."""
     plat = core.platform_name()
     if plat == "android":
@@ -142,6 +142,9 @@ def installed_as() -> tuple:
                 and (folder / "python" / "pythonw.exe").is_file()):
             return "windows", folder
     elif plat == "linux":
+        image, mounted = os.environ.get("APPIMAGE"), os.environ.get("APPDIR")  # set by the AppImage's runtime
+        if image and mounted and str(HERE).startswith(str(Path(mounted).resolve()) + os.sep) and Path(image).is_file():
+            return "appimage", Path(image)
         if str(HERE).startswith(("/usr/lib/opendisco/", "/usr/lib64/opendisco/")):
             owner = HERE / "__init__.py"
             for kind, query in (("deb", ["dpkg-query", "-S", str(owner)]), ("rpm", ["rpm", "-qf", str(owner)])):
@@ -177,6 +180,7 @@ def asset_names(version: str, kind: str) -> list:
             "deb": [f"OpenDisco-{version}-ubuntu-24.04-{'arm64' if arm else 'amd64'}.deb"],
             "rpm": [f"OpenDisco-{version}-fedora-44-{'aarch64' if arm else 'x86_64'}.rpm"],
             "tarball": [f"OpenDisco-{version}-linux.tar.gz"],
+            "appimage": [f"OpenDisco-{version}-linux-{'aarch64' if arm else 'x86_64'}.AppImage"],
             "android": [f"OpenDisco-{version}-android.apk"]}.get(kind, [])
 
 
@@ -191,7 +195,7 @@ def cannot_update(kind: str, target) -> str:
             return (f"OpenDisco is running from {target.parent}, which can't be changed (a disk image, or "
                     "a download macOS keeps apart). Move OpenDisco.app to the Applications folder, open it "
                     "from there, and update again")
-    if kind == "tarball" and not (os.access(target, os.W_OK) and os.access(target.parent, os.W_OK)):
+    if kind in ("tarball", "appimage") and not (os.access(target, os.W_OK) and os.access(target.parent, os.W_OK)):
         return f"this user can't change {target}"
     if kind == "windows" and not os.access(target, os.W_OK):
         return f"this user can't change {target}"
@@ -399,6 +403,25 @@ def install_tarball(archive: Path, folder: Path, version: str, log) -> None:
         shutil.rmtree(work, ignore_errors=True)
 
 
+def install_appimage(image: Path, target: Path, version: str, log) -> None:
+    """Put the new AppImage in place of this one, under this one's name (where a menu entry or an
+    AppImage manager points): copied beside it, then swapped in, so a failure leaves this one.
+    The running copy carries on from its own, still open, file."""
+    with open(image, "rb") as f:
+        head = f.read(16)
+    if not (head.startswith(b"\x7fELF") and head[8:11] == b"AI\x02"):  # the type 2 AppImage mark
+        raise UpdateError(f"{image.name} isn't an AppImage")
+    new = target.with_name(f".{target.name}-update-{os.getpid()}")
+    try:
+        shutil.copyfile(image, new)
+        new.chmod(0o755)
+        new.replace(target)
+    except OSError as e:
+        new.unlink(missing_ok=True)
+        raise UpdateError(f"putting the new version in place of {target} failed ({e.strerror})") from e
+    log(f"Replaced {target} with OpenDisco {version}")
+
+
 def start_windows_update(setup: Path, folder: Path, log_file: Path) -> None:
     """Hand over to update-windows.ps1, which waits for the app to quit, runs the installer
     silently over the same folder, and opens the app again."""
@@ -417,6 +440,8 @@ def relaunch_command(kind: str, target) -> list:
         return ["/usr/bin/open", str(target)]
     if kind == "tarball":
         return [str(target / "opendisco")]
+    if kind == "appimage":
+        return [str(target)]
     return [shutil.which("opendisco") or "/usr/bin/opendisco"]
 
 
