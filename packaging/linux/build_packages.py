@@ -6,10 +6,14 @@
   that release's Python, so each fits its own distro release.
 - A portable .tar.gz for any distro: the command-line tool runs on any Python 3.8+, and the app
   sets up its own Python environment the first time it opens (see README-LINUX.md).
+- An AppImage for Ubuntu 24.04, Debian 13, Fedora 40 and later, built in Ubuntu 24.04 by
+  appimage/build-appimage.sh: its own Python, PyGObject and Toga over the system's GTK. Also
+  fetches the source of the one system library it carries (girepository-2.0, LGPL) for the release.
 
     .venv/bin/python packaging/linux/build_packages.py                  # all three, x86-64
     .venv/bin/python packaging/linux/build_packages.py --arch arm64     # ARM PCs, Raspberry Pi 5
     .venv/bin/python packaging/linux/build_packages.py --only tar.gz
+    .venv/bin/python packaging/linux/build_packages.py --only appimage
 
 The sources are copied into the container and the package copied out, rather than shared:
 Docker on a Mac shares folders unreliably under a build's file churn. On a Mac, Docker can come
@@ -115,6 +119,29 @@ def build_system_package(fmt: str, arch: str, out: Path, version: str) -> Path:
         subprocess.run(["docker", "rm", "-f", name], capture_output=True)
 
 
+def build_appimage(arch: str, out: Path, version: str) -> list:
+    """The AppImage, and the source package of the GLib library it carries (see the docstring)."""
+    if arch != "amd64":
+        sys.exit("error: the AppImage is built for x86-64 only so far")
+    name = "opendisco-build-appimage"
+    subprocess.run(["docker", "rm", "-f", name], capture_output=True)
+    print("--- ubuntu:24.04: AppImage", flush=True)
+    docker("run", "-d", "--name", name, "--platform", "linux/amd64", "ubuntu:24.04", "sleep", "infinity",
+           stdout=subprocess.DEVNULL)
+    try:
+        docker("exec", name, "mkdir", "-p", "/src/packaging/linux")
+        for item in (*NEEDED, "CHANGELOG.md", "NOTICE", "TERMS.md"):
+            docker("cp", str(ROOT / item), f"{name}:/src/{item}")
+        docker("cp", str(HERE / "appimage"), f"{name}:/src/packaging/linux/appimage")
+        docker("exec", name, "bash", "/src/packaging/linux/appimage/build-appimage.sh", version)
+        made = docker("exec", name, "sh", "-c", "ls /out", capture_output=True, text=True).stdout.split()
+        for file in made:
+            docker("cp", f"{name}:/out/{file}", str(out / file))
+        return [out / file for file in made]
+    finally:
+        subprocess.run(["docker", "rm", "-f", name], capture_output=True)
+
+
 def build_tarball(out: Path, version: str) -> Path:
     """The portable version: the app's source with a launcher, for any distro."""
     top = f"opendisco-{version}"
@@ -140,22 +167,24 @@ def build_tarball(out: Path, version: str) -> Path:
 
 
 def main() -> int:
-    parser = argparse.ArgumentParser(description="Build the Linux .deb, .rpm and portable .tar.gz.")
+    parser = argparse.ArgumentParser(description="Build the Linux .deb, .rpm, portable .tar.gz and AppImage.")
     parser.add_argument("--arch", choices=("amd64", "arm64"), default="amd64",
                         help="CPU to build the .deb and .rpm for (default amd64: x86-64 PCs)")
-    parser.add_argument("--only", choices=("deb", "rpm", "tar.gz"), action="append",
+    parser.add_argument("--only", choices=("deb", "rpm", "tar.gz", "appimage"), action="append",
                         help="build just this format (repeatable)")
     parser.add_argument("--out", default=str(ROOT / "dist"), help="where the packages go (default dist/)")
     args = parser.parse_args()
-    formats = args.only or ["deb", "rpm", "tar.gz"]
+    formats = args.only or ["deb", "rpm", "tar.gz", "appimage"]
     version = app_version()
     out = Path(args.out)
     out.mkdir(parents=True, exist_ok=True)
-    if {"deb", "rpm"} & set(formats) and not shutil.which("docker"):
-        sys.exit("error: building the .deb and .rpm needs Docker (on a Mac: brew install colima docker)")
+    if {"deb", "rpm", "appimage"} & set(formats) and not shutil.which("docker"):
+        sys.exit("error: building the .deb, .rpm and AppImage needs Docker (on a Mac: brew install colima docker)")
     built = [build_system_package(fmt, args.arch, out, version) for fmt in formats if fmt in TARGETS]
     if "tar.gz" in formats:
         built.append(build_tarball(out, version))
+    if "appimage" in formats:
+        built += build_appimage(args.arch, out, version)
     for path in built:
         print(f"Built {path} ({path.stat().st_size / 1e6:.1f} MB)")
     return 0

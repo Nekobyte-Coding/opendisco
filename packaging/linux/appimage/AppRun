@@ -1,0 +1,33 @@
+#!/bin/sh
+# OpenDisco's AppImage: its own Python, PyGObject and Toga, over the system's GTK and WebKitGTK.
+#   ./OpenDisco-<version>-linux-x86_64.AppImage            the app
+#   ./OpenDisco-<version>-linux-x86_64.AppImage --quick    the command-line tool (see --help)
+HERE="$(dirname "$(readlink -f "$0")")"
+PY="$HERE/usr/python/bin/python3"
+
+# GLib's girepository-2.0, which PyGObject needs: the system's where it has one (Fedora, Arch,
+# Ubuntu 26.04), else the copy from Ubuntu 24.04 in usr/lib/fallback (Ubuntu 24.04, Debian 13).
+if ! { ldconfig -p 2>/dev/null || /sbin/ldconfig -p 2>/dev/null; } | grep -q 'libgirepository-2\.0\.so\.0 '; then
+    export LD_LIBRARY_PATH="$HERE/usr/lib/fallback${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
+fi
+
+# The app needs the system's GTK 3 and WebKitGTK 4.1 (the Terminal tab) with their introspection
+# data, cairo's included; the command line doesn't. Importing them finds anything missing.
+if [ "$#" -eq 0 ] && ! "$PY" -I -c 'import gi; gi.require_version("Gtk", "3.0"); gi.require_version("WebKit2", "4.1"); from gi.repository import Gtk, WebKit2, cairo' >/dev/null 2>&1; then
+    MESSAGE="OpenDisco needs GTK 3 and WebKitGTK 4.1 from the system. Install them, then open it again:
+
+    Ubuntu, Debian, Linux Mint:  sudo apt install gir1.2-gtk-3.0 gir1.2-webkit2-4.1
+    Fedora:                      sudo dnf install gtk3 webkit2gtk4.1 gobject-introspection
+    Arch, Manjaro:               sudo pacman -S gtk3 webkit2gtk-4.1 gobject-introspection-runtime
+
+The command-line tool works without them: ${APPIMAGE:-$0} --help"
+    echo "$MESSAGE" >&2
+    if command -v zenity >/dev/null; then zenity --error --title=OpenDisco --no-wrap --text="$MESSAGE" 2>/dev/null
+    elif command -v kdialog >/dev/null; then kdialog --title OpenDisco --error "$MESSAGE" 2>/dev/null
+    elif command -v notify-send >/dev/null; then notify-send OpenDisco "$MESSAGE" 2>/dev/null
+    fi
+    exit 1
+fi
+
+# usr/bin/opendisco keeps it as the program's name, which GTK names the window's class after.
+exec "$PY" -I "$HERE/usr/bin/opendisco" "$@"

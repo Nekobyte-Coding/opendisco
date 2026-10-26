@@ -1,0 +1,12 @@
+[Desktop Entry]
+Type=Application
+Name=OpenDisco
+GenericName=Network Device Discovery
+Comment=Find and diagnose Ubiquiti and other WISP gear
+Exec=opendisco
+Icon=com.michaelfroehlke.opendisco
+Terminal=false
+Categories=Network;Utility;
+Keywords=Ubiquiti;UniFi;airMAX;WISP;discovery;scan;
+StartupWMClass=opendisco
+X-AppImage-Name=OpenDisco

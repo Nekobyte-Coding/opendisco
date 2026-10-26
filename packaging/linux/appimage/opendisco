@@ -1,0 +1,5 @@
+"""OpenDisco's AppImage: the app, or the command-line tool when given options (AppRun runs this)."""
+import runpy
+
+# sys.argv[0] stays this file: GTK names the window's class after it (opendisco).
+runpy.run_module("opendisco", run_name="__main__", alter_sys=False)

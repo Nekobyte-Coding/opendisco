@@ -1,0 +1,41 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<component type="desktop-application">
+  <id>com.michaelfroehlke.opendisco</id>
+  <metadata_license>CC0-1.0</metadata_license>
+  <project_license>Apache-2.0</project_license>
+  <name>OpenDisco</name>
+  <summary>Find and diagnose Ubiquiti gear</summary>
+  <developer id="io.github.nekobyte-coding">
+    <name>Michael Froehlke</name>
+  </developer>
+  <description>
+    <p>
+      OpenDisco, the Open Discovery Tool for Ubiquiti Devices, finds Ubiquiti gear with the
+      discovery methods of Ubiquiti's old Java tool, WiFiman and the UniFi app, and identifies
+      Cisco, Meraki, Mimosa, Siklu, Ceragon, IgniteNet, Baicells and Tarana gear.
+    </p>
+    <p>
+      It can also listen on the wire, probe other subnets through temporary addresses, find the
+      VLANs on a trunk and read a radio on a direct cable, check each device's firmware against
+      known CVEs, and back up, upload and apply device configs over SSH.
+    </p>
+    <p>
+      An independent project, not affiliated with Ubiquiti Inc. Its terms of use are shown for
+      acceptance when it first opens.
+    </p>
+  </description>
+  <launchable type="desktop-id">com.michaelfroehlke.opendisco.desktop</launchable>
+  <provides>
+    <binary>opendisco</binary>
+  </provides>
+  <categories>
+    <category>Network</category>
+    <category>Utility</category>
+  </categories>
+  <url type="homepage">https://github.com/Nekobyte-Coding/opendisco</url>
+  <url type="bugtracker">https://github.com/Nekobyte-Coding/opendisco/issues</url>
+  <content_rating type="oars-1.1"/>
+  <releases>
+@RELEASES@
+  </releases>
+</component>
