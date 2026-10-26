@@ -6,10 +6,11 @@ Licensed under the Apache License, Version 2.0. The license text is in the LICEN
 
 OpenDisco's installers, packages and apps also include the third-party components listed below. Each is the work of its own authors and is used under its own license, whose full text is at the end of this file. Nothing in OpenDisco's Terms of Use limits any right that these licenses grant, and the Terms' disclaimers of warranty and limits of liability are also made on behalf of these components' authors and contributors.
 
-This list covers OpenDisco 1.6.2 for macOS (the .dmg), Windows (the setup .exe), Linux (the .deb, the .rpm and the portable .tar.gz), Android (the .apk) and the iPhone and iPad beta. Each component says which of them include it.
+This list covers OpenDisco 1.6.2 for macOS (the .dmg), Windows (the setup .exe), Linux (the .deb, the .rpm, the AppImage and the portable .tar.gz), Android (the .apk) and the iPhone and iPad beta. Each component says which of them include it.
 
 Not included in OpenDisco's own files:
 - The Linux .deb and .rpm use the system's Python, GTK, WebKitGTK, OpenSSH, tcpdump, ip and iw, which the distribution's package manager installs from the distribution.
+- The Linux AppImage uses the system's GTK, WebKitGTK, GLib and cairo, with their introspection data, and the system's OpenSSH, tcpdump, ip and iw. It carries Ubuntu 24.04's girepository-2.0 only for systems that don't have one.
 - The portable Linux .tar.gz holds only OpenDisco's own code and xterm.js. The first time the app opens, its launcher downloads Toga and the packages it needs from PyPI into a Python environment on the user's computer.
 - On Windows, Npcap is not included. The installer downloads Npcap's own installer from npcap.com, which shows Npcap's license.
 - The SSH client on macOS, Windows and Linux is the operating system's own.
@@ -18,69 +19,98 @@ Not included in OpenDisco's own files:
 
 Some of these licenses require the source code to be available to anyone who receives the program:
 - asyncssh (Android, iPhone and iPad): OpenDisco distributes asyncssh under the Eclipse Public License 2.0, and its source code is available under that license. The exact source distribution, asyncssh-2.23.1.tar.gz, is attached to each OpenDisco release at github.com/Nekobyte-Coding/opendisco/releases, and is also at pypi.org/project/asyncssh/2.23.1.
-- PyGObject and pycairo (Linux .deb and .rpm): both are used under the GNU Lesser General Public License 2.1. Their complete source distributions, pygobject-3.58.1.tar.gz and pycairo-1.29.2.tar.gz, are attached to each OpenDisco release, and are also at pypi.org/project/PyGObject/3.58.1 and pypi.org/project/pycairo/1.29.2. They are installed as separate files, in /usr/lib/opendisco/app_packages (the .deb) or /usr/lib64/opendisco/app_packages (the .rpm), so they can be replaced with modified versions. Modifying them for one's own use, and reverse engineering OpenDisco to debug such modifications, are permitted.
+- PyGObject and pycairo (Linux .deb, .rpm and AppImage): both are used under the GNU Lesser General Public License 2.1. Their complete source distributions, pygobject-3.58.1.tar.gz and pycairo-1.29.2.tar.gz, are attached to each OpenDisco release, and are also at pypi.org/project/PyGObject/3.58.1 and pypi.org/project/pycairo/1.29.2. They are separate files, in /usr/lib/opendisco/app_packages (the .deb), /usr/lib64/opendisco/app_packages (the .rpm) or usr/python/lib/python3.13/site-packages inside the AppImage (which its --appimage-extract option unpacks), so they can be replaced with modified versions. Modifying them for one's own use, and reverse engineering OpenDisco to debug such modifications, are permitted.
 - certifi (iPhone and iPad) and Mozilla's CA certificate bundle (Android): both are under the Mozilla Public License 2.0. certifi's Source Code Form is in certifi-2026.10.23.tar.gz, attached to each OpenDisco release and also at pypi.org/project/certifi/2026.10.23. Android's bundle is Chaquopy's own copy, assets/chaquopy/cacert.pem in the APK: a text file, which is itself its Source Code Form.
 - NSIS (the Windows installer): the setup .exe is built with NSIS 3.13, whose LZMA decompression module is under the Common Public License 1.0. NSIS's source code, nsis-3.13-src.tar.bz2, is attached to each OpenDisco release, and is also at nsis.sourceforge.io/Download.
+- GLib's girepository-2.0 (Linux AppImage): the AppImage carries libgirepository-2.0.so.0 from Ubuntu 24.04's glib2.0 2.80.0-6ubuntu3.10, under the GNU Lesser General Public License 2.1 or later. Its complete source package, glib2.0_2.80.0-6ubuntu3.10.dsc with glib2.0_2.80.0.orig.tar.xz, glib2.0_2.80.0.orig-unicode-data.tar.xz and glib2.0_2.80.0-6ubuntu3.10.debian.tar.xz, is attached to each OpenDisco release that has an AppImage, and is also at launchpad.net/ubuntu/+source/glib2.0/2.80.0-6ubuntu3.10. The library is a separate file, usr/lib/fallback/libgirepository-2.0.so.0 inside the AppImage, used only where the system has no girepository-2.0, so it can be replaced with a modified version.
+- libfuse (Linux AppImage): the AppImage starts through AppImage's type2-runtime, which is statically linked with libfuse 3.15.0, under the GNU Lesser General Public License 2.1. So that the runtime can be rebuilt and relinked with a modified libfuse, each OpenDisco release that has an AppImage attaches libfuse's source, fuse-3.15.0.tar.xz (also at github.com/libfuse/libfuse/releases/tag/fuse-3.15.0), and the runtime's complete source at the commit it was built from, type2-runtime-fedfad51acc2860b2916a1eef32ba4a500ff31ef.tar.xz (also at github.com/AppImage/type2-runtime/tree/fedfad51acc2860b2916a1eef32ba4a500ff31ef). The runtime's source includes its build scripts and the patch it applies to libfuse (patches/libfuse/mount.c.diff). The runtime's other parts, musl, squashfuse, Zstandard, zlib and mimalloc, are under permissive licenses, and its build scripts say where each comes from.
 - OpenDisco's own source code is at github.com/Nekobyte-Coding/opendisco.
 
 ## Components
 
 ### Python
-- Versions: 3.14.7 (macOS), 3.13.17 (Windows, python.org's embeddable build), 3.13.16 (Android, built by Chaquopy), 3.14.8 (iPhone and iPad, BeeWare's Python-Apple-support).
-- In: macOS, Windows, Android, iPhone and iPad.
+- Versions: 3.14.7 (macOS), 3.13.17 (Windows, python.org's embeddable build), 3.13.17 (Linux AppImage, Astral's python-build-standalone release 20261021, without its Tcl/Tk and dbm modules), 3.13.16 (Android, built by Chaquopy), 3.14.8 (iPhone and iPad, BeeWare's Python-Apple-support).
+- In: macOS, Windows, Linux AppImage, Android, iPhone and iPad.
 - License: Python Software Foundation License Version 2, and the licenses of the software incorporated into Python (see "Python Software Foundation License" and "Software incorporated into Python" below).
 - Copyright (c) 2001 Python Software Foundation. All rights reserved.
+- python-build-standalone's own build scripts, under the Mozilla Public License 2.0, are not part of the AppImage.
 
 ### OpenSSL
-- Versions: 3.5.7 (macOS), 3.5.9 (Windows, Android, iPhone and iPad).
-- In: macOS, Windows, Android, iPhone and iPad, as part of Python.
+- Versions: 3.5.7 (macOS), 3.5.9 (Windows, Linux AppImage, Android, iPhone and iPad).
+- In: macOS, Windows, Linux AppImage, Android, iPhone and iPad, as part of Python.
 - License: Apache License 2.0.
 - Copyright: the OpenSSL Project Authors.
 
 ### SQLite
-- Versions: 3.50.4 (macOS); on Windows and Android, the version built with Python.
-- In: macOS, Windows, Android, as part of Python.
+- Versions: 3.50.4 (macOS), 3.53.1 (Linux AppImage); on Windows and Android, the version built with Python.
+- In: macOS, Windows, Linux AppImage, Android, as part of Python.
 - License: public domain (see "SQLite" below).
 
 ### libffi
-- Versions: 3.4.7 (iPhone and iPad), the version built with Python 3.13.17 (Windows), 3.3 (Android, Chaquopy's chaquopy-libffi, used by cffi). macOS uses the system's own.
-- In: Windows, Android, iPhone and iPad.
+- Versions: 3.4.7 (iPhone and iPad), 3.8.0 (Linux AppImage, as part of Python), the version built with Python 3.13.17 (Windows), 3.3 (Android, Chaquopy's chaquopy-libffi, used by cffi). macOS uses the system's own.
+- In: Windows, Linux AppImage, Android, iPhone and iPad.
 - License: MIT License.
+- libffi - Copyright (c) 1996-2026 Anthony Green, Red Hat, Inc and others. (3.8.0)
 - libffi - Copyright (c) 1996-2024 Anthony Green, Red Hat, Inc and others. (3.4.7)
 - libffi - Copyright (c) 1996-2022 Anthony Green, Red Hat, Inc and others. (Windows)
 - libffi - Copyright (c) 1996-2019 Anthony Green, Red Hat, Inc and others. (Android)
 
 ### bzip2
 - Version: 1.0.8. macOS uses the system's own.
-- In: Windows, Android, iPhone and iPad, as part of Python.
+- In: Windows, Linux AppImage, Android, iPhone and iPad, as part of Python.
 - License: the bzip2 license (see "bzip2" below).
 - Copyright (C) 1996-2019 Julian R Seward.
 
 ### XZ Utils (liblzma)
-- Versions: 5.6.4 (iPhone and iPad); on macOS, Windows and Android, the version built with Python. Pillow on Windows also contains XZ Utils 5.8.4.
-- In: macOS, Windows, Android, iPhone and iPad.
+- Versions: 5.6.4 (iPhone and iPad), 5.8.4 (Linux AppImage, as part of Python); on macOS, Windows and Android, the version built with Python. Pillow on Windows also contains XZ Utils 5.8.4.
+- In: macOS, Windows, Linux AppImage, Android, iPhone and iPad.
 - License: liblzma before version 5.6.0 is in the public domain; from 5.6.0 it is under the BSD Zero Clause License (see "XZ Utils" below).
 
 ### mpdecimal (libmpdec)
-- Versions: 4.0.1 (macOS), 4.0.0 (iPhone and iPad); on Windows and Android, the version built with Python.
-- In: macOS, Windows, Android, iPhone and iPad, as part of Python.
+- Versions: 4.0.1 (macOS), 4.0.0 (Linux AppImage, iPhone and iPad); on Windows and Android, the version built with Python.
+- In: macOS, Windows, Linux AppImage, Android, iPhone and iPad, as part of Python.
 - License: BSD 2-Clause License (its text is under "libmpdec" in "Software incorporated into Python").
 
 ### Zstandard (libzstd)
-- Version: 1.5.7.
-- In: macOS, iPhone and iPad, as part of Python.
+- Versions: 1.5.7 (macOS, iPhone and iPad), 1.5.6 (the Linux AppImage's runtime, Alpine Linux 3.21's).
+- In: macOS, iPhone and iPad, as part of Python; the Linux AppImage, in its runtime.
 - License: BSD 3-Clause License. Zstandard is also offered under the GPL 2.0; OpenDisco uses it under the BSD license only.
 - Copyright (c) Meta Platforms, Inc. and affiliates. All rights reserved.
 
 ### ncurses
-- Version: 6.5 (20240427).
-- In: macOS, as part of Python.
+- Versions: 6.5, patch 20240427 (macOS), and 6.5 (Linux AppImage).
+- In: macOS and the Linux AppImage, as part of Python.
 - License: the ncurses license, an MIT-style license (see "ncurses" below).
 
 ### expat
-- Versions: 2.8.2 (macOS), 2.8.5 (Windows); on Android and the iPhone and iPad, the version built into Python.
-- In: macOS, Windows, Android, iPhone and iPad, as part of Python.
+- Versions: 2.8.2 (macOS), 2.8.5 (Windows), 2.9.0 (Linux AppImage); on Android and the iPhone and iPad, the version built into Python.
+- In: macOS, Windows, Linux AppImage, Android, iPhone and iPad, as part of Python.
 - License: MIT License (its text is under "expat" in "Software incorporated into Python").
+
+### zlib
+- Versions: 1.3.2 (Linux AppImage, in its Python and in its runtime); on Windows, the version built with Python. macOS, Android and the iPhone and iPad use the system's own.
+- In: Windows, Linux AppImage.
+- License: zlib License (its text is under "zlib" in "Software incorporated into Python").
+- Copyright (C) 1995-2026 Jean-loup Gailly and Mark Adler (1.3.2)
+
+### HACL*
+- What: the verified implementations of the hash functions built into Python's hashlib.
+- In: macOS, Windows, Linux AppImage, Android, iPhone and iPad, as part of Python.
+- License: MIT License.
+- Copyright (c) 2016-2022 INRIA, CMU and Microsoft Corporation
+- Copyright (c) 2022-2023 HACL* Contributors
+
+### libedit
+- Version: 20240808-3.1.
+- In: Linux AppImage, as part of Python (its readline module).
+- License: BSD 3-Clause License (see "libedit" below).
+- Copyright (c) 1992, 1993 The Regents of the University of California. All rights reserved.
+
+### libuuid
+- Version: 1.0.3.
+- In: Linux AppImage, as part of Python (its _uuid module).
+- License: BSD 3-Clause License (see "libuuid" below).
+- Copyright (C) 1996, 1997 Theodore Ts'o.
 
 ### Microsoft Visual C++ runtime
 - Files: vcruntime140.dll and vcruntime140_1.dll, and Microsoft code linked into Python's .exe, .dll and .pyd files.
@@ -90,13 +120,13 @@ Some of these licenses require the source code to be available to anyone who rec
 
 ### Toga
 - Version: 0.5.7 (toga-core, with toga-cocoa on macOS, toga-winforms on Windows, toga-gtk on Linux, toga-android on Android and toga-iOS on the iPhone and iPad).
-- In: macOS, Windows, Linux .deb and .rpm, Android, iPhone and iPad.
+- In: macOS, Windows, Linux .deb, .rpm and AppImage, Android, iPhone and iPad.
 - License: BSD 3-Clause License (see "Toga" below).
 - Copyright (c) 2014 Russell Keith-Magee. All rights reserved.
 
 ### Travertino
 - Version: 0.5.7.
-- In: macOS, Windows, Linux .deb and .rpm, Android, iPhone and iPad.
+- In: macOS, Windows, Linux .deb, .rpm and AppImage, Android, iPhone and iPad.
 - License: BSD 3-Clause License (see "Travertino" below).
 - Copyright (c) 2017 Russell Keith-Magee. All rights reserved.
 
@@ -167,13 +197,13 @@ Some of these licenses require the source code to be available to anyone who rec
 
 ### platformdirs
 - Version: 4.13.5.
-- In: macOS, Windows, Linux .deb and .rpm.
+- In: macOS, Windows, Linux .deb, .rpm and AppImage.
 - License: MIT License.
 - Copyright (c) 2010-202x The platformdirs developers
 
 ### packaging
 - Version: 26.3.
-- In: macOS, Linux .deb and .rpm.
+- In: macOS, Linux .deb, .rpm and AppImage.
 - License: offered under either the Apache License 2.0 or the BSD 2-Clause License; OpenDisco uses it under the Apache License 2.0.
 - Copyright (c) Donald Stufft and individual contributors.
 
@@ -208,15 +238,21 @@ Some of these licenses require the source code to be available to anyone who rec
 
 ### PyGObject
 - Version: 3.58.1.
-- In: Linux .deb and .rpm.
+- In: Linux .deb, .rpm and AppImage (compiled in its build, against Ubuntu 24.04's GLib).
 - License: GNU Lesser General Public License 2.1 or later. See "Source code" above.
 - Copyright: the PyGObject authors, as named in its source files.
 
 ### pycairo
 - Version: 1.29.2.
-- In: Linux .deb and .rpm.
+- In: Linux .deb, .rpm and AppImage (compiled in its build).
 - License: offered under either the GNU Lesser General Public License 2.1 or the Mozilla Public License 1.1; OpenDisco uses it under the GNU Lesser General Public License 2.1. See "Source code" above.
 - Copyright: the pycairo authors, as named in its source files.
+
+### GLib's girepository-2.0
+- Version: libgirepository-2.0.so.0 from Ubuntu 24.04's glib2.0 2.80.0-6ubuntu3.10 (GLib 2.80.0).
+- In: Linux AppImage, used only where the system has no girepository-2.0.
+- License: GNU Lesser General Public License 2.1 or later. See "Source code" above.
+- Copyright: the GLib authors, as named in its source files (for girepository, Matthias Clasen, Colin Walters, Red Hat, Inc. and others).
 
 ### Chaquopy
 - Version: 17.1.0.
@@ -250,11 +286,41 @@ Some of these licenses require the source code to be available to anyone who rec
 
 ### xterm.js
 - Versions: @xterm/xterm 5.5.0 and @xterm/addon-fit 0.10.0.
-- In: macOS, Windows, Linux .deb, .rpm and .tar.gz, Android (included, but not used there).
+- In: macOS, Windows, Linux .deb, .rpm, AppImage and .tar.gz, Android (included, but not used there).
 - License: MIT License.
 - Copyright (c) 2017-2019, The xterm.js authors (https://github.com/xtermjs/xterm.js)
 - Copyright (c) 2014-2016, SourceLair Private Company (https://www.sourcelair.com)
 - Copyright (c) 2012-2013, Christopher Jeffrey (https://github.com/chjj/)
+
+### AppImage type2-runtime
+- Version: the "continuous" build of 2026-10-19, from commit fedfad51acc2860b2916a1eef32ba4a500ff31ef, built on Alpine Linux 3.21 (runtime-x86_64, SHA-256 617aa77314d57c8b8e4fae9c3f0b35af7b30d5529cb69e98f64f92510ed98a46).
+- In: Linux AppImage, as the program at its start that mounts and runs it.
+- License: MIT License. It is statically linked with libfuse, squashfuse, Zstandard, zlib, musl and mimalloc, each listed in this file.
+- Copyright (c) 2004-23 probonopd
+
+### libfuse
+- Version: 3.15.0, with the runtime's patch to lib/mount.c.
+- In: Linux AppImage, statically linked into its runtime.
+- License: GNU Lesser General Public License 2.1, which covers libfuse's library; its other files, which the runtime doesn't use, are under the GNU General Public License 2.0. See "Source code" above.
+- Copyright (C) 2001-2007 Miklos Szeredi, and the other libfuse authors named in its source files.
+
+### squashfuse
+- Version: 0.5.2.
+- In: Linux AppImage, in its runtime.
+- License: BSD 2-Clause License (see "squashfuse" below).
+- Copyright (c) 2012 Dave Vasilevsky and Phillip Lougher. All rights reserved.
+
+### musl
+- Version: 1.2.5 (Alpine Linux 3.21's).
+- In: Linux AppImage, in its runtime.
+- License: MIT License, with the notes in its COPYRIGHT file (see "musl" below).
+- Copyright (c) 2005-2020 Rich Felker, et al.
+
+### mimalloc
+- Version: 2.1.7 (Alpine Linux 3.21's), in the AppImage's runtime. Python 3.13 and 3.14 contain their own copy too (see "Software incorporated into Python").
+- In: Linux AppImage, in its runtime.
+- License: MIT License.
+- Copyright (c) 2018-2021 Microsoft Corporation, Daan Leijen
 
 ### NSIS (Nullsoft Scriptable Install System)
 - Version: 3.13.
@@ -756,7 +822,7 @@ Covers: asyncssh.
 
 ### GNU Lesser General Public License 2.1
 
-Covers: PyGObject (version 2.1 or later) and pycairo (version 2.1). pycairo's own notice of its licenses is reproduced first.
+Covers: PyGObject (version 2.1 or later), pycairo (version 2.1), GLib's girepository-2.0 (version 2.1 or later) and libfuse (version 2.1). pycairo's own notice of its licenses is reproduced first.
 
     PyCairo is free software.
 
@@ -2975,7 +3041,7 @@ Covers: the WebView2 SDK files in the Windows app.
 
 ### Zstandard
 
-Covers: Zstandard (libzstd) 1.5.7.
+Covers: Zstandard (libzstd) 1.5.7, and 1.5.6 in the Linux AppImage's runtime, whose license has the same text.
 
     BSD License
 
@@ -3008,10 +3074,112 @@ Covers: Zstandard (libzstd) 1.5.7.
     (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS
     SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
+### libedit
+
+Covers: libedit, in the Linux AppImage's Python. The text is as python-build-standalone publishes it with its build.
+
+    Copyright (c) 1992, 1993
+     The Regents of the University of California.  All rights reserved.
+
+    This code is derived from software contributed to Berkeley by
+    Christos Zoulas of Cornell University.
+
+    Redistribution and use in source and binary forms, with or without
+    modification, are permitted provided that the following conditions
+    are met:
+    1. Redistributions of source code must retain the above copyright
+       notice, this list of conditions and the following disclaimer.
+    2. Redistributions in binary form must reproduce the above copyright
+       notice, this list of conditions and the following disclaimer in the
+       documentation and/or other materials provided with the distribution.
+    3. Neither the name of the University nor the names of its contributors
+       may be used to endorse or promote products derived from this software
+       without specific prior written permission.
+
+    THIS SOFTWARE IS PROVIDED BY THE REGENTS AND CONTRIBUTORS ``AS IS'' AND
+    ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
+    IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE
+    ARE DISCLAIMED.  IN NO EVENT SHALL THE REGENTS OR CONTRIBUTORS BE LIABLE
+    FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL
+    DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS
+    OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION)
+    HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT
+    LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY
+    OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF
+    SUCH DAMAGE.
+
+### libuuid
+
+Covers: libuuid, in the Linux AppImage's Python. The text is as python-build-standalone publishes it with its build.
+
+    Copyright (C) 1996, 1997 Theodore Ts'o.
+
+    Redistribution and use in source and binary forms, with or without
+    modification, are permitted provided that the following conditions
+    are met:
+    1. Redistributions of source code must retain the above copyright
+       notice, and the entire permission notice in its entirety,
+       including the disclaimer of warranties.
+    2. Redistributions in binary form must reproduce the above copyright
+       notice, this list of conditions and the following disclaimer in the
+       documentation and/or other materials provided with the distribution.
+    3. The name of the author may not be used to endorse or promote
+       products derived from this software without specific prior
+       written permission.
+
+    THIS SOFTWARE IS PROVIDED ``AS IS'' AND ANY EXPRESS OR IMPLIED
+    WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE IMPLIED WARRANTIES
+    OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE, ALL OF
+    WHICH ARE HEREBY DISCLAIMED.  IN NO EVENT SHALL THE AUTHOR BE
+    LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR
+    CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT
+    OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR
+    BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF
+    LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
+    (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE
+    USE OF THIS SOFTWARE, EVEN IF NOT ADVISED OF THE POSSIBILITY OF SUCH
+    DAMAGE.
+
+### squashfuse
+
+Covers: squashfuse 0.5.2, in the Linux AppImage's runtime.
+
+    The squashfuse distribution as a whole is copyright Dave
+    Vasilevsky and is subject to the copyright notice reproduced at
+    the bottom of this file.
+
+    The file squashfs_fs.h is copyright Phillip Lougher and, with his permission,
+    subject to the same license.
+
+
+    Copyright (c) 2012 Dave Vasilevsky <dave@vasilevsky.ca>
+                       Phillip Lougher <phillip@squashfs.org.uk>
+    All rights reserved.
+
+    Redistribution and use in source and binary forms, with or without
+    modification, are permitted provided that the following conditions
+    are met:
+    1. Redistributions of source code must retain the above copyright
+       notice, this list of conditions and the following disclaimer.
+    2. Redistributions in binary form must reproduce the above copyright
+       notice, this list of conditions and the following disclaimer in the
+       documentation and/or other materials provided with the distribution.
+
+    THIS SOFTWARE IS PROVIDED BY THE AUTHOR(S) ``AS IS'' AND ANY EXPRESS OR
+    IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE IMPLIED WARRANTIES
+    OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE DISCLAIMED.
+    IN NO EVENT SHALL THE AUTHOR(S) BE LIABLE FOR ANY DIRECT, INDIRECT,
+    INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT
+    NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE,
+    DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY
+    THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
+    (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF
+    THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+
 ### MIT License
 
 Covers, with these copyright notices:
-- libffi: "libffi - Copyright (c) 1996-2024 Anthony Green, Red Hat, Inc and others." (3.4.7), "libffi - Copyright (c) 1996-2022 Anthony Green, Red Hat, Inc and others." (Windows) and "libffi - Copyright (c) 1996-2019 Anthony Green, Red Hat, Inc and others." (Android)
+- libffi: "libffi - Copyright (c) 1996-2026 Anthony Green, Red Hat, Inc and others." (3.8.0), "libffi - Copyright (c) 1996-2024 Anthony Green, Red Hat, Inc and others." (3.4.7), "libffi - Copyright (c) 1996-2022 Anthony Green, Red Hat, Inc and others." (Windows) and "libffi - Copyright (c) 1996-2019 Anthony Green, Red Hat, Inc and others." (Android)
 - Briefcase app templates: "Copyright (c) 2014 Russell Keith-Magee." (macOS app, Linux system package) and "Copyright (c) 2019 Russell Keith-Magee." (Android Gradle, iOS Xcode)
 - Python.NET: "Copyright (c) 2006-2021 the contributors of the Python.NET project"
 - clr_loader: "Copyright (c) 2019-2026 Benedikt Reinartz"
@@ -3021,6 +3189,9 @@ Covers, with these copyright notices:
 - fontTools: "Copyright (c) 2017 Just van Rossum"
 - Chaquopy: "Copyright (c) 2017-2025 Chaquo Ltd and contributors"
 - cffi 1.17.1, whose copyright notices are in its source files
+- HACL*: "Copyright (c) 2016-2022 INRIA, CMU and Microsoft Corporation" and "Copyright (c) 2022-2023 HACL* Contributors"
+- AppImage type2-runtime: "Copyright (c) 2004-23 probonopd"
+- mimalloc 2.1.7: "Copyright (c) 2018-2021 Microsoft Corporation, Daan Leijen"
 - xterm.js: "Copyright (c) 2017-2019, The xterm.js authors (https://github.com/xtermjs/xterm.js)", "Copyright (c) 2014-2016, SourceLair Private Company (https://www.sourcelair.com)" and "Copyright (c) 2012-2013, Christopher Jeffrey (https://github.com/chjj/)"
 
 Each of these components' license is the following text, after its copyright notices:
@@ -3069,9 +3240,207 @@ Covers: cffi 2.1.1.
         FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
         DEALINGS IN THE SOFTWARE.
 
+### musl
+
+Covers: musl 1.2.5, in the Linux AppImage's runtime. This is musl's COPYRIGHT file.
+
+    musl as a whole is licensed under the following standard MIT license:
+
+    ----------------------------------------------------------------------
+    Copyright © 2005-2020 Rich Felker, et al.
+
+    Permission is hereby granted, free of charge, to any person obtaining
+    a copy of this software and associated documentation files (the
+    "Software"), to deal in the Software without restriction, including
+    without limitation the rights to use, copy, modify, merge, publish,
+    distribute, sublicense, and/or sell copies of the Software, and to
+    permit persons to whom the Software is furnished to do so, subject to
+    the following conditions:
+
+    The above copyright notice and this permission notice shall be
+    included in all copies or substantial portions of the Software.
+
+    THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND,
+    EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF
+    MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT.
+    IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY
+    CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT,
+    TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE
+    SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
+    ----------------------------------------------------------------------
+
+    Authors/contributors include:
+
+    A. Wilcox
+    Ada Worcester
+    Alex Dowad
+    Alex Suykov
+    Alexander Monakov
+    Andre McCurdy
+    Andrew Kelley
+    Anthony G. Basile
+    Aric Belsito
+    Arvid Picciani
+    Bartosz Brachaczek
+    Benjamin Peterson
+    Bobby Bingham
+    Boris Brezillon
+    Brent Cook
+    Chris Spiegel
+    Clément Vasseur
+    Daniel Micay
+    Daniel Sabogal
+    Daurnimator
+    David Carlier
+    David Edelsohn
+    Denys Vlasenko
+    Dmitry Ivanov
+    Dmitry V. Levin
+    Drew DeVault
+    Emil Renner Berthing
+    Fangrui Song
+    Felix Fietkau
+    Felix Janda
+    Gianluca Anzolin
+    Hauke Mehrtens
+    He X
+    Hiltjo Posthuma
+    Isaac Dunham
+    Jaydeep Patil
+    Jens Gustedt
+    Jeremy Huntwork
+    Jo-Philipp Wich
+    Joakim Sindholt
+    John Spencer
+    Julien Ramseier
+    Justin Cormack
+    Kaarle Ritvanen
+    Khem Raj
+    Kylie McClain
+    Leah Neukirchen
+    Luca Barbato
+    Luka Perkov
+    M Farkas-Dyck (Strake)
+    Mahesh Bodapati
+    Markus Wichmann
+    Masanori Ogino
+    Michael Clark
+    Michael Forney
+    Mikhail Kremnyov
+    Natanael Copa
+    Nicholas J. Kain
+    orc
+    Pascal Cuoq
+    Patrick Oppenlander
+    Petr Hosek
+    Petr Skocik
+    Pierre Carrier
+    Reini Urban
+    Rich Felker
+    Richard Pennington
+    Ryan Fairfax
+    Samuel Holland
+    Segev Finer
+    Shiz
+    sin
+    Solar Designer
+    Stefan Kristiansson
+    Stefan O'Rear
+    Szabolcs Nagy
+    Timo Teräs
+    Trutz Behn
+    Valentin Ochs
+    Will Dietz
+    William Haddon
+    William Pitcock
+
+    Portions of this software are derived from third-party works licensed
+    under terms compatible with the above MIT license:
+
+    The TRE regular expression implementation (src/regex/reg* and
+    src/regex/tre*) is Copyright © 2001-2008 Ville Laurikari and licensed
+    under a 2-clause BSD license (license text in the source files). The
+    included version has been heavily modified by Rich Felker in 2012, in
+    the interests of size, simplicity, and namespace cleanliness.
+
+    Much of the math library code (src/math/* and src/complex/*) is
+    Copyright © 1993,2004 Sun Microsystems or
+    Copyright © 2003-2011 David Schultz or
+    Copyright © 2003-2009 Steven G. Kargl or
+    Copyright © 2003-2009 Bruce D. Evans or
+    Copyright © 2008 Stephen L. Moshier or
+    Copyright © 2017-2018 Arm Limited
+    and labelled as such in comments in the individual source files. All
+    have been licensed under extremely permissive terms.
+
+    The ARM memcpy code (src/string/arm/memcpy.S) is Copyright © 2008
+    The Android Open Source Project and is licensed under a two-clause BSD
+    license. It was taken from Bionic libc, used on Android.
+
+    The AArch64 memcpy and memset code (src/string/aarch64/*) are
+    Copyright © 1999-2019, Arm Limited.
+
+    The implementation of DES for crypt (src/crypt/crypt_des.c) is
+    Copyright © 1994 David Burren. It is licensed under a BSD license.
+
+    The implementation of blowfish crypt (src/crypt/crypt_blowfish.c) was
+    originally written by Solar Designer and placed into the public
+    domain. The code also comes with a fallback permissive license for use
+    in jurisdictions that may not recognize the public domain.
+
+    The smoothsort implementation (src/stdlib/qsort.c) is Copyright © 2011
+    Valentin Ochs and is licensed under an MIT-style license.
+
+    The x86_64 port was written by Nicholas J. Kain and is licensed under
+    the standard MIT terms.
+
+    The mips and microblaze ports were originally written by Richard
+    Pennington for use in the ellcc project. The original code was adapted
+    by Rich Felker for build system and code conventions during upstream
+    integration. It is licensed under the standard MIT terms.
+
+    The mips64 port was contributed by Imagination Technologies and is
+    licensed under the standard MIT terms.
+
+    The powerpc port was also originally written by Richard Pennington,
+    and later supplemented and integrated by John Spencer. It is licensed
+    under the standard MIT terms.
+
+    All other files which have no copyright comments are original works
+    produced specifically for use as part of this library, written either
+    by Rich Felker, the main author of the library, or by one or more
+    contibutors listed above. Details on authorship of individual files
+    can be found in the git version control history of the project. The
+    omission of copyright and license comments in each file is in the
+    interest of source tree size.
+
+    In addition, permission is hereby granted for all public header files
+    (include/* and arch/*/bits/*) and crt files intended to be linked into
+    applications (crt/*, ldso/dlstart.c, and arch/*/crt_arch.h) to omit
+    the copyright notice and permission notice otherwise required by the
+    license, and to use these files without any requirement of
+    attribution. These files include substantial contributions from:
+
+    Bobby Bingham
+    John Spencer
+    Nicholas J. Kain
+    Rich Felker
+    Richard Pennington
+    Stefan Kristiansson
+    Szabolcs Nagy
+
+    all of whom have explicitly granted such permission.
+
+    This file previously contained text expressing a belief that most of
+    the files covered by the above exception were sufficiently trivial not
+    to be subject to copyright, resulting in confusion over whether it
+    negated the permissions granted in the license. In the spirit of
+    permissive licensing, and of not having licensing issues being an
+    obstacle to adoption, that text has been removed.
+
 ### ncurses
 
-Covers: ncurses 6.5, in the macOS app's Python.
+Covers: ncurses 6.5, in the macOS app's Python and the Linux AppImage's Python.
 
     Copyright 2018-2022,2023 Thomas E. Dickey
     Copyright 1998-2017,2018 Free Software Foundation, Inc.
