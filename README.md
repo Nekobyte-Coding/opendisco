@@ -904,7 +904,7 @@ opened.
 | Tag | Meaning | What to check |
 |---|---|---|
 | `console` | UniFi OS console (answered v2, echoed probes, or has the console API) | |
-| `DEFAULT` | Factory default and not adopted | Adopt it, or SSH in and run `set-inform http://<controller>:8080/inform` |
+| `DEFAULT` | Factory default and not adopted: until then it takes its factory login (`ubnt`/`ubnt`, or `ui`/`ui` on newer models). A warning, except on UniFi OS consoles | Adopt it, or SSH in and run `set-inform http://<controller>:8080/inform`. If it was reset by mistake, restore its config |
 | `LINK-LOCAL` | Has a 169.254.x.x address | It never got a DHCP lease |
 | `FALLBACK-IP` | Sitting on 192.168.1.20 without a lease | DHCP. Several devices like this will conflict |
 | `NO-LEASE` | DHCP client is on but not bound | DHCP server, VLAN tagging, switch port profile |

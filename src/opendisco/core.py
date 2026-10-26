@@ -3297,7 +3297,8 @@ def neighbor_verdict(nb: Neighbor, dev: Device | None) -> str:
     used = [(vid, ip, sorted(seen["wants"])) for vid, seen in nb.vlans.items() for ip in sorted(seen["ips"])]
     used.sort(key=lambda u: (not u[2], u[0] == 0))  # prefer the address it's actively using, tagged first
     if dev is not None and dev.info.get("is_default"):
-        return "It reports factory defaults: its configuration is gone. Re-apply it (or restore a backup)."
+        return ("It reports factory defaults: its configuration is gone, and it takes its factory login meanwhile. "
+                "Re-apply it (or restore a backup).")
     if used:
         vid, ip, wants = used[0]
         text = f"Management is {ip} {_on_vlan(vid)}"
@@ -4274,9 +4275,11 @@ def diagnose(inv: Inventory, all_ifaces, scan_nets, opts, alias_used=(), skipped
         if info.get("is_default"):
             msg = "Factory default / not adopted - ready for adoption."
             if not d.console:
-                msg += (f" Adopt it in the UniFi Network app, or SSH to {d.ip or 'it'} (factory login "
-                        "ubnt/ubnt, or ui/ui on newer models) and run: set-inform http://<controller-ip>:8080/inform")
-            issues.append(("note", "DEFAULT", msg))
+                msg += (" Until it's set up or adopted it takes its factory login (ubnt/ubnt, or ui/ui on newer "
+                        "models), so anyone who can reach it can log in: reset by mistake, or left unconfigured? "
+                        f"Adopt it in the UniFi Network app, or SSH to {d.ip or 'it'} with that login and run: "
+                        "set-inform http://<controller-ip>:8080/inform")
+            issues.append(("warn" if not d.console else "note", "DEFAULT", msg))
         if d.system.get("isSetup") is False:
             issues.append(("note", "NOT-SET-UP", "UniFi OS console hasn't been set up yet."))
         if any(ip.startswith("169.254.") for ip in d.ips):
