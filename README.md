@@ -29,7 +29,8 @@ It comes two ways:
 
 ## Screenshots
 
-Every picture shows OpenDisco 1.6.0 with the same sample data: made-up names and addresses.
+Every picture shows OpenDisco 1.6.0 (Export and the Site Report: 1.7.0) with the same sample
+data: made-up names and addresses.
 
 <table>
 <tr>
@@ -65,6 +66,15 @@ firmware, config backups and uploads, reboot, a note and its own export.</td>
 <td>Settings: the update, CVE and firmware checks, the subnets every scan also sweeps, and the
 networks probed through temporary addresses.</td>
 <td>Config backups on Ubuntu 24.04.</td>
+</tr>
+<tr>
+<td><img src="docs/images/mac-export.png" alt="Export: the site name, then Site Report, Scan data and the site-wide extras"></td>
+<td><img src="docs/images/site-report.png" alt="The Site Report's first printed page: the site, the summary and the device table"></td>
+</tr>
+<tr>
+<td>Export: the site's name, then the Site Report, the scan's data and the site-wide extras.</td>
+<td>The Site Report, printed: the site, a summary, the devices needing attention first and the
+device table; CVEs, factory logins, firmware updates, latency, other issues and notes follow.</td>
 </tr>
 </table>
 
@@ -223,8 +233,18 @@ Help on Windows and Linux, and in Settings on phones and tablets.
   sweeps (see [Settings and updates](#settings-and-updates)); before 1.6.0 the networks file
   had a tab of its own.
 - **Hidden devices…** lists hidden devices and brings them back.
-- **Export…** saves the scan report as HTML (opens on any phone), CSV or JSON, and offers the
-  site-wide extras as well:
+- **Export…** saves the **Site Report**: the scan as one page that opens on any phone or computer
+  and prints cleanly, or saves as a PDF from the browser's Print. The site's name, typed above
+  the buttons, heads it and is kept for the next one. It holds:
+  - when the site was scanned, the scan mode and the networks scanned;
+  - a summary: issues by level, the devices by vendor and family, and the devices needing
+    attention first;
+  - every device: IP, VLAN, vendor, model, name, MAC, firmware and the latest firmware, Status;
+  - known CVEs, each linked to its NVD page; factory logins and factory-default devices;
+    firmware updates; latency; every other issue, device by device; and the devices' notes.
+
+  **Scan data…** saves the device table, with each device's diagnostics, as CSV (for a
+  spreadsheet) or JSON. The site-wide extras follow:
   - a **security report**: known CVEs and outdated firmware, device by device (HTML or CSV);
   - **config backups**: every one saved, in a .zip with an index;
   - **notes**: every device's note, seen in this scan or not (HTML, CSV or JSON);
@@ -233,7 +253,8 @@ Help on Windows and Linux, and in Settings on phones and tablets.
   **Export device…** (right-click) saves one device's report as HTML: its note, Status,
   firmware, latency, CVEs, ports, Details and packets; with config backups saved for it, a
   .zip holding the report and the backups. On Android, exports go to the Downloads folder; on
-  iPhone and iPad, to the share sheet. Phones save each one in its first format.
+  iPhone and iPad, to the share sheet. Phones save each one in its first format, and ask for
+  the site's name before the Site Report.
 - **Keep addresses** holds the temporary addresses that reached gear until they're released,
   so the gear's web UI can be opened.
 
@@ -350,8 +371,8 @@ rights.
 
 The Android app and the iPhone/iPad app (beta, no public download yet) share one layout. Quick
 Scan, Full Scan, Stop and a search box sit above the device list. The title bar holds Export
-(the scan report and the extras), the scan's Notes and Log, Settings, and a **+** that scans
-from a device given by its address (see Scan from device under
+(the Site Report, the scan's data and the extras), the scan's Notes and Log, Settings, and a
+**+** that scans from a device given by its address (see Scan from device under
 [Right-click menu and the Terminal tab](#right-click-menu-and-the-terminal-tab)). Each row
 gives the address with the latency ("192.168.1.20 · 3 ms"), then the model and name, and a
 newer firmware release when there is one ("↑ 8.7.25"). Tapping a device opens its page, titled with its name and address,
@@ -638,8 +659,8 @@ mode, SSID, frequency, channel width, noise floor and output power, then each li
   with airMAX Quality, airMAX Capacity and CCQ (airMAX M);
 - the airtime it takes sending and receiving (airOS 8), the distance and the latency.
 
-The JSON export has it as each device's `link` (`null` when it wasn't read), and the HTML
-export under the device's issues. The reading lasts while the app is open: Rescan device and
+The JSON export has it as each device's `link` (`null` when it wasn't read), and the Site
+Report in its airMAX link health section. The reading lasts while the app is open: Rescan device and
 new scans keep it (by MAC address). It isn't saved, as a link's numbers are of the moment. It's
 offered for airMAX only: airFiber, LTU and UniFi gear list their links differently.
 
@@ -694,7 +715,7 @@ Every problem found is listed below the table. `-v` shows every field each devic
 | `opendisco.py --raw` | Decodes and hex-dumps every UBNT packet as it arrives |
 | `opendisco.py -v --raw` | Also lists each device's packets at the end, checked for damage and loss |
 | `opendisco.py --json > scan.json` | Machine-readable output |
-| `opendisco.py --export report.html` | Also saves a report: `.html` opens on any phone; `.csv` and `.json` work too |
+| `opendisco.py --export report.html --site "Tower 1"` | Also saves the Site Report (`.html`: opens on any phone, prints to PDF), headed with the site's name; `.csv` and `.json` save the scan's data |
 | `opendisco.py --update-cves` | Downloads the current list of known firmware CVEs from the NVD. See [Known vulnerabilities](#known-vulnerabilities-cves) |
 | `opendisco.py --interfaces` | Shows the active Ethernet/Wi-Fi interfaces it found, including ones with link but no address |
 | `opendisco.py -a` | Also probes the networks in `networks.txt` through temporary IP aliases. See below |
@@ -1090,7 +1111,8 @@ discovery identifies:
 
 A device with a match gets a `CVE` diagnostic naming each CVE and the version that fixes them,
 and its Status starts with a red ❗. Details lists every match with its CVSS severity, what
-fixes it and a short summary; the JSON export has them too, with links to the NVD.
+fixes it and a short summary; the Site Report and the JSON export have them too, with links to
+the NVD.
 
 The list comes from the NVD and Ubiquiti's Security Advisory Bulletins, and every range in the
 built-in list was checked against the bulletin. Where the two disagree, only the versions both call affected are
@@ -1255,7 +1277,7 @@ Linux one inside containers, so nothing big ends up in iCloud. Finished installe
 | `src/opendisco/vulns.py` | The CVE check and its updates from the NVD and Ubiquiti's advisories |
 | `src/opendisco/health.py` | Each device's latest firmware, and latency |
 | `src/opendisco/linkhealth.py` | airMAX link health: airOS's `mca-status` and `wstalist` read, the weak links flagged, Details' Link section and the exports' part |
-| `src/opendisco/records.py` | Search, device notes, the device report and the site-wide exports, Settings' subnet list |
+| `src/opendisco/records.py` | Search, device notes, the device report, the Site Report and the site-wide exports, Settings' subnet list |
 | `src/opendisco/update.py` | Checking for, downloading and installing OpenDisco updates |
 | `src/opendisco/winnet.py` | Windows networking: adapters, Npcap capture, administrator rights |
 | `src/opendisco/resources/` | App icon (redraw with `packaging/make_icons.py`), the default networks file, the built-in CVE list (regenerate with `packaging/update_cves.py`), and the Npcap download and Windows update scripts |

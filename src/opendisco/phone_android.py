@@ -803,7 +803,7 @@ async def open_file(app):
 
 
 def export_menu(app, choices, pick):
-    """Export offers the scan report and the other reports: on a page, each one's button over
+    """Export offers the Site Report and the other reports: on a page, each one's button over
     what it holds (iOS shows the same as a menu). choices() lists them, pick(kind) saves one."""
     def show():
         from opendisco import phone
@@ -889,9 +889,3 @@ def copy_text(text: str):
     from java import jclass
     board = _activity().getSystemService(jclass("android.content.Context").CLIPBOARD_SERVICE)
     board.setPrimaryClip(jclass("android.content.ClipData").newPlainText("OpenDisco", text))
-
-
-def export(app, name: str):
-    """Save the report in Downloads, where a file manager or browser opens it."""
-    from opendisco import core
-    app.status.text = f"Saved {app._save_to_downloads(name, core.export_text(app.result, '.html'))}"
