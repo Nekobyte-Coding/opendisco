@@ -494,6 +494,8 @@ convenience: the English TERMS.md is the binding text and controls, and it's the
 accepted; the terms window has a switch to show it. Staying English: the command line (its
 output, `--help` and its terms prompt), the Log tab's scan lines, CSV and JSON exports' field
 names, Status values and issue tags (FACTORY-LOGIN...), product names, commands and file names.
+On Windows and Linux, the Yes, No and OK buttons of the system's dialogs come in the system's
+language.
 
 ### Right-click menu and the Terminal tab
 
