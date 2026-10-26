@@ -7,7 +7,9 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 import re
+import shlex
 import sys
 import time
 from pathlib import Path
@@ -26,12 +28,15 @@ AGREE, QUIT = "I agree", "Quit"
 ONLINE = "https://github.com/Nekobyte-Coding/opendisco/blob/v{version}/TERMS.md"
 # The command line, which never shows the app's window
 CLI_INTRO = "OpenDisco's terms of use must be accepted before it's used."
-CLI_WHERE = "The full terms: {path}\nOnline: {online}\nopendisco --terms prints them."
+CLI_WHERE = "The full terms: {path}\nOnline: {online}\n{command} --terms prints them."
 CLI_ASK = ("Accepting them confirms that OpenDisco will be used only on networks and devices the User owns or is "
            "authorized to manage.\nType I agree to accept them, or anything else to quit: ")
 CLI_REFUSED = "Terms not accepted. OpenDisco can't be used without accepting them."
-CLI_UNATTENDED = ("OpenDisco's terms of use haven't been accepted. Run opendisco in a terminal to read and accept "
-                  "them, or read them with opendisco --terms and then pass --accept-terms.")
+CLI_UNATTENDED = ("OpenDisco's terms of use haven't been accepted. Run {command} in a terminal to read and accept "
+                  "them, or read them with {command} --terms and then pass --accept-terms.")
+# The Mac app's command line writes to the system log, never a terminal: the app asks instead.
+CLI_UNATTENDED_MACOS = ("OpenDisco's terms of use haven't been accepted. Open the OpenDisco app to read and accept "
+                        "them, or read them at {online} and then pass --accept-terms.")
 # Said in each device tool's confirmation (A2 of the terms' review). TESTED stays while it's true,
 # saying the same as TERMS.md section 5 and the README's Limitations: change all three together.
 RISKS = {
@@ -126,6 +131,27 @@ def summary(raw: str | None = None) -> str:
     return found.group(1).strip() if found else ""
 
 
+def command() -> str:
+    """What runs this copy's command line, for the messages that name it: the AppImage file itself,
+    the portable version's launcher, the app's own program on macOS and Windows, opendisco from the
+    .deb and .rpm, or the way a checkout was started (opendisco.py or python3 -m opendisco)."""
+    from opendisco import update  # (update imports core, which imports this)
+    kind, target = update.installed_as()
+    path = {"appimage": target, "tarball": target and target / "opendisco",
+            "macos": target and target / "Contents" / "MacOS" / "OpenDisco",
+            "windows": target and target / "opendisco.cmd"}.get(kind)
+    if path and sys.platform == "win32":
+        return f'"{path}"' if " " in str(path) else str(path)
+    if path:
+        return shlex.quote(str(path))
+    if kind in ("deb", "rpm"):
+        return "opendisco"
+    python = "python" if sys.platform == "win32" else "python3"
+    if os.path.basename(sys.argv[0]) == "opendisco.py":
+        return sys.argv[0] if os.sep in sys.argv[0] or "/" in sys.argv[0] else f"{python} {sys.argv[0]}"
+    return f"{python} -m opendisco"
+
+
 def _typed() -> bool:
     """Whether stdin is a terminal someone can type the answer in. Windows counts NUL as one (a
     script's `< NUL`), so there it must also be a console."""
@@ -149,11 +175,14 @@ def cli_gate(folder, accept: bool) -> bool:
     if agreed(folder):
         return True
     if not accept:
+        online = ONLINE.format(version=__version__)
         if not (_typed() and sys.stderr.isatty()):  # (the Mac app's output goes to the system log)
-            print(CLI_UNATTENDED, file=sys.stderr)
+            from opendisco import update
+            said = CLI_UNATTENDED_MACOS if update.installed_as()[0] == "macos" else CLI_UNATTENDED
+            print(said.format(command=command(), online=online), file=sys.stderr)
             return False
         print(f"{CLI_INTRO}\n\n{summary()}\n\n"
-              + CLI_WHERE.format(path=FILE, online=ONLINE.format(version=__version__)) + "\n", file=sys.stderr)
+              + CLI_WHERE.format(path=FILE, online=online, command=command()) + "\n", file=sys.stderr)
         try:
             print(CLI_ASK, end="", file=sys.stderr, flush=True)
             answer = input()
