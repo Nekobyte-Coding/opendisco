@@ -75,7 +75,8 @@ FAMILY_NAMES = {"airos": "airOS", "unifi": "UniFi", "unifi-os": "UniFi OS", "edg
 #            stays as the backup. add system image (EdgeOS's /usr/bin/ubnt-upgrade) asks its questions on
 #            standard input; given none, it takes each default, as pressing Enter does: replace the backup
 #            image (Yes), go on and lose config changes not saved (No: it stops), delete the backup first
-#            when there isn't room for both (Yes).
+#            when there isn't room for both (Yes). The wrapper exits 0 whatever the command did (EdgeOS's
+#            _vyatta_op_run), so what happened is read from show system image.
 EDGEOS_OP = "/opt/vyatta/bin/vyatta-op-cmd-wrapper"
 EDGEOS_IMAGE = "/tmp/firmware.tar"
 # EdgeOS has logins of its own, each its own Linux user, and /tmp is shared: a log another login left
