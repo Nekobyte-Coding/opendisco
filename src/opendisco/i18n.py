@@ -49,6 +49,11 @@ def sentences(*texts: str) -> str:
     return ("" if language == "ja" else " ").join(text for text in texts if text)
 
 
+def stop(text: str) -> str:
+    """A sentence's full stop: "." after English, "。" after Japanese."""
+    return text + ("。" if text and _wide(text[-1]) else ".")
+
+
 def N_(text: str) -> str:
     """Marks a text kept in a constant for translation; _() translates it where it's shown."""
     return text
@@ -139,7 +144,7 @@ def fill(text: str, columns: int) -> str:
     if not any(_wide(char) for char in text):
         return textwrap.fill(text, columns)
     lines, line = [], ""
-    for unit in _units(text):
+    for unit in _units(text, columns):
         if unit.isspace() and not line:
             continue
         if line and width(line) + width(unit.rstrip()) > columns and unit[0] not in _NO_START \
@@ -151,16 +156,21 @@ def fill(text: str, columns: int) -> str:
     return "\n".join([*lines, line.rstrip()] if line.strip() else lines)
 
 
-def _units(text: str):
-    """The pieces a line may break between: each Japanese character, each other word, each space."""
+def _units(text: str, columns: int):
+    """The pieces a line may break between: each Japanese character, each other word (one longer
+    than a line, a path say, in pieces, as textwrap breaks it), each space."""
     word = ""
     for char in text:
         if _wide(char) or char.isspace():
-            if word:
-                yield word
-                word = ""
+            yield from _pieces(word, columns)
+            word = ""
             yield char
         else:
             word += char
-    if word:
-        yield word
+    yield from _pieces(word, columns)
+
+
+def _pieces(word: str, columns: int):
+    while word:
+        yield word[:columns]
+        word = word[columns:]

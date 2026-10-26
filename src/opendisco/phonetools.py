@@ -1130,7 +1130,7 @@ def _without_advice(message: str) -> str:
     """An issue's first sentence: what's found, without the advice after it (a Japanese one ends in 。)."""
     end = re.search(r"\. |。", message)
     if end is None:
-        return message + "."
+        return i18n.stop(message)
     return message[:end.start()] + ("。" if end.group() == "。" else ".")
 
 

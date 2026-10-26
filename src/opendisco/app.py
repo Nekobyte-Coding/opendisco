@@ -7,6 +7,7 @@ Windows can't capture traffic, add addresses or tag VLANs. The iOS app doesn't u
 """
 import asyncio
 import json
+import math
 import shutil
 import textwrap
 import threading
@@ -19,6 +20,7 @@ import toga
 from toga.sources import AccessorColumn
 from toga.style import Pack
 from toga.style.pack import COLUMN, ROW
+from travertino.size import at_least
 
 from opendisco import FULL_NAME, __version__, core, health, i18n, phone, records, terms, vulns
 from opendisco.i18n import _, N_, tr
@@ -64,6 +66,8 @@ DEVICE_ACTIONS = [("web", N_("Open Web UI")), ("ssh", N_("Open SSH…")), ("ping
                   ("forget", N_("Forget SSH key")), ("forget_login", N_("Forget saved login")),
                   ("hide", N_("Hide device"))]
 FINDS = {"find_http": "http", "find_https": "https", "find_ssh": "ssh", "all_ports": "all"}
+# An issue's or a scan note's level, as Show issues… and the Notes tab name it
+LEVELS = {"error": N_("error"), "warn": N_("warning"), "note": N_("notice")}
 # Said before a port search, until switched off: to intrusion prevention it looks like a port scan.
 PORT_SEARCH_WARNING = N_("A port search connects to {ip}'s TCP ports: all 65,535 of them when the service isn't on "
                           "a usual one. Intrusion prevention on the network (UniFi's IPS / Threat Management, a "
@@ -104,6 +108,11 @@ _MENU_TARGET = None
 _TIP_TABLE = None
 
 
+def _level(level: str) -> str:
+    """English keeps the levels' own short names (warn, note); other languages say them."""
+    return level if i18n.language == i18n.ENGLISH else _(LEVELS.get(level, level))
+
+
 def _translate_toga(app):
     """Toga's standard commands and menus (made before startup, built into menus after it) and its
     dialogs' buttons, in the app's language. Windows and GTK label a dialog's buttons in the
@@ -131,6 +140,16 @@ def _translate_toga(app):
                 self.native.addButtonWithTitle(_("OK"))
 
         dialogs.NSAlertDialog.__init__ = labelled
+        # Japanese text measures in half points, and Toga's layout drops the half: a switch or a
+        # button lost its last characters to "…". Whole points, rounded up.
+        from toga_cocoa.widgets import button, switch
+        for widget in (button.Button, switch.Switch):
+            def whole(self, rehint=widget.rehint):
+                rehint(self)
+                width = self.interface.intrinsic.width
+                self.interface.intrinsic.width = at_least(math.ceil(getattr(width, "value", width)))
+
+            widget.rehint = whole
     elif platform == "ios":
         from toga_iOS import dialogs
         for name in ("add_null_response_button", "add_true_response_button", "add_false_response_button"):
@@ -1129,7 +1148,7 @@ class OpenDiscoApp(toga.App):
         self.result = result
         self._show_devices(result.devices)
         self.wire.value = result.wire_text(verbose=True)
-        self.notes.value = "\n\n".join(f"[{level}] {msg}" for level, msg in result.notes)
+        self.notes.value = "\n\n".join(f"[{_level(level)}] {msg}" for level, msg in result.notes)
         heard = sum(1 for d in result.devices if d.ubnt_packets)
         hidden = sum(1 for d in result.devices if d.key in self.hidden)
         self.status.text = (tr("{count} device(s), {heard} answered UBNT discovery, {seconds:.0f}s",
@@ -1534,7 +1553,7 @@ class OpenDiscoApp(toga.App):
         elif d.ports is not None:
             where += _("; a deep check found no SSH answering.")
         else:
-            where += "."
+            where = i18n.stop(where)
         user = toga.TextInput(value=self.settings.get("ssh_user", ""), placeholder=_("e.g. ubnt or admin"),
                               style=Pack(flex=1))
         password = toga.PasswordInput(placeholder=_("empty: type it in the terminal, or use an SSH key"),
@@ -1850,7 +1869,7 @@ class OpenDiscoApp(toga.App):
     def _issue_text(d, width=None) -> str:
         lines = []
         for level, tag, msg in d.issues:
-            line = f"{core.status_label(tag)} ({level}): {msg}"
+            line = f"{core.status_label(tag)} ({_level(level)}): {msg}"
             if width and i18n.width(line) > len(line):  # Japanese: no spaces for textwrap to break at
                 line = i18n.fill(line, width).replace("\n", "\n    ")
             elif width:
@@ -2572,7 +2591,7 @@ class OpenDiscoApp(toga.App):
                 self.status.text = (_("Couldn't check for updates.") if error
                                     else tr("OpenDisco {version} is the latest version.", version=__version__))
                 asyncio.create_task(self.main_window.dialog(
-                    toga.ErrorDialog(_("Couldn't check for updates"), f"{error[0].upper()}{error[1:]}.") if error
+                    toga.ErrorDialog(_("Couldn't check for updates"), i18n.stop(f"{error[0].upper()}{error[1:]}")) if error
                     else toga.InfoDialog(_("No update"),
                                          tr("OpenDisco {version} is the latest version.", version=__version__))))
             return
@@ -2704,7 +2723,7 @@ class OpenDiscoApp(toga.App):
         self.status.text = tr("The update to {version} failed: this is still {current}.", version=release.version,
                               current=__version__)
         asyncio.create_task(self.main_window.dialog(toga.ErrorDialog(
-            _("Update failed"), f"{error[0].upper()}{error[1:]}.\n\n"
+            _("Update failed"), i18n.stop(f"{error[0].upper()}{error[1:]}") + "\n\n"
                                 + tr("Nothing was changed: this is still OpenDisco {version}.", version=__version__))))
 
     def _update_ready(self, release, kind, target, path, folder, error, close):

@@ -48,7 +48,7 @@ import urllib.request
 from dataclasses import dataclass, field, replace
 from pathlib import Path
 
-from opendisco import core, linkhealth
+from opendisco import core, i18n, linkhealth
 from opendisco.i18n import _, N_, sentences, tr
 
 if core.platform_name() in ("ios", "android"):  # no ssh program there: asyncssh, with the same calls
@@ -1186,7 +1186,7 @@ def write_edgeos(login: sshrun.Login, text: str, apply: bool, report=None, stop=
     if code:
         failed = _(EDGEOS_FAILURES[code]) if code in EDGEOS_FAILURES else tr("It failed (exit code {code})", code=code)
         raise ToolError(tr("{failed}. EdgeOS said: {said}", failed=failed, said=said[-400:]) if said and code != 3
-                        else failed + ".")
+                        else i18n.stop(failed))
     try:
         stored = _fetch(login, EDGEOS_CONFIG, stop)
     except sshrun.SSHError:
@@ -2171,7 +2171,7 @@ def change_edgeos_login(login: sshrun.Login, new: sshrun.Login, steps: list, rep
         if code:
             failed = (_(EDGEOS_LOGIN_FAILURES[code]) if code in EDGEOS_LOGIN_FAILURES
                       else tr("It failed (exit code {code})", code=code))
-            told = tr("{failed}. EdgeOS said: {said}", failed=failed, said=said[-400:]) if said else failed + "."
+            told = tr("{failed}. EdgeOS said: {said}", failed=failed, said=said[-400:]) if said else i18n.stop(failed)
             if n:
                 raise ToolError(sentences(tr("Deleting {user} failed: {reason}", user=login.user, reason=told), both,
                                           tr("Delete {user} in EdgeOS's web UI or CLI.", user=login.user)))
