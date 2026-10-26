@@ -417,7 +417,10 @@ Right-click a device in the table (or select it and use the **Device** menu):
   from), then opens a session in the **Terminal** tab. The app types the password when ssh
   asks for it. It's kept in memory for that session only, so after the device reboots,
   pressing Enter in the terminal logs in again. With the password left empty, it's typed in
-  the terminal instead, or an SSH key is used. The username is remembered.
+  the terminal instead, or an SSH key is used. The username is remembered. On a Linux system
+  without `ssh` (the AppImage or the portable version), the session runs on the app's own SSH
+  client instead, in the same tab, with the same host keys; it asks for the password in the
+  terminal the same way. With neither, the menu says "(needs ssh)".
 - **Ping** pings it continuously in the Terminal tab. Ctrl+C stops it and prints the summary,
   and Enter starts it again.
 - **Measure latency** pings it a few times and puts the result in Details and the Latency
@@ -492,7 +495,8 @@ rather than its IP. So the next factory-reset radio at 192.168.1.20 isn't mistak
 last one, and a key that changes on the *same* device is still caught: the terminal says so
 and won't connect. When that's expected (the device was reset or replaced), choose **Forget
 SSH key** and press Enter. Old firmware that only offers SHA-1 key exchange, `ssh-rsa` keys
-or CBC ciphers is allowed, as far as the computer's ssh still supports them.
+or CBC ciphers is allowed, as far as the computer's ssh still supports them (the app's own SSH
+client supports them all).
 
 **Windows:** sessions run in the app through pywinpty (bundled), using Windows' built-in
 OpenSSH client (Settings > Optional features > OpenSSH Client, if it's missing).
@@ -502,7 +506,8 @@ OpenSSH client (Settings > Optional features > OpenSSH Client, if it's missing).
 The device tools (Scan from device, firmware updates, config backups, the config editor and
 uploads, Reboot, Locate and Change login) log in with the computer's own `ssh` and `scp`, the
 same known-hosts file and host keys as the Terminal tab; on phones, with the app's own SSH
-client. Their login window can
+client, and so on a Linux system without `ssh` and `scp` (the AppImage and the portable
+version bring that client: asyncssh). Their login window can
 **remember the login for that device** (by MAC address) in the operating system's credential
 store: the macOS Keychain, Windows Credential Manager, or a Secret Service keyring on Linux
 (through `secret-tool`, from libsecret-tools). Where there's no such store, nothing is
@@ -1156,7 +1161,7 @@ Linux one inside containers, so nothing big ends up in iCloud. Finished installe
 | `src/opendisco/phone.py`, `phone_android.py`, `phone_ios.py` | The phone screens, shared by Android and iPhone/iPad, and each one's native parts |
 | `src/opendisco/terminal.py` | The Terminal tab: SSH and ping sessions |
 | `src/opendisco/devicetools.py`, `devicegui.py`, `phonetools.py` | The device tools over SSH (firmware, config backups and uploads, Reboot, Locate, login, Scan from device) and their windows on desktops and phones |
-| `src/opendisco/sshrun.py`, `phonessh.py`, `credstore.py` | SSH for the device tools (the computer's `ssh` and `scp`; asyncssh on phones) and remembered logins in the system's credential store |
+| `src/opendisco/sshrun.py`, `phonessh.py`, `credstore.py` | SSH for the device tools (the computer's `ssh` and `scp`; asyncssh on phones and on a Linux system without them) and remembered logins in the system's credential store |
 | `src/opendisco/vulns.py` | The CVE check and its updates from the NVD and Ubiquiti's advisories |
 | `src/opendisco/health.py` | Each device's latest firmware, and latency |
 | `src/opendisco/records.py` | Search, device notes, the device report and the site-wide exports, Settings' subnet list |

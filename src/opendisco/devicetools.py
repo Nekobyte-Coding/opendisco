@@ -45,6 +45,11 @@ if core.platform_name() in ("ios", "android"):  # no ssh program there: asyncssh
     from opendisco import phonessh as sshrun
 else:
     from opendisco import sshrun
+    if not sshrun.available():  # no ssh and scp (the AppImage or the portable version on a bare system)
+        from opendisco import phonessh
+        if phonessh.available():  # (the AppImage brings asyncssh, the portable version's setup installs it)
+            sshrun = phonessh
+OWN_SSH = sshrun.__name__ == "opendisco.phonessh"  # the app's own SSH client, not the system's ssh and scp
 
 INDEX_URL = "https://fw-update.ubnt.com/api/firmware-latest"
 INDEX_TTL = 1800  # seconds the firmware list is kept before asking again

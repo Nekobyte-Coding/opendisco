@@ -9,6 +9,7 @@ app.py only lists the actions in DEVICE_ACTIONS and calls menu_state(), act() an
 import asyncio
 import os
 import re
+import shutil
 import socket
 import subprocess
 import sys
@@ -24,7 +25,8 @@ import toga
 from toga.style import Pack
 from toga.style.pack import COLUMN, ROW
 
-from opendisco import core, credstore, devicetools, sshrun, terminal, terms
+from opendisco import core, credstore, devicetools, terminal, terms
+from opendisco.devicetools import sshrun  # the system's ssh and scp, or without them the app's own (phonessh)
 
 ACTIONS = ("scan_from", "fw_check", "fw_update", "config", "login", "backup", "backups", "upload", "reboot", "locate",
            "forget_login")
@@ -78,6 +80,8 @@ def menu_state(app, d, titles: dict) -> dict:
         if offered and not busy:
             title += via
         state[name] = (title, bool(d.ip) and offered and tools and not busy)
+    if not hops and not ssh_here() and not (app.term and app.term.find(d.key, "ssh")):
+        state["ssh"] = (titles["ssh"] + "  (needs ssh)", False)
     idle = bool(app.result) and not (app.running or app.rescanning or app.finding)
     if hops:
         reach = bool(d.ip) and tools and all(h.ip for h in hops)
@@ -93,6 +97,11 @@ def menu_state(app, d, titles: dict) -> dict:
     state["backups"] = (titles["backups"] + (f"  ({kept} kept)" if kept else ""),
                         bool(d.mac and (kept or state["backup"][1])))  # filed by MAC: none without one
     return state
+
+
+def ssh_here() -> bool:
+    """Whether this computer can open SSH sessions: with its ssh, or the app's own SSH client."""
+    return devicetools.OWN_SSH or bool(shutil.which("ssh"))
 
 
 def act(app, d, name: str) -> None:
@@ -256,7 +265,7 @@ async def _login_window(app, d, purpose, user, password, port, remembered, probl
     user_box.on_confirm = lambda widget: password_box.focus()
     label = Pack(width=80)
     row = Pack(direction=ROW, align_items="center", gap=8)
-    note = ("The password goes only to ssh and scp. " +
+    note = (f"The password goes only to {'the device' if devicetools.OWN_SSH else 'ssh and scp'}. " +
             (f"Remembered logins are kept in {credstore.store_name()}, never in a file." if can_remember
              else "This computer has no credential store the app can use, so it isn't remembered."))
     size = (560, 300)
@@ -409,13 +418,16 @@ async def routed_ssh(app, d):
     login = await ask_route(app, d, "Log in for an SSH session.")
     if not login:
         return
+    title = f"{d.ip}  SSH {login.user}@ via {sshrun.route_text(login) or 'direct'}  {d.name or d.model or ''}".rstrip()
+    if not login.via:
+        title = f"{d.ip}  SSH {login.user}@port {login.port}  {d.name or d.model or ''}".rstrip()
+    if devicetools.OWN_SSH:  # (it goes through the last hop's own client by itself where it must)
+        app._show_terminal(app.term.open_own(d.key, "ssh", title, login))
+        return
     if login.nested:  # a device on the way doesn't forward: a session on the last hop's own client
         argv = sshrun.ssh_command(sshrun.last_hop(login), sshrun.nested_command(login, None), "-tt")
     else:
         argv = sshrun.ssh_command(login, None)
-    title = f"{d.ip}  SSH {login.user}@ via {sshrun.route_text(login) or 'direct'}  {d.name or d.model or ''}".rstrip()
-    if not login.via:
-        title = f"{d.ip}  SSH {login.user}@port {login.port}  {d.name or d.model or ''}".rstrip()
     app._show_terminal(app.term.open(d.key, "ssh", title, argv, login.passwords))
 
 
@@ -434,6 +446,9 @@ async def routed_ping(app, d):
         return
     last = _chain(hops)
     title = f"{d.ip}  ping from {last.ip}  {d.name or d.model or ''}".rstrip()
+    if devicetools.OWN_SSH:
+        app._show_terminal(app.term.open_own(d.key, "ping", title, last, command=f"ping {d.ip}"))
+        return
     app._show_terminal(app.term.open(d.key, "ping", title, sshrun.ssh_command(last, f"ping {d.ip}", "-tt"),
                                      last.passwords))
 
@@ -481,10 +496,13 @@ async def routed_web(app, d):
         found = next((int(p) for p in out.split() if p.isdigit()), None)
         if found and found != port:
             port, url = found, urllib.parse.urlsplit(f"{'http' if found in (80, 8080) else 'https'}://{d.ip}:{found}/")
-    argv = sshrun.ssh_command(last, None, "-N", "-L", f"127.0.0.1:{local}:{d.ip}:{port}")
     target = f"{url.scheme}://127.0.0.1:{local}/"
     title = f"{d.ip}  web UI via {_through(hops)}  {target}"
-    session = app.term.open(d.key, "web", title, argv, last.passwords)
+    if devicetools.OWN_SSH:
+        session = app.term.open_own(d.key, "web", title, last, forward=(local, d.ip, port))
+    else:
+        argv = sshrun.ssh_command(last, None, "-N", "-L", f"127.0.0.1:{local}:{d.ip}:{port}")
+        session = app.term.open(d.key, "web", title, argv, last.passwords)
     session.url = target
     app.status.text = f"Forwarding {target} to {d.ip}:{port} through {_through(hops)}…"
     if await _work(_wait_local, local, 30):

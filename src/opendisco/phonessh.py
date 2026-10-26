@@ -3,10 +3,13 @@
 A phone has no ssh program to run, so this gives devicetools and the phone screens what sshrun
 gives them on a computer, from Python: the same Login, Result and SSHError and the same calls.
 asyncssh (and the cryptography package it stands on) is part of the iOS and Android apps, and
-imported only when a call needs it.
+imported only when a call needs it. The Linux AppImage and the portable version bring it too, for
+a computer without ssh and scp: there devicetools uses this in place of sshrun, and the Terminal
+tab's SSH sessions run on Shell (terminal.OwnSession).
 
 Host keys are trusted on first use and filed under each device's alias (terminal.host_key_alias:
-its MAC) in the app's known_hosts, as the desktop's ssh does; a changed one is refused. A device
+its MAC) in the app's known_hosts, as the desktop's ssh does, whose hashed lines are read too; a
+changed one is refused. A device
 behind others is reached through their forwarding, each with its own login and host key, or,
 when one refuses to forward, through the last one's own SSH client (Dropbear's dbclient). Old
 firmware's key exchanges, host keys and ciphers are allowed after the strong ones.
@@ -16,14 +19,19 @@ their own, on a thread of their own, never on the UI's. Every failure is an SSHE
 says what went wrong in terms of the device.
 """
 import asyncio
+import base64
 import concurrent.futures
 import errno
+import hashlib
+import hmac
 import os
 import re
 import threading
 import time
 from dataclasses import dataclass
 from pathlib import Path
+
+from opendisco import core
 
 PASSWORD_PROMPT = re.compile(r"(?i)pass(word|code)[^\r\n]{0,60}:\s*$")
 ANSI = re.compile(r"\x1b\[[0-9;?]*[ -/]*[@-~]|\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)|\x1b[()][0-9A-Za-z]|\x1b[=>]")
@@ -34,6 +42,7 @@ LEGACY = {"kex_algs": ["diffie-hellman-group14-sha1", "diffie-hellman-group-exch
           "encryption_algs": ["aes128-cbc", "aes256-cbc", "3des-cbc"],
           "mac_algs": ["hmac-sha1", "hmac-md5"]}
 CONNECT_TIMEOUT = 10
+HERE = "this phone" if core.platform_name() in ("ios", "android") else "this computer"
 # asyncssh asks getpass for this device's own user name before every connection, and an iOS
 # app has none (getpass raises): every login failed with "Unknown local username" there.
 os.environ.setdefault("LOGNAME", "opendisco")
@@ -131,6 +140,21 @@ def _names(line: str) -> list:
     return line.split()[0].split(",") if line.strip() and not line.startswith(("#", "@")) else []
 
 
+def _hashed(name: str, alias: str) -> bool:
+    """Whether a hashed known_hosts name (|1|salt|HMAC-SHA1 of the name) is alias's: OpenSSH
+    writes them where HashKnownHosts is on, as Debian's and Ubuntu's ssh_config have it."""
+    try:
+        salt, digest = (base64.b64decode(part) for part in name[3:].split("|", 1))
+    except ValueError:
+        return False
+    return hmac.compare_digest(hmac.new(salt, alias.encode("utf-8"), hashlib.sha1).digest(), digest)
+
+
+def _is_for(line: str, alias: str) -> bool:
+    return any(n == alias or n.startswith(f"[{alias}]:") or (n.startswith("|1|") and _hashed(n, alias))
+               for n in _names(line))
+
+
 def _stored_keys(login: Login) -> list:
     import asyncssh
     try:
@@ -139,8 +163,7 @@ def _stored_keys(login: Login) -> list:
         return []
     keys = []
     for line in lines:
-        names = _names(line)
-        if login.alias in names or any(n.startswith(f"[{login.alias}]:") for n in names):
+        if _is_for(line, login.alias):
             try:
                 keys.append(asyncssh.import_public_key(" ".join(line.split()[1:3])))
             except (asyncssh.KeyImportError, ValueError):
@@ -154,8 +177,7 @@ def forget_host_key(alias: str, known_hosts: Path) -> bool:
         lines = known_hosts.read_text(encoding="utf-8").splitlines(keepends=True)
     except OSError:
         return False
-    kept = [line for line in lines
-            if not any(n == alias or n.startswith(f"[{alias}]:") for n in _names(line))]
+    kept = [line for line in lines if not _is_for(line, alias)]
     if len(kept) == len(lines):
         return False
     known_hosts.write_text("".join(kept), encoding="utf-8")
@@ -166,10 +188,19 @@ def _client_class():
     import asyncssh
 
     class Client(asyncssh.SSHClient):
-        """Trusts a device's first host key and files it; refuses one that differs from what's on file."""
+        """Trusts a device's first host key and files it; refuses one that differs from what's on file.
+        With ask, a password the login has none for, or one it didn't take, is asked for (up to 3)."""
 
-        def __init__(self, login: Login, stored: list):
+        def __init__(self, login: Login, stored: list, ask=None):
             self.login, self.stored, self.changed = login, stored, False
+            self.ask, self.asked = ask, 0
+
+        def password_auth_requested(self):
+            if self.ask is None or self.asked >= 3:
+                return None
+            self.asked += 1
+            who = f"{self.login.user}@{self.login.ip}" if self.login.user else self.login.ip
+            return self.ask(f"{who}'s password: ")
 
         def validate_host_public_key(self, host, addr, port, key) -> bool:
             if self.stored:  # on file, and this isn't it
@@ -240,29 +271,34 @@ def _algorithms() -> dict:
 # Connecting, through the devices on the way
 # ---------------------------------------------------------------------------
 
-async def _connect(login: Login, target: Login, tunnel=None, through: Login | None = None):
+async def _connect(login: Login, target: Login, tunnel=None, through: Login | None = None, ask=None,
+                   keys: bool = False):
     """One SSH connection: to login, which is target itself or a device on the way to it,
-    through the connection tunnel to the device before it (through)."""
+    through the connection tunnel to the device before it (through). ask(prompt): a coroutine
+    giving a password typed by hand. keys: also this account's SSH keys and agent, as ssh would."""
     import asyncssh
     stored = _stored_keys(login)
-    client = _client_class()(login, stored)
+    client = _client_class()(login, stored, ask)
     try:
         conn, _ = await asyncio.wait_for(asyncssh.create_connection(
             lambda: client, login.ip, login.port, tunnel=tunnel, username=login.user or None,
-            password=login.password or None, known_hosts=(stored, [], []), client_keys=None, agent_path=None,
+            password=login.password or None, known_hosts=(stored, [], []),
+            client_keys=() if keys else None, agent_path=() if keys else None,
             connect_timeout=CONNECT_TIMEOUT, keepalive_interval=15, keepalive_count_max=3,
-            **_algorithms()), CONNECT_TIMEOUT * 4)
+            **_algorithms()), CONNECT_TIMEOUT * 4 + (120 if ask else 0))  # (time to type it)
         return conn
     except Exception as e:
         raise _failure(e, target, None if login is target else login, client.changed, through) from e
 
 
-async def _open(login: Login) -> list:
-    """The connections to each device on the way and then to the device, nearest first."""
+async def _open(login: Login, ask=None, keys: bool = False) -> list:
+    """The connections to each device on the way and then to the device, nearest first; ask is
+    for the device's own password (_connect)."""
     conns, route = [], [*login.via, login]
     try:
         for n, hop in enumerate(route):
-            conns.append(await _connect(hop, login, conns[-1] if conns else None, route[n - 1] if n else None))
+            conns.append(await _connect(hop, login, conns[-1] if conns else None, route[n - 1] if n else None,
+                                        ask if hop is login else None, keys))
     except BaseException:
         _close(conns)
         raise
@@ -304,7 +340,7 @@ def _failure(e: Exception, login: Login, hop: Login | None = None, changed: bool
         return SSHError(f"No SSH answer from {who.ip} port {who.port}"
                         + (f", on the way to {login.ip}" if hop else "") + " (timed out).", "timeout")
     if isinstance(e, OSError) and e.errno in (errno.EHOSTUNREACH, errno.ENETUNREACH, errno.EHOSTDOWN):
-        return SSHError(f"{who.ip} can't be reached from this phone.", "unreachable")
+        return SSHError(f"{who.ip} can't be reached from {HERE}.", "unreachable")
     if isinstance(e, asyncssh.KeyExchangeFailed):
         return SSHError(f"{who.ip} port {who.port} only offers SSH algorithms this app doesn't have: {e.reason}",
                         "algorithms")
@@ -499,18 +535,22 @@ def _copy(login: Login, paths, progress, stop, idle: float) -> None:
 # ---------------------------------------------------------------------------
 
 class Shell:
-    """A login shell on the device in a pseudo-terminal. on_output(text) gets what it prints, with
-    its terminal escapes (plain() strips them); on_closed(reason) once when it ends, reason ""
-    when it was closed or exited. Both are called on phonessh's thread. Through a device that
-    refuses to forward, the shell runs through the last hop's own SSH client."""
+    """A login shell on the device in a pseudo-terminal, or command in one (ping). on_output(text)
+    gets what it prints, with its terminal escapes (plain() strips them); on_closed(reason) once
+    when it ends, reason "" when it was closed or exited, and error the SSHError it ended with.
+    Both are called on phonessh's thread. Through a device that refuses to forward, it runs
+    through the last hop's own SSH client. ask and keys, for the desktop's Terminal tab: as
+    _connect's."""
 
-    def __init__(self, login: Login, on_output, on_closed, cols: int = 80, rows: int = 24):
+    def __init__(self, login: Login, on_output, on_closed, cols: int = 80, rows: int = 24,
+                 command: str | None = None, ask=None, keys: bool = False):
         self.login, self.on_output, self.on_closed = login, on_output, on_closed
+        self.command, self.ask, self.keys, self.error = command, ask, keys, None
         self.size, self.process, self.conns, self.ended = (cols, rows), None, [], False
         self.task = asyncio.run_coroutine_threadsafe(self._run(), _loop())
 
-    async def _start(self, login: Login, command: str | None):
-        self.conns = await _open(login)
+    async def _start(self, login: Login, command: str | None, ask=None):
+        self.conns = await _open(login, ask, self.keys)
         return await self.conns[-1].create_process(command, term_type="xterm-256color", term_size=self.size,
                                                    encoding="utf-8", errors="replace")
 
@@ -519,17 +559,18 @@ class Shell:
         try:
             if self.login.nested:
                 raise SSHError("forwarding", "forwarding")
-            self.process = await self._start(self.login, None)
+            self.process = await self._start(self.login, self.command, self.ask)
         except SSHError as e:
             if e.kind != "forwarding" or not self.login.via:
-                return self._end(str(e))
+                return self._end(str(e), e)
             self.login.nested = True
         except Exception as e:
-            return self._end(str(_failure(e, self.login)))
+            failure = _failure(e, self.login)
+            return self._end(str(failure), failure)
         try:
             if self.process is None:  # through the last hop's own client, which asks for the password
                 hop = last_hop(self.login)
-                self.process = await self._start(hop, nested_command(self.login, None))
+                self.process = await self._start(hop, nested_command(self.login, self.command))
                 typer = _PasswordTyper({**_as_dict(hop), self.login.ip: self.login.password}, self.process.stdin.write)
             while True:
                 data = await self.process.stdout.read(65536)
@@ -539,14 +580,15 @@ class Shell:
                     typer.feed(data)
                 self.on_output(data)
         except Exception as e:
-            reason = str(_failure(e, self.login))
+            self.error = _failure(e, self.login)
+            reason = str(self.error)
         finally:
             _close(self.conns)
         self._end(reason)
 
-    def _end(self, reason: str) -> None:
+    def _end(self, reason: str, error: SSHError | None = None) -> None:
         if not self.ended:
-            self.ended = True
+            self.ended, self.error = True, error or self.error
             self.on_closed(reason)
 
     def send(self, text: str) -> None:
@@ -570,3 +612,27 @@ class Shell:
     @property
     def alive(self) -> bool:
         return not self.ended
+
+
+class Forward(Shell):
+    """127.0.0.1:local on this computer forwarded through the device to host:port, until it's
+    closed: the desktop's web UI of a device behind others (ssh -L). on_output and on_closed as
+    Shell's; nothing is typed into it."""
+
+    def __init__(self, login: Login, local: int, host: str, port: int, on_output, on_closed, keys: bool = False):
+        self.target = (local, host, port)
+        super().__init__(login, on_output, on_closed, keys=keys)
+
+    async def _run(self) -> None:
+        local, host, port = self.target
+        try:
+            self.conns = await _open(self.login, None, self.keys)
+            await self.conns[-1].forward_local_port("127.0.0.1", local, host, port)
+        except Exception as e:
+            _close(self.conns)
+            failure = _failure(e, self.login)
+            return self._end(str(failure), failure)
+        self.on_output(f"Forwarding 127.0.0.1:{local} to {host}:{port} through {self.login.ip}: close this session "
+                       "to stop.\r\n")
+        await self.conns[-1].wait_closed()
+        self._end("")

@@ -1334,10 +1334,13 @@ class OpenDiscoApp(toga.App):
         self.term.show(session)
 
     async def _open_ssh(self, d):
-        from opendisco import terminal
+        from opendisco import devicegui, devicetools, terminal
         session = self.term.find(d.key, "ssh")
         if session:  # already logged in: just show it
             self._show_terminal(session)
+            return
+        if not devicegui.ssh_here():
+            self.status.text = "Open SSH… needs an ssh client on this computer (OpenSSH's)."
             return
         login = await self._ssh_login(d)
         if not login:
@@ -1345,17 +1348,24 @@ class OpenDiscoApp(toga.App):
         user, password, port = login
         self.settings["ssh_user"] = user
         self._save_settings()
-        argv = terminal.ssh_argv(d.ip, port, user, terminal.host_key_alias(d.mac, d.ip), self.known_hosts)
+        alias = terminal.host_key_alias(d.mac, d.ip)
+        who = f"{user}@" if user else ""
+        title = f"{d.ip}  SSH {who}port {port}" + (f"  {d.name or d.model}" if d.name or d.model else "")
+        if devicetools.OWN_SSH:  # no ssh here: the app's own SSH client, in the Terminal tab all the same
+            own = devicetools.sshrun.Login(d.ip, port, user, password, alias, self.known_hosts)
+            self._show_terminal(self.term.open_own(d.key, "ssh", title, own))
+            return
+        argv = terminal.ssh_argv(d.ip, port, user, alias, self.known_hosts)
         if not terminal.in_app_terminals():
             terminal.open_console_window(argv)
             self.status.text = f"SSH to {d.ip} opened in its own window."
             return
-        who = f"{user}@" if user else ""
-        title = f"{d.ip}  SSH {who}port {port}" + (f"  {d.name or d.model}" if d.name or d.model else "")
         self._show_terminal(self.term.open(d.key, "ssh", title, argv, password))
 
     async def _ssh_login(self, d):
         """Ask for the username and password (and confirm the port); None when cancelled."""
+        from opendisco import devicetools
+        own = devicetools.OWN_SSH
         answer = self.loop.create_future()
         said = d.said_ports("ssh")
         found = sorted(p for p, k in d.services.items() if k == "ssh")
@@ -1406,8 +1416,8 @@ class OpenDiscoApp(toga.App):
                      children=[toga.Label("Password", style=label), password]),
             toga.Box(style=Pack(direction=ROW, align_items="center", gap=8),
                      children=[toga.Label("Port", style=label), port, problem]),
-            toga.Label("The password goes only to ssh, and is kept in memory to log in again if the "
-                       "connection drops. It isn't stored."),
+            toga.Label(f"The password goes only to {'the device' if own else 'ssh'}, and is kept in memory to log in "
+                       "again if the connection drops. It isn't stored."),
             toga.Box(style=Pack(direction=ROW, gap=8), children=[
                 toga.Box(style=Pack(flex=1)),
                 toga.Button("Cancel", on_press=lambda w: finish(False)),

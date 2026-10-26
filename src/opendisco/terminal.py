@@ -3,7 +3,9 @@
 Each session runs its program (ssh, ping) in its own pseudo-terminal, so it behaves exactly as
 in a terminal window: ping streams, Ctrl+C stops it, full-screen programs and resizing work.
 Sessions keep running while another one is shown. Windows needs pywinpty for that; without
-it, SSH and ping open in a console window of their own instead.
+it, SSH and ping open in a console window of their own instead. Where the computer has no ssh
+(the Linux AppImage or portable version on a system without it), SSH sessions run on the app's
+own SSH client instead (OwnSession, over phonessh), in a pseudo-terminal on the device.
 
 The terminal itself is xterm.js in a web view. The web view has no way to call Python, so the
 pane polls it for keystrokes and sends output back in batches.
@@ -110,7 +112,10 @@ def ping_argv(ip: str) -> list:
 
 def forget_host_key(alias: str, known_hosts: Path) -> bool:
     """Remove a device's saved SSH host key, so the next connection trusts its new one."""
-    keygen = shutil.which("ssh-keygen") or "ssh-keygen"
+    keygen = shutil.which("ssh-keygen")
+    if not keygen:  # no OpenSSH here: the app's own SSH client reads and writes the same file
+        from opendisco import phonessh
+        return phonessh.forget_host_key(alias, known_hosts)
     try:
         r = subprocess.run([keygen, "-R", alias, "-f", str(known_hosts)], capture_output=True, text=True,
                            timeout=10, creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
@@ -287,6 +292,92 @@ class Session:
             pass
 
 
+class OwnSession(Session):
+    """A session over the app's own SSH client (phonessh.Shell, or phonessh.Forward for a
+    forward), for a computer without ssh: the pane sees it as a Session. Host keys are checked
+    as phonessh does it, in the same known_hosts. A password the login has none for, or one the
+    device didn't take, is asked for in the terminal, as ssh asks; the User's SSH keys and agent
+    are tried too. command: run that instead of a shell (ping); forward: (local port, host, port)."""
+
+    def __init__(self, sid: str, device_key: str, kind: str, title: str, login, command: str | None = None,
+                 forward: tuple | None = None):
+        self.login, self.command, self.forward = login, command, forward
+        self.shell, self.asking = None, None  # asking: (typed so far, future, loop) while a password is asked
+        super().__init__(sid, device_key, kind, title, [], login.password)
+
+    def start(self) -> None:
+        from opendisco import phonessh
+        self.alive, self.key_changed = True, False
+        self.started = threading.Event()  # set once self.shell is this one, which can end at once
+        rows, cols = self.size
+        if self.forward:
+            self.shell = phonessh.Forward(self.login, *self.forward, self._output, self._closed, keys=True)
+        else:
+            self.shell = phonessh.Shell(self.login, self._output, self._closed, cols, rows, command=self.command,
+                                        ask=self._ask, keys=True)
+        self.started.set()
+
+    def _output(self, text: str) -> None:  # on phonessh's thread, as _closed and _ask are
+        self._emit(text.encode("utf-8"))
+
+    def _closed(self, reason: str) -> None:
+        self.started.wait(5)
+        self._answer(None)
+        self.alive = False
+        error = self.shell.error if self.shell else None
+        self.key_changed = bool(error and error.kind == "key")
+        if reason and not self.key_changed:
+            again = "Press Enter to ping again." if self.kind == "ping" else "Press Enter to connect again."
+            self._emit(f"\r\n\x1b[33m[{reason} {again}]\x1b[0m\r\n".encode())
+        else:
+            self._emit(self._ended(0))
+
+    async def _ask(self, prompt: str):
+        """A password typed in the terminal, not shown, as ssh asks for one; None if it's closed."""
+        future = asyncio.get_running_loop().create_future()
+        self.asking = (bytearray(), future, asyncio.get_running_loop())
+        self._emit(prompt.encode("utf-8"))
+        return await future
+
+    def _answer(self, password) -> None:
+        if self.asking:
+            _typed, future, loop = self.asking
+            self.asking = None
+            loop.call_soon_threadsafe(lambda: future.done() or future.set_result(password))
+
+    def write(self, data: bytes) -> None:
+        if self.asking:
+            typed = self.asking[0]
+            for byte in data:
+                if byte in (13, 10):  # Enter
+                    self._emit(b"\r\n")
+                    self._answer(typed.decode("utf-8", "replace"))
+                    return
+                if byte == 3:  # Ctrl+C: no password, so the login fails and the session ends
+                    self._emit(b"^C\r\n")
+                    self._answer(None)
+                    return
+                if byte in (8, 127):
+                    del typed[-1:]
+                else:
+                    typed.append(byte)
+        elif self.shell is not None:
+            self.shell.send(data.decode("utf-8", "replace"))
+
+    def resize(self, cols: int, rows: int) -> None:
+        if cols < 2 or rows < 2 or (rows, cols) == self.size:
+            return
+        self.size = (rows, cols)
+        if self.alive and self.shell is not None:
+            self.shell.resize(cols, rows)
+
+    def close(self) -> None:
+        self.password = None
+        self._answer(None)
+        if self.shell is not None:
+            self.shell.close()
+
+
 # ---------------------------------------------------------------------------
 # The pane
 # ---------------------------------------------------------------------------
@@ -382,12 +473,20 @@ class TerminalPane:
                      if self.sessions[sid].device_key == device_key and self.sessions[sid].kind == kind), None)
 
     def open(self, device_key: str, kind: str, title: str, argv: list, password: str | None = None) -> Session:
+        return self._add(title, lambda sid, title: Session(sid, device_key, kind, title, argv, password))
+
+    def open_own(self, device_key: str, kind: str, title: str, login, command: str | None = None,
+                 forward: tuple | None = None) -> Session:
+        """A session over the app's own SSH client (OwnSession), where this computer has no ssh."""
+        return self._add(title, lambda sid, title: OwnSession(sid, device_key, kind, title, login, command, forward))
+
+    def _add(self, title: str, make) -> Session:
         self.count += 1
         sid = f"s{self.count}"
         titles = {s.title for s in self.sessions.values()}
         while title in titles:
             title += " ·"
-        session = Session(sid, device_key, kind, title, argv, password)
+        session = make(sid, title)
         self.sessions[sid] = session
         self._refresh_choice(session)
         self._start_pump()
