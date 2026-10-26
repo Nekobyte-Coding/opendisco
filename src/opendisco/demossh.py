@@ -3,7 +3,9 @@ made-up devices kept in memory, so every tool can be tried without any gear and 
 on the network.
 
 demo.py puts this module in their place (devicetools.sshrun, devicegui's, phone.py's and
-phonetools') once the demo network is showing, and NETWORK holds its devices. Logins made while
+phonetools') once the demo network is showing, and NETWORK holds its devices. The real module is
+devicetools' own choice: the system's ssh and scp (sshrun), or the app's own SSH client
+(phonessh) on phones and on a computer without ssh. Logins made while
 it shows are DemoLogins: their commands, file copies and shells go to the made-up device at that
 address. Everything else is the real module's (SSHError, Result, a real Login), so a login of a
 real device, made before the demo or after it, goes to the real module as before; a DemoLogin
@@ -16,14 +18,19 @@ background (&), which keeps running after the session ends, as nohup'd commands 
 do. The commands themselves are Python functions in COMMANDS (cfgmtd, fwupdate, reboot,
 wstalist, mca-status, vyatta-cfg-cmd-wrapper...): a tool that sends a new command needs only a
 function there. Logins are checked against the users in the device's own running config, hashed
-the way the device keeps them, so Change login changes what works.
+the way the device keeps them, so Change login changes what works. An EdgeRouter keeps two
+firmware images (show system image, add system image) and takes EdgeOS's login commands, with
+EdgeOS 3's password rules once it runs 3.x; an airMAX radio reads its link as airOS 8 does
+(mca-status, wstalist).
 
 Also here: the rest of what the tools reach on the network, made up the same way: answers() (is
 SSH up), the firmware server (firmware_index, download_release: a stand-in file, not firmware),
 rescanning a device (its discovery reply), port searches, latency and ping, and the desktop
-Terminal tab's sessions (session_factory) and the phones' console (Shell's stand-in, Console).
+Terminal tab's sessions (session_factory; own_session_factory for a computer without ssh) and
+the phones' console (Shell's stand-in, Console).
 Delays are like the real ones, only shorter where the real ones take minutes (DELAYS).
 """
+import difflib
 import fnmatch
 import hashlib
 import json
@@ -35,17 +42,14 @@ import time
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from opendisco import core
+from opendisco import core, devicetools
 
-if core.platform_name() in ("ios", "android"):  # the module this one stands in for
-    from opendisco import phonessh as real
-else:
-    from opendisco import sshrun as real
+real = devicetools.sshrun  # the module this one stands in for (it stays devicetools' choice)
 
 NETWORK = None  # the demo's Network while it shows; None otherwise
 # Seconds things take on the made-up gear: about what the real gear takes, but minutes are cut short.
 DELAYS = {"login": 0.3, "hop": 0.15, "no answer": 1.5, "copy rate": 4_000_000, "save": 1.2, "apply": 2.5,
-          "commit": 2.0, "firmware write": 3.0, "firmware offline": 45.0, "reboot offline": 25.0,
+          "commit": 2.0, "image write": 15.0, "firmware write": 3.0, "firmware offline": 45.0, "reboot offline": 25.0,
           "download": 4.0, "rescan": 1.5, "ping": 1.0}
 FIRMWARE_MARK = "OPENDISCO-DEMO-FIRMWARE"  # the stand-in firmware file's first line
 
@@ -368,6 +372,7 @@ class Gear:
     address_on: str = "br0"  # the interface its address is on
     link: dict = field(default_factory=dict)  # a radio link: signal, noise, ccq, distance, capacity...
     host_key: str = ""  # its SSH host key, as known_hosts files it ("ssh-ed25519 AAAA...")
+    images: list = field(default_factory=list)  # EdgeOS: {"name", "running", "default"} for its two images
 
     def __post_init__(self):
         self.network = None
@@ -382,6 +387,8 @@ class Gear:
         self.interfaces = self.interfaces or {"eth0": self.mac, self.address_on: self.mac}
         if self.kind in ("airos", "isp"):
             self.files.setdefault(AIROS_RUNNING, self.files.get(AIROS_CONFIG, b""))
+        elif self.kind == "edgeos":  # what it booted with, until a commit changes it
+            self.files.setdefault(RUNNING_BOOT, self.files.get(EDGEOS_CONFIG, b""))
 
     # -- state --------------------------------------------------------------------
     @property
@@ -406,12 +413,18 @@ class Gear:
         self.booted = time.time()
         if self.next_firmware:
             self.firmware, self.next_firmware = self.next_firmware, None
+        boot = next((i for i in self.images if i["default"]), None)
+        if boot:  # EdgeOS boots its default image
+            for image in self.images:
+                image["running"] = image is boot
+            self.firmware = re.sub(r"\.v\d.*$", "." + boot["name"], self.firmware)
         self.files = {p: b for p, b in self.files.items() if not p.startswith("/tmp/")}  # /tmp is memory
         self.locating = False
         self.pending.clear()
         if self.kind in ("airos", "isp"):
             self.files[AIROS_CONFIG] = self.files[AIROS_RUNNING] = self.flash
-        self.files.pop(RUNNING_BOOT, None)
+        elif self.kind == "edgeos":
+            self.files[RUNNING_BOOT] = self.files.get(EDGEOS_CONFIG, b"")
         self._take_config()
 
     @property
@@ -508,7 +521,10 @@ class Gear:
         return Ash(self, user)
 
     def uid(self, user: str) -> int:
-        return 0 if self.kind in ("airos", "isp") or user == "root" else 1000
+        """airOS logins are root; EdgeOS's each a Linux user of their own."""
+        if self.kind in ("airos", "isp") or user == "root":
+            return 0
+        return 1000 + int(hashlib.md5(user.encode()).hexdigest(), 16) % 900
 
     def groups(self, user: str) -> list:
         if self.kind == "edgeos" and user != "root":
@@ -518,7 +534,7 @@ class Gear:
     # -- config ---------------------------------------------------------------------
     def running_boot(self) -> bytes:
         """EdgeOS: the config it runs (what it booted with, and commits since)."""
-        return self.files.get(RUNNING_BOOT, self.files.get(EDGEOS_CONFIG, b""))
+        return self.files.get(RUNNING_BOOT, b"")
 
     def _take_config(self) -> None:
         """What the config it runs says of it: its name (and, once its factory login is changed,
@@ -666,7 +682,7 @@ def _lex(text: str) -> list:
         elif c in ";&|()":
             flush()
             two = text[i:i + 2]
-            op = two if two in ("&&", "||") else c
+            op = two if two in ("&&", "||", ";;") else c
             tokens.append(("op", op))
             i += len(op)
         else:
@@ -749,6 +765,28 @@ class _Parser:
                 otherwise = self.list(("fi",))
             self.take("word", "fi")
             return ("if", branches, otherwise, self.redirections())
+        if self.peek("word", "case"):
+            self.i += 1
+            subject = self.take("word")[1]
+            self.take("word", "in")
+            arms = []
+            while True:
+                while self.peek("op", ";"):
+                    self.i += 1
+                if self.peek("word", "esac"):
+                    self.i += 1
+                    break
+                if self.peek("op", "("):
+                    self.i += 1
+                patterns = [self.take("word")[1]]
+                while self.peek("op", "|"):
+                    self.i += 1
+                    patterns.append(self.take("word")[1])
+                self.take("op", ")")
+                arms.append((patterns, self.list((";;", "esac"))))
+                if self.peek("op", ";;"):
+                    self.i += 1
+            return ("case", subject, arms, self.redirections())
         if self.peek("word", "for"):
             self.i += 1
             name = self.take("word")[1]
@@ -893,6 +931,12 @@ class Ash:
                 self.vars[node[1]] = word
                 code = self.items(node[3], stdin, out, err)
             return code
+        if kind == "case":
+            value = self.expand(node[1], split=False)[0]
+            for patterns, body in node[2]:
+                if any(fnmatch.fnmatchcase(value, self.expand(p, split=False)[0]) for p in patterns):
+                    return self.items(body, stdin, out, err)
+            return 0
         if kind == "group":
             return self.items(node[1], stdin, out, err)
         if kind == "subshell":
@@ -1550,32 +1594,117 @@ def _reboot(shell, argv, stdin, out, err):
     return 0
 
 
+# airOS 8's link figures (mca-status, and wstalist's station objects, as status.cgi's wireless.sta
+# lists them): their names and shapes as the link-health session's data sets have them, from
+# captures of real 8.7 radios. Each made-up station's link (Gear.link) gives the numbers.
+def _expected(link: dict) -> int:
+    """The capacity (kbit/s) airOS 8 expects of a 2x2 AC link this wide."""
+    return 433000 if link.get("chanbw", 40) >= 40 else 216000
+
+
+def _station_entry(here, there, link: dict, ap_side: bool) -> dict:
+    """One radio as wstalist on `here` lists it: `there`, over the station's link (Gear.link: its
+    signal at the access point, its own noise floor...); ap_side: here is the access point."""
+    station_noise, ap_noise = link.get("noise", -95), (here if ap_side else there).link.get("noise", -94)
+    at_ap = link.get("signal", -60)
+    chains_at_ap = link.get("chains") or [at_ap - 1, at_ap - 2]
+    at_station, chains_at_station = at_ap + 1, [c + 1 for c in chains_at_ap]
+    signal, chains, noise = ((at_ap, chains_at_ap, ap_noise) if ap_side else (at_station, chains_at_station,
+                                                                               station_noise))
+    r_signal, r_chains, r_noise = ((at_station, chains_at_station, station_noise) if ap_side
+                                   else (at_ap, chains_at_ap, ap_noise))
+    cinr = max(3, signal - noise - 2)
+    dl, ul = int(link.get("tx", 300) * 1000), int(link.get("rx", 300) * 1000)
+    expected = _expected(link)
+    uptime = int(time.time() - max(here.booted, there.booted))
+    weak = cinr < 20
+    return {
+        "mac": there.mac.upper(), "lastip": there.ip, "associd": 1, "name": "",
+        "signal": signal, "rssi": signal + 96, "noisefloor": noise, "chainrssi": [c + 96 for c in chains] + [0],
+        "tx_idx": 3 if weak else 8, "rx_idx": 3 if weak else 8, "tx_nss": 2, "rx_nss": 2,
+        "tx_latency": link.get("latency", 6 if weak else 1), "distance": link.get("distance", 1500), "uptime": uptime,
+        "dl_capacity_expect": expected, "ul_capacity_expect": expected, "cb_capacity_expect": expected,
+        "dl_linkscore": min(100, dl * 100 // expected), "ul_linkscore": min(100, ul * 100 // expected),
+        "ccq": link.get("ccq", 95),
+        "airmax": {"actual_priority": 2, "beam": 0, "desired_priority": 2, "cb_capacity": (dl + ul) // 2,
+                   "dl_capacity": dl, "ul_capacity": ul, "atpc_status": 2,
+                   "rx": {"usage": 186 if weak else 42, "cinr": cinr},
+                   "tx": {"usage": 92 if weak else 24, "cinr": cinr + 1}},
+        "remote": {"hostname": there.name, "platform": there.platform, "version": there.firmware,
+                   "mode": "ap-ptmp" if not ap_side else "sta-ptmp", "netrole": "bridge",
+                   "signal": r_signal, "rssi": r_signal + 96, "noisefloor": r_noise,
+                   "chainrssi": [c + 96 for c in r_chains] + [0], "tx_power": link.get("tx_power", 20),
+                   "distance": link.get("distance", 1500), "uptime": uptime + 300, "ipaddr": [there.ip]},
+        "airos_connected": True,
+    }
+
+
+def _ap_of(gear):
+    return next((g for g in (gear.network.gears.values() if gear.network else ()) if gear in g.stations), None)
+
+
 def _wstalist(shell, argv, stdin, out, err):
-    """airOS: the stations associated with it, as its web UI lists them (JSON)."""
-    stations = []
-    for s in shell.gear.stations:
-        link = s.link or {}
-        stations.append({"mac": s.mac.upper(), "name": s.name, "lastip": s.ip, "associd": len(stations) + 1,
-                         "signal": link.get("signal", -60), "noisefloor": link.get("noise", -95),
-                         "ccq": link.get("ccq", 95), "distance": link.get("distance", 1500),
-                         "tx": link.get("tx", 400), "rx": link.get("rx", 400), "uptime": int(time.time() - s.booted),
-                         "remote": {"hostname": s.name, "platform": s.platform, "version": s.version,
-                                    "signal": link.get("remote_signal", link.get("signal", -60))}})
-    out(json.dumps(stations, indent=1) + "\n")
+    """airOS: the radios linked to it, as its web UI lists them (JSON on one line): an access
+    point's stations, or a station's access point."""
+    gear = shell.gear
+    if gear.stations:
+        found = [_station_entry(gear, s, s.link, True) for s in gear.stations if s.up]
+    else:
+        ap = _ap_of(gear)
+        found = [_station_entry(gear, ap, gear.link, False)] if ap and ap.up else []
+    out(json.dumps(found, separators=(",", ":")) + "\n")
     return 0
 
 
+MCA_TAIL = ("cpuUsage=9.0\nloadavg=0.08\nmemTotal=124132\nmemFree=71224\nnetrole=bridge\nlanPlugged=1\n"
+            "lanSpeed=1000Mbps-Full\nlatitude=0.000000\nlongitude=0.000000\nstatus_flags=4\n")
+
+
 def _mca_status(shell, argv, stdin, out, err):
-    """airOS: its status as key=value pairs, the radio link's among them."""
-    gear, link = shell.gear, shell.gear.link or {}
-    pairs = {"deviceName": gear.name, "deviceId": gear.mac.upper(), "firmwareVersion": gear.firmware,
-             "platform": gear.platform, "deviceIp": gear.ip, "uptime": int(time.time() - gear.booted),
-             "wlanOpmode": {3: "ap-ptmp", 2: "sta"}.get(gear.wmode, ""), "essid": gear.essid or "",
-             "freq": link.get("freq", ""), "chanbw": link.get("chanbw", ""), "signal": link.get("signal", ""),
-             "noise": link.get("noise", ""), "ccq": link.get("ccq", ""), "distance": link.get("distance", ""),
-             "wlanTxRate": link.get("tx", ""), "wlanRxRate": link.get("rx", ""),
-             "wlanConnections": len(gear.stations)}
-    out(",".join(f"{k}={v}" for k, v in pairs.items() if v != "") + "\n")
+    """airOS: its status, as airOS 8's mca-status prints it: who it is on the first line, then a
+    key=value line each, the radio's among them (on a station, its signal and rates)."""
+    gear = shell.gear
+    link = gear.link or {}
+    ap = gear if gear.stations or gear.wmode == 3 else _ap_of(gear)
+    radio = (ap.link if ap else link) or {}
+    freq = radio.get("freq", link.get("freq", 5180))
+    lines = [f"deviceName={gear.name},deviceId={gear.mac.upper()},firmwareVersion={gear.firmware},"
+             f"platform={gear.platform},deviceIp={gear.ip}", "",
+             f"apMac={(ap or gear).mac.upper()}",
+             f"wlanOpmode={'ap-ptmp' if ap is gear else 'sta-ptmp'}",
+             f"wlanConnections={len(gear.stations) if ap is gear else 1}",
+             f"wlanUptime={int(time.time() - gear.booted)}", f"essid={gear.essid or ''}", "security=WPA2",
+             f"freq={freq}", f"centerFreq={freq + 10}", f"txPower={radio.get('tx_power', 22 if ap is gear else 20)}",
+             f"chanbw={radio.get('chanbw', 40)}"]
+    if ap is gear:
+        lines += [f"noise={radio.get('noise', -94)}",
+                  f"distance={max([s.link.get('distance', 0) for s in gear.stations] or [0])}",
+                  "wlanTxLatency=0"]
+    else:
+        signal = link.get("signal", -60) + 1
+        chains = [c + 1 for c in (link.get("chains") or [signal - 2, signal - 3])]
+        lines += [f"signal={signal}", f"chain0Signal={chains[0]}", f"chain1Signal={chains[1]}",
+                  f"noise={link.get('noise', -95)}", f"distance={link.get('distance', 1500)}",
+                  f"wlanTxRate={link.get('tx', 300)}.0", f"wlanRxRate={link.get('rx', 300)}.0",
+                  f"wlanTxLatency={link.get('latency', 1)}"]
+    lines += ["wlanPolling=1", f"uptime={int(time.time() - gear.booted)}"]
+    out("\n".join(lines) + "\n" + MCA_TAIL)
+    return 0
+
+
+def _ubntbox(shell, argv, stdin, out, err):
+    """airOS's multi-call program: ubntbox mca-status."""
+    if argv[1:2] == ["mca-status"]:
+        return _mca_status(shell, argv[1:], stdin, out, err)
+    err(f"ubntbox: applet not found: {argv[1] if len(argv) > 1 else ''}\n")
+    return 127
+
+
+def _df(shell, argv, stdin, out, err):
+    """df -k: /tmp, a RAM disk (what an EdgeRouter has room for a firmware file in)."""
+    used = sum(len(b) for p, b in shell.gear.files.items() if p.startswith("/tmp/")) // 1024 + 1316
+    out("Filesystem           1K-blocks      Used Available Use% Mounted on\n"
+        f"tmpfs                   253952 {used:9} {253952 - used:9} {used * 100 // 253952:3}% /tmp\n")
     return 0
 
 
@@ -1618,6 +1747,18 @@ def _vyatta(shell, argv, stdin, out, err):
         pending[user] = data
         out(f"Loading configuration from '{argv[2]}'...\n\nLoad complete.  Use 'commit' to make changes active.\n")
         return 0
+    if action in ("set", "delete"):
+        words = argv[2:]
+        if words[:3] != ["system", "login", "user"] or len(words) < 4:
+            err(f"The demo's EdgeOS changes logins only: {' '.join(argv[1:])}\n")
+            return 1
+        try:
+            pending[user] = _edit_login(pending[user].decode("utf-8", "replace"), action, words[3], words[4:],
+                                        gear.version).encode()
+        except ValueError as e:
+            out(f"{e}\n")
+            return 1
+        return 0
     if action == "commit":
         if devicetools_lines(pending[user]) == devicetools_lines(gear.running_boot()):
             out("No configuration changes to commit\n")
@@ -1641,6 +1782,104 @@ def _vyatta(shell, argv, stdin, out, err):
     return 1
 
 
+def _vyatta_op(shell, argv, stdin, out, err):
+    """EdgeOS's operational commands for scripts (vyatta-op-cmd-wrapper): show system image, and
+    add system image FILE, which writes the image as ubnt-upgrade does, saying so as it goes. Like
+    the real wrapper it exits 0 whatever happened: show system image tells."""
+    words, gear = argv[1:], shell.gear
+    if words[:3] == ["show", "system", "image"]:
+        out("The system currently has the following image(s) installed:\n\n" + "".join(
+            f"{i['name']}" + (" (running image)" if i["running"] else "") + (" (default boot)" if i["default"] else "")
+            + "\n" for i in gear.images))
+    elif words[:3] == ["add", "system", "image"] and len(words) == 4:
+        _add_image(gear, words[3], out)
+    else:
+        out(f"Invalid command: [{' '.join(words)}]\n")
+    return 0
+
+
+def _add_image(gear, path: str, out) -> None:
+    out("Checking upgrade image...")
+    data = gear.read(path) or b""
+    m = re.match(rf"{FIRMWARE_MARK} product=(\S+) version=(\S+)".encode(), data)
+    if any(i["default"] and not i["running"] for i in gear.images):
+        out("Failed\nThe system needs a reboot before upgrade: a new image is waiting to boot.\n")
+        return
+    if not m or m.group(1).decode().lower() != gear.firmware.split("ER-", 1)[-1].split(".")[0].lower():
+        out("Failed\nThe image does not support the device.\n")
+        return
+    if devicetools_lines(gear.read(EDGEOS_CONFIG) or b"") != devicetools_lines(gear.running_boot()):
+        out("Done\nThe configuration changes have not been saved: save them, or the upgrade loses them. "
+            "Upgrade aborted.\n")
+        return
+    out("Done\nPreparing to upgrade...Done\nCopying upgrade image...Done\nRemoving old image...Done\n")
+    with gear.lock:
+        gear.images[:] = [i for i in gear.images if i["running"]]
+        for image in gear.images:
+            image["default"] = False
+    time.sleep(DELAYS["image write"])
+    with gear.lock:
+        gear.images.append({"name": f"v{m.group(2).decode()}.5862409.250924.1407", "running": False, "default": True})
+    out("Checking upgrade image...Done\nCopying config data...Done\nFinalizing the upgrade...Done\n"
+        "Upgrade completed\n")
+
+
+def _cli_shell_api(shell, argv, stdin, out, err):
+    """EdgeOS's cli-shell-api showConfig --show-cfg1 FILE --show-cfg2 @ACTIVE --show-context-diff:
+    the lines where its boot config and the config it runs differ (committed, not saved)."""
+    if argv[1:2] != ["showConfig"]:
+        err(f"cli-shell-api: {' '.join(argv[1:2])}: not supported here\n")
+        return 1
+    gear = shell.gear
+    boot, active = devicetools_lines(gear.read(EDGEOS_CONFIG) or b""), devicetools_lines(gear.running_boot())
+    for line in difflib.unified_diff(boot, active, lineterm="", n=0):
+        if line[:1] in "+-" and not line.startswith(("+++", "---")):
+            out(line + "\n")
+    return 0
+
+
+def _edit_login(text: str, action: str, name: str, rest: list, version: str) -> str:
+    """config.boot with `set|delete system login user NAME REST...` done to it, as EdgeOS does it:
+    a plaintext-password is hashed (SHA-512-crypt) into encrypted-password, and checked against
+    EdgeOS 3's rules where it runs 3.x. ValueError: what EdgeOS says when it refuses."""
+    from opendisco import devicetools
+    block = re.compile(rf"(?ms)^( *)user {re.escape(name)} \{{\n.*?^\1\}}\n")
+    found = block.search(text)
+    if action == "delete":
+        if not found:
+            raise ValueError(f"Nothing to delete (the specified node [system login user {name}] does not exist)")
+        return text[:found.start()] + text[found.end():]
+    values = {"encrypted-password": "*", "level": "admin", "full-name": None}
+    if found:
+        for key in values:
+            m = re.search(rf"(?m)^\s*{key} (\S.*)$", found.group(0))
+            if m:
+                values[key] = m.group(1).strip()
+    if rest[:2] == ["authentication", "plaintext-password"] and len(rest) == 3:
+        password = rest[2]
+        if devicetools.version_key(version)[:1] >= (3,) and (len(password) < 12 or not all(
+                re.search(pattern, password) for pattern, _what in devicetools.EDGEOS3_PASSWORD)):
+            raise ValueError("Password must be at least 12 characters long and contain lower case, upper case, digit "
+                             "and special characters\nValue validation failed\nSet failed")
+        salt = hashlib.sha256((name + password).encode()).hexdigest()[:16]
+        values["encrypted-password"] = devicetools.sha_crypt(password, salt, None, True)
+    elif rest[:1] in (["level"], ["full-name"]) and len(rest) == 2:
+        values[rest[0]] = rest[1]
+    indent = found.group(1) if found else " " * 8
+    rendered = (f"{indent}user {name} {{\n{indent}    authentication {{\n"
+                f"{indent}        encrypted-password {values['encrypted-password']}\n"
+                f'{indent}        plaintext-password ""\n{indent}    }}\n'
+                + (f"{indent}    full-name {values['full-name']}\n" if values["full-name"] else "")
+                + f"{indent}    level {values['level']}\n{indent}}}\n")
+    if found:
+        return text[:found.start()] + rendered + text[found.end():]
+    login = re.search(r"(?ms)^( *)login \{\n.*?^\1\}\n", text)
+    if not login:
+        raise ValueError("The specified configuration node is not valid")
+    close = login.end() - len(login.group(1)) - 2  # before the login node's closing brace
+    return text[:close] + rendered + text[close:]
+
+
 def devicetools_lines(data: bytes) -> list:
     from opendisco import devicetools
     return devicetools.boot_lines(data.decode("utf-8", "replace"))
@@ -1652,18 +1891,21 @@ BUILTINS = {"echo": _echo, "printf": _printf, "test": _test, "[": _test, "exit":
             "md5sum": _md5sum_bytes, "wc": _wc, "head": _head_tail, "tail": _head_tail, "grep": _grep,
             "sed": _sed, "id": _id, "uname": _uname, "sleep": _sleep, "date": _date, "uptime": _uptime,
             "hostname": _hostname, "ls": _ls, "nc": _nc, "sg": _sg, "sudo": _sudo, "help": _help,
-            "chmod": _true, "mkdir": _true, "sync": _true}
+            "chmod": _true, "mkdir": _true, "sync": _true, "umask": _true, "df": _df}
 COMMANDS = {"ip": _ip, "ifconfig": _ifconfig, "cfgmtd": _cfgmtd, "softrestart": _softrestart,
             "fwupdate": _fwupdate, "reboot": _reboot, "wstalist": _wstalist, "mca-status": _mca_status,
-            "lldpcli": _lldpcli, "vyatta": _vyatta}
+            "ubntbox": _ubntbox, "lldpcli": _lldpcli, "vyatta": _vyatta, "vyatta-op": _vyatta_op,
+            "cli-shell-api": _cli_shell_api}
 # Where each kind of device keeps its programs: path -> COMMANDS' name.
 COMMON = {"/sbin/ip": "ip", "/sbin/ifconfig": "ifconfig", "/sbin/reboot": "reboot"}
 PROGRAMS = {
     "airos": {"/sbin/cfgmtd": "cfgmtd", "/usr/etc/rc.d/rc.softrestart": "softrestart", "/sbin/fwupdate": "fwupdate",
-              "/usr/www/wstalist": "wstalist", "/usr/bin/mca-status": "mca-status"},
+              "/usr/www/wstalist": "wstalist", "/usr/bin/mca-status": "mca-status", "/bin/ubntbox": "ubntbox"},
     "isp": {"/sbin/cfgmtd": "cfgmtd", "/usr/etc/rc.d/rc.softrestart": "softrestart",
             "/usr/bin/mca-status": "mca-status"},
-    "edgeos": {"/opt/vyatta/sbin/vyatta-cfg-cmd-wrapper": "vyatta", "/usr/sbin/lldpcli": "lldpcli"},
+    "edgeos": {"/opt/vyatta/sbin/vyatta-cfg-cmd-wrapper": "vyatta",
+               "/opt/vyatta/bin/vyatta-op-cmd-wrapper": "vyatta-op", "/opt/vyatta/bin/cli-shell-api": "cli-shell-api",
+               "/usr/sbin/lldpcli": "lldpcli"},
 }
 
 
@@ -1680,7 +1922,7 @@ class Program:
         self.network, self.target, self.write, self.ended = network, target, write, ended
         self.line, self.queue, self.busy, self.done = "", [], False, False
         self.lock = threading.Lock()
-        self.stage = "password" if target.get("password") is None else "login"
+        self.stage = "password" if not target.get("password") else "login"  # none given: asked, as ssh does
         self.gear = None
         self.shell = None
 
@@ -1833,12 +2075,13 @@ class Console:
     """phonessh.Shell's stand-in: an SSH session in the phones' Tools console, to a made-up
     device. on_output(text) and on_closed(reason) are called from a thread of its own."""
 
-    def __init__(self, login, on_output, on_closed, cols: int = 80, rows: int = 24):
+    def __init__(self, login, on_output, on_closed, cols: int = 80, rows: int = 24, command: str | None = None,
+                 **more):
         if not _demo(login):
-            self.real = real.Shell(login, on_output, on_closed, cols, rows)
+            self.real = real.Shell(login, on_output, on_closed, cols, rows, command=command, **more)
             return
-        self.real = None
-        self.program = Program(_network(), _target(login), on_output, on_closed)
+        self.real, self.error = None, None
+        self.program = Program(_network(), _target(login, command), on_output, on_closed)
         threading.Thread(target=self.program.start, daemon=True).start()
 
     def send(self, text: str) -> None:
@@ -1913,12 +2156,14 @@ def session_factory(real_session):
             self.alive = True
             self.program = None
             emit = lambda text: self._emit(text.encode("utf-8"))  # noqa: E731
-            if self.kind == "ping" and not self.argv[0].endswith("ssh"):
+            if self.kind == "ping" and self.argv and not self.argv[0].endswith("ssh"):
                 self.stop = threading.Event()
                 ip = self.argv[-1]
                 threading.Thread(target=self._ping, args=(ip, emit), daemon=True).start()
                 return
-            target = parse_ssh(self.argv)
+            if getattr(self, "forward", None):  # a web UI's forward: there's none to reach
+                return self._closed("The demo network's devices are made up: they have no web UI to open.")
+            target = dict(self.own) if getattr(self, "own", None) else parse_ssh(self.argv)
             password = self.password
             if isinstance(password, dict):
                 password = password.get(target["alias"]) or password.get(target["ip"])
@@ -1962,3 +2207,16 @@ def session_factory(real_session):
             self.alive = False
 
     return DemoSession
+
+
+def own_session_factory(real_session):
+    """terminal.OwnSession's stand-in while the demo shows, for a computer without ssh, whose
+    sessions start from a login (and a command, or a forward) rather than ssh's arguments.
+    real_session: the real Session class."""
+
+    class DemoOwnSession(session_factory(real_session)):
+        def __init__(self, sid, device_key, kind, title, login, command=None, forward=None):
+            self.own, self.forward = _target(login, command), forward
+            super().__init__(sid, device_key, kind, title, [], login.password)
+
+    return DemoOwnSession

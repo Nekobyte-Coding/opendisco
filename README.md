@@ -338,13 +338,19 @@ address in it is invented.
 
 - **The device tools work on it,** on simulated devices. Log in as `demo` / `demo`; the bench
   spare takes its factory login, `ubnt` / `ubnt`, and shows `FACTORY-LOGIN` until Change login
-  gives it another. The login windows start filled in. Firmware check and update, Edit config
-  (Save and Apply), Change login, config backups, Restore and Upload, Reboot, Scan from device,
-  SSH and ping in the Terminal tab (the phones' Tools console), latency, Rescan and the port
-  search all run against them, about as long as on real gear, minus most of the minutes a
-  firmware update or a reboot takes offline.
-  - The firmware server and the firmware file are simulated too: nothing is downloaded. The
-    radio restarts and comes back running the new version.
+  gives it another. The login windows start filled in, and every device's login is remembered
+  (in the demo's memory), so Back up all configs backs up all of them. Firmware check and update,
+  Edit config (Save and Apply), Change login, Link health, config backups, Compare, Restore and
+  Upload, Back up all, Reboot, Scan from device, SSH and ping in the Terminal tab (the phones'
+  Tools console), latency, Rescan and the port search all run against them, about as long as on
+  real gear, minus most of the minutes a firmware update or a reboot takes offline.
+  - The firmware server and the firmware file are simulated too: nothing is downloaded. A radio
+    restarts and comes back running the new version. The EdgeRouter (ER-X, EdgeOS
+    2.0.9-hotfix.7) adds EdgeOS 3.0.1 as the image it boots, keeps 2.0.9-hotfix.7 as its backup
+    and restarts into it; from then on Change login holds a new password to EdgeOS 3's rules.
+  - The sectors' link health was read already: on Tower1-Sector-South, CPE-Mill-Road (where
+    trees are growing into the path) shows a weak signal, uneven chains, a low SNR and low
+    capacity. Link health reads it again; each radio answers as airOS 8 does.
   - Tower1-Sector-East has a station on a subnet only the sector reaches: Scan from device on
     the sector lists it under it, and the tools reach it through the sector.
   - The devices have no web UI to open.
@@ -354,9 +360,9 @@ address in it is invented.
   app's data folder or its settings. Start in Demo network again lists the made-up devices as
   they are now (a firmware update or a new name shows). A firmware update or reboot under way
   has to finish before a real scan can start.
-- **Always labelled:** the window's title says Demo, and every export made from it (the scan
-  report, the extras, a device's report) is named `opendisco-demo-…` and stamped "Demo
-  network: made-up devices".
+- **Always labelled:** the window's title says Demo, and every export made from it (the Site
+  Report, the scan data, the extras, a device's report) is named `opendisco-demo-…` and stamped
+  "Demo network: made-up devices".
 - **On the command line,** `opendisco --demo` prints the same table, for docs and tests. `-v`,
   `--json` and `--export` work as after a scan, the exports stamped the same way.
 

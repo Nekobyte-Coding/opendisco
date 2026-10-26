@@ -6,10 +6,12 @@ address in it is invented, and nothing is sent on the network while it shows.
   demo network, phones a button while their list is empty and one in Settings. opendisco --demo
   prints its table on the command line, for docs and tests.
 - scan() lists it the way a scan would: each device's own discovery reply, its latency, the latest
-  firmware from the made-up firmware server, and the diagnostics on all that.
+  firmware from the made-up firmware server, the sectors' link health (read before: Tower1-Sector-
+  South has a weak station), and the diagnostics on all that.
 - The device tools work on it: demossh runs them on made-up devices in memory (network() builds
   them from DEVICES), with their configs, logins (demo/demo; ubnt/ubnt on the bench spare, which
-  takes its factory login), stations and firmware.
+  takes its factory login), stations, radio links and firmware (the ER-X keeps two images, and
+  updates to EdgeOS 3).
 - Demo(app) starts it in the app, and end() ends it (a real scan, or quitting). Its notes, config
   backups, known_hosts, remembered logins and factory-login flags are its own, in a temporary
   folder and in memory, deleted when it ends: nothing reaches the real data folder or
@@ -26,7 +28,7 @@ import time
 import zipfile
 from pathlib import Path
 
-from opendisco import FULL_NAME, __version__, core, demossh, devicetools, health, records
+from opendisco import FULL_NAME, __version__, core, demossh, devicetools, health, linkhealth, records
 
 MODE = "Demo network"
 MODE_HELP = "Made-up WISP gear, for trying the app without any."
@@ -55,19 +57,22 @@ DEVICES = {
                             {"freq": 60480, "chanbw": 2160, "signal": -48, "noise": -82, "distance": 3120,
                              "tx": 1800, "rx": 1800, "ccq": 99}),
     "Tower1-Sector-North": ("f4:92:bf:3c:41:10", "10.60.12.10", "R5AC-PRISM", AIRMAX.format("8.7.11"),
-                            63 * DAY + 3900, "Tower1-N", 3, 22, [2.1, 1.8, 2.4, 2.0], {"freq": 5785, "chanbw": 40}),
+                            63 * DAY + 3900, "Tower1-N", 3, 22, [2.1, 1.8, 2.4, 2.0],
+                            {"freq": 5785, "chanbw": 40, "noise": -95, "tx_power": 22}),
     "Tower1-Sector-South": ("f4:92:bf:3c:41:22", "10.60.12.11", "R5AC-PRISM", AIRMAX.format("8.7.11"),
-                            63 * DAY + 3870, "Tower1-S", 3, 22, [2.6, 2.2, 2.9, 2.3], {"freq": 5220, "chanbw": 40}),
+                            63 * DAY + 3870, "Tower1-S", 3, 22, [2.6, 2.2, 2.9, 2.3],
+                            {"freq": 5220, "chanbw": 40, "noise": -93, "tx_power": 24}),
     "Tower1-Sector-East": ("24:5a:4c:77:08:31", "10.60.12.12", "LAP-GPS", AIRMAX_WA.format("8.7.11"),
-                           18 * DAY + 600, "Tower1-E", 3, 22, [3.4, 3.1, 2.8, 3.0], {"freq": 5500, "chanbw": 20}),
+                           18 * DAY + 600, "Tower1-E", 3, 22, [3.4, 3.1, 2.8, 3.0],
+                           {"freq": 5500, "chanbw": 20, "noise": -96, "tx_power": 20}),
     "CPE-Ridge-Farm": ("78:45:58:a2:19:04", "10.60.12.40", "LBE-5AC-Gen2", AIRMAX_WA.format("8.7.11"),
                        12 * DAY + 7300, "Tower1-N", 2, 22, [8.8, 9.6, 7.9, 9.1],
                        {"freq": 5785, "chanbw": 40, "signal": -58, "noise": -95, "ccq": 96, "distance": 4200,
                         "tx": 400, "rx": 360}),
     "CPE-Mill-Road": ("e0:63:da:5e:61:7c", "10.60.12.41", "PBE-5AC-Gen2", AIRMAX_WA.format("8.7.11"), 40 * DAY + 210,
                       "Tower1-S", 2, 2222, [38.0, None, 52.4, 41.7, 47.9, None, 36.2, 44.0, 49.3, 39.8],
-                      {"freq": 5220, "chanbw": 40, "signal": -79, "noise": -92, "ccq": 61, "distance": 9800,
-                       "tx": 117, "rx": 87}),
+                      {"freq": 5220, "chanbw": 40, "signal": -79, "chains": [-79, -85], "noise": -92, "ccq": 61,
+                       "distance": 9800, "tx": 117, "rx": 87, "latency": 7}),
     "CPE-Grain-Elevator": ("68:d7:9a:30:c4:e2", "10.60.12.42", "NBE-5AC-Gen2", AIRMAX_WA.format("8.7.10"), 184,
                            "Tower1-E", 2, 22, [11.2, 10.4, 12.0, 10.9],
                            {"freq": 5500, "chanbw": 20, "signal": -63, "noise": -96, "ccq": 92, "distance": 6100,
@@ -76,7 +81,7 @@ DEVICES = {
                           22, [0.6, 0.5, 0.7, 0.6], {}),
     "CPE-Hilltop-Church": ("78:45:58:b1:7a:36", "10.60.13.20", "LBE-5AC-Gen2", AIRMAX_WA.format("8.7.11"),
                            21 * DAY + 4400, "Tower1-N", 2, 22, [14.8, 13.9, 15.6, 14.2],
-                           {"freq": 5785, "chanbw": 40, "signal": -66, "noise": -95, "ccq": 90, "distance": 7300,
+                           {"freq": 5785, "chanbw": 40, "signal": -63, "noise": -95, "ccq": 90, "distance": 7300,
                             "tx": 300, "rx": 240, "via": "Tower1-Sector-North", "found": True}),
     "CPE-Quarry-Office": ("78:45:58:c4:0e:5b", "10.60.14.40", "LBE-5AC-Gen2", AIRMAX_WA.format("8.7.11"),
                           5 * DAY + 3100, "Tower1-E", 2, 22, [9.4, 10.1, 9.8, 9.2],
@@ -276,6 +281,8 @@ def network(folder=None) -> demossh.Network:
                                    is_default=mac == FACTORY, link=link,
                                    address_on="switch0" if kind == "edgeos" else "br0")
     router = gears["Tower1-Router"]
+    router.images = [{"name": DEVICES["Tower1-Router"][3].split(".", 2)[2], "running": True, "default": True},
+                     {"name": "v2.0.9-hotfix.6.5574651.221230.1015", "running": False, "default": False}]
     for name, gear in gears.items():
         via = gear.link.get("via")
         if via:
@@ -320,7 +327,7 @@ def scan(net: demossh.Network, opts=None) -> core.ScanResult:
             dev.add_ip(gear.ip)
             dev.via.add(devicetools.FROM_DEVICE)
             dev.found_by = {"key": finder.key, "ip": finder.ip, "how": devicetools.SCAN_HOW["stations"]}
-            dev.info.update(hostname=gear.name, platform=gear.platform, firmware=gear.version)
+            dev.info.update(hostname=gear.name, platform=gear.platform, firmware=gear.firmware)  # as wstalist has them
     index = [demossh.release(*r) for r in net.releases]
     for dev in inv.devices.values():
         gear = net.find(dev.ip)
@@ -337,6 +344,9 @@ def scan(net: demossh.Network, opts=None) -> core.ScanResult:
                                       "date": check.date, "newer": check.newer, "ahead": False,
                                       "listed": time.strftime("%Y-%m-%d")}
         dev.note = NOTES.get(dev.mac or "", "")
+        if gear and gear.stations and gear.kind == "airos":  # its link health, read before (Link health…)
+            said = [gear.shell("demo").run(command)[0] for command in ("mca-status", "wstalist")]
+            linkhealth.keep(dev, linkhealth.parse([l for l in said[0].splitlines() if l.strip()], said[1]))
     diag_args = ([], [], opts)
     core.diagnose(inv, *diag_args)
     return core.ScanResult(opts, core.sorted_devices(inv), [("note", NOTE)], [], [], [], [], inv, None,
@@ -458,8 +468,10 @@ class Demo:
         self._set(app, "hidden", app.settings["hidden"])
         app._update_hidden_button()
         self._set(core, "FACTORY_LOGINS_FOUND", factory)
+        self._set(linkhealth, "READINGS", {})  # the radios' link readings: the demo's own
         self._set(app, "known_hosts", self.folder / "known_hosts")
         self._set(app, "device_notes", seed(self.folder, scan(self.network)))
+        linkhealth.READINGS.clear()  # (seed's scan read them; each scan reads them again)
         self._set(app, "firmware", health.Firmware(self.folder, on_found=lambda: app._from_worker(app._health_changed),
                                                    log=lambda m: app._from_worker(app._append_log, m, False)))
         self._set(devicetools, "BACKUP_ROOT", self.folder / devicetools.BACKUP_FOLDER)
@@ -477,7 +489,10 @@ class Demo:
             from opendisco import devicegui, terminal
             devicegui.sshrun = demossh
             self._set(devicegui, "credstore", Credentials({mac: k["password"] for mac, k in known.items()}))
-            self._set(terminal, "Session", demossh.session_factory(terminal.Session))
+            self._set(devicegui, "ssh_here", lambda: True)  # with or without an ssh program here
+            session = terminal.Session
+            self._set(terminal, "Session", demossh.session_factory(session))
+            self._set(terminal, "OwnSession", demossh.own_session_factory(session))  # (a computer without ssh)
             self._set(terminal, "in_app_terminals", lambda: True)
         title = app.main_window.title
         self._set(app.main_window, "title", f"{app.formal_name} Demo" if mobile else f"{title}: {MODE}")
