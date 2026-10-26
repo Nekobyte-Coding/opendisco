@@ -470,23 +470,29 @@ def peer_lines(reading: dict, p: dict) -> list:
     return lines
 
 
-def _summary(reading: dict) -> str:
-    """The radio's own: its mode, channel and noise floor, and when it was read."""
+def _summary(reading: dict) -> list:
+    """The radio's own, in two lines: its mode, SSID and when it was read; its channel, noise
+    floor, output power and stations."""
     mode = reading.get("mode") or "?"
-    bits = [f"access point ({mode})" if reading["ap"] else f"station ({mode})"]
+    first = f"access point ({mode})" if reading["ap"] else f"station ({mode})"
     if reading.get("essid"):
-        bits[0] += f", SSID {reading['essid']}"
+        first += f", SSID {reading['essid']}"
+    first += f", read {time.strftime('%H:%M:%S', time.localtime(reading['at']))}"
+    bits = []
     if reading.get("frequency_mhz"):
         bits.append(f"{reading['frequency_mhz']} MHz" + (f", {reading['width_mhz']} MHz wide"
                                                          if reading.get("width_mhz") else ""))
-    if reading["ap"]:
-        n = len(reading.get("stations") or [])
-        bits.append(f"{n} station{'' if n == 1 else 's'}")
     if reading.get("noise_dbm") is not None:
         bits.append(f"noise floor {_dbm(reading['noise_dbm'])}")
     if reading.get("tx_power_dbm") is not None:
         bits.append(f"output {reading['tx_power_dbm']} dBm")
-    return ", ".join(bits) + f"; read {time.strftime('%H:%M:%S', time.localtime(reading['at']))}"
+    if reading["ap"]:
+        n = len(reading.get("stations") or [])
+        bits.append(f"{n} station{'' if n == 1 else 's'}")
+    if not bits:
+        return [first]
+    text = ", ".join(bits)
+    return [first, text[0].upper() + text[1:]]
 
 
 def _peer_title(p: dict) -> str:
@@ -499,7 +505,8 @@ def detail_rows(d) -> list:
     reading = reading_of(d)
     if not reading:
         return []
-    rows = [("Link", _summary(reading))]
+    own = _summary(reading)
+    rows = [("Link", own[0])] + [("", line) for line in own[1:]]
     peers = reading.get("stations") or []
     if not peers:
         rows.append(("", "no stations associated" if reading["ap"] else "not associated with an AP"))

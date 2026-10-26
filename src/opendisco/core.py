@@ -5268,7 +5268,7 @@ table{{border-collapse:collapse;width:100%;font-size:13px}}th,td{{border-bottom:
 th{{background:#f4f4f4;position:sticky;top:0}}tr.issues td{{border-bottom:2px solid #ccc;color:#444}}ul{{margin:0;padding-left:18px}}
 pre{{background:#f6f6f6;padding:10px;overflow-x:auto}}.wrap{{overflow-x:auto}}.note{{white-space:pre-wrap;margin-bottom:4px}}
 table.link{{width:auto;margin-top:4px}}table.link th,table.link td{{border:0;padding:1px 8px 1px 0;background:none;position:static;font-weight:normal}}
-table.link th{{color:#666;white-space:nowrap}}
+table.link th{{opacity:.7;white-space:nowrap}}
 @media (prefers-color-scheme: dark){{body{{background:#121212;color:#ddd}}th{{background:#222}}th,td{{border-color:#333}}pre{{background:#1e1e1e}}}}</style>
 </head><body><h1>OpenDisco</h1><p>{when} &middot; {len(res.devices)} device(s) &middot; {res.elapsed:.0f}s</p>
 <div class="wrap"><table><tr>{head}</tr>{''.join(rows)}</table></div>
