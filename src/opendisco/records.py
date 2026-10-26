@@ -282,6 +282,14 @@ def _pack_backups(z: zipfile.ZipFile, folder: str, paths) -> list:
     return names
 
 
+def _linkhealth():
+    try:
+        from opendisco import linkhealth
+        return linkhealth
+    except Exception:  # not in this build
+        return None
+
+
 def _health():
     try:
         from opendisco import health
@@ -699,7 +707,9 @@ DEMO_STAMP = "Demo network: made-up devices"
 # core.STATUS_LABELS each gathers). Every other issue, one added later included, goes under Other
 # issues, device by device.
 REPORT_SECTIONS = [("Factory logins and factory defaults", ("FACTORY-LOGIN", "DEFAULT")),
-                   ("Latency", ("HIGH-LATENCY", "PING-LOSS"))]
+                   ("Latency", ("HIGH-LATENCY", "PING-LOSS")),
+                   ("airMAX link health", ("WEAK-SIGNAL", "HOT-SIGNAL", "CHAIN-IMBALANCE", "LOW-SNR", "LOW-CAPACITY",
+                                           "LOW-QUALITY"))]
 LEVEL_NAMES = {"error": "Errors", "warn": "Warnings", "note": "Notices"}
 ATTENTION_SHOWN = 10  # the summary's list of devices needing attention first
 LATENCY_SHOWN = 10  # the Latency table's slowest devices, besides the ones flagged
@@ -733,6 +743,8 @@ text-align:left;vertical-align:top}th{background:var(--head);font-weight:600}.wr
 td.nw{white-space:nowrap}@media screen and (max-width:700px){table.wide{min-width:860px}}
 ul,ol{margin:4px 0;padding-left:22px}li{margin:2px 0}
 .device{margin:10px 0 14px}.device h3 small{font-weight:normal;color:var(--muted)}
+table.link{width:auto;margin-top:4px}table.link th,table.link td{border:0;padding:1px 10px 1px 0;background:none;
+font-weight:normal}table.link th{color:var(--muted);white-space:nowrap}
 .note{white-space:pre-wrap;background:var(--note);padding:6px 10px;border-left:3px solid var(--stamp-line)}
 pre{background:var(--head);padding:10px;overflow-x:auto;font-size:12px;white-space:pre-wrap}
 .error{color:var(--error)}.warn{color:var(--warn)}.info{color:var(--info)}.ok{color:var(--ok)}.muted{color:var(--muted)}
@@ -1002,6 +1014,24 @@ def _latency_table(devices, tags, ids: dict) -> str:
     return "\n".join(out)
 
 
+def _link_section(devices, title, tags, ids: dict) -> str:
+    """airMAX radios whose link was read (Link health…) or flagged: each one's findings, then its
+    reading (linkhealth.html). Left out when no radio's link was read."""
+    links = _linkhealth()
+    blocks = []
+    for d in devices:
+        found = [i for i in d.issues if i[1] in tags]
+        reading = links.html(d) if links is not None and (d.health or {}).get("link") else ""
+        if found or reading:
+            blocks.append(f'<div class="device">{_device_heading(d, ids)}'
+                          + (f"<ul>{_issue_list(d, found)}</ul>" if found else '<p class="ok">Nothing flagged.</p>')
+                          + f"{reading}</div>")
+    if not blocks:
+        return ""
+    flagged = sum(1 for d in devices if any(tag in tags for _, tag, _ in d.issues))
+    return f"<h2>{escape(title)}{f' ({flagged})' if flagged else ''}</h2>" + "\n".join(blocks)
+
+
 def _notes_section(rows, ids: dict) -> str:
     noted = [d for d, _ in rows if d.note]
     if not noted:
@@ -1044,10 +1074,11 @@ def site_report(res, site: str = "", demo: bool = False) -> str:
     out.append(f"<h2>{escape(title)}{f' ({len(found)})' if found else ''}</h2>" + ("\n".join(found) if found else
                '<p class="ok">No device takes its factory login or reports factory defaults.</p>'))
     out.append(_firmware_section(devices, ids))
-    for title, tags in REPORT_SECTIONS[1:]:
-        found = _issue_section(devices, tags, ids)
-        out.append(f"<h2>{escape(title)}{f' ({len(found)})' if found else ''}</h2>"
-                   + (_latency_table(devices, tags, ids) if title == "Latency" else "") + "\n".join(found))
+    title, tags = REPORT_SECTIONS[1]
+    found = _issue_section(devices, tags, ids)
+    out.append(f"<h2>{escape(title)}{f' ({len(found)})' if found else ''}</h2>"
+               + _latency_table(devices, tags, ids) + "\n".join(found))
+    out.append(_link_section(devices, *REPORT_SECTIONS[2], ids))
     others = _issue_section(devices, None, ids)
     out.append(f"<h2>Other issues ({len(others)})</h2>" + "\n".join(others) if others else
                '<h2>Other issues</h2><p class="ok">None.</p>')
