@@ -34,6 +34,7 @@ MODES = [
      ["--vlans"], "vlans"),
     ("Direct to a device", "Wired straight into one radio: find its IP and VLAN from what it says, then probe it.",
      ["--direct"], "vlans"),
+    ("Demo network", "Made-up WISP gear, for trying the app without any.", ["--demo"], None),  # demo.py
 ]
 COLUMNS = list(core.EXPORT_COLUMNS)
 ACCESSORS = [c.lower() for c in COLUMNS]
@@ -181,6 +182,7 @@ class OpenDiscoApp(toga.App):
         self.modes = [m for m in MODES if m[3] is None or offered.get(m[3])]
         self.offers_listening = offered["listen"]
         self.result = None  # the last finished scan
+        self.demo = None  # demo.Demo while the demo network shows
         self.live_inv = None  # the inventory of the scan that's running
         self.running = False
         self.rescanning = False
@@ -441,7 +443,8 @@ class OpenDiscoApp(toga.App):
     def _save_settings(self):
         try:
             self.settings_path.parent.mkdir(parents=True, exist_ok=True)
-            self.settings_path.write_text(json.dumps({k: v for k, v in self.settings.items()
+            settings = self.demo.saved_settings(self.settings) if self.demo else self.settings  # never the demo's
+            self.settings_path.write_text(json.dumps({k: v for k, v in settings.items()
                                                       if k in SAVED_SETTINGS}, indent=1), encoding="utf-8")
         except OSError:
             pass
@@ -814,7 +817,7 @@ class OpenDiscoApp(toga.App):
                 self.aliases_choice = self.aliases.value
             elif not forced and self.aliases_choice is not None:
                 self.aliases.value, self.aliases_choice = self.aliases_choice, None
-            self.aliases.enabled = not forced and name != "Quick"
+            self.aliases.enabled = not forced and name != "Quick" and "--demo" not in flags
             if forced:
                 self.aliases.value = True
         if self.listen.value in (20, 45):  # a time set by hand stays
@@ -875,6 +878,16 @@ class OpenDiscoApp(toga.App):
     async def on_start(self, widget, **kwargs):
         if self.running:
             return
+        if "--demo" in self._selected_mode()[2]:
+            await self._show_demo()
+            return
+        if self.demo is not None:  # a real scan ends the demo
+            busy = self.demo.busy()
+            if busy:
+                self.status.text = f"The demo network's {busy} is still running: scan once it has finished."
+                return
+            self.demo.end()
+            self.demo = None
         if self.caps["platform"] == "windows" and not await self._windows_ready():
             return
         try:
@@ -894,6 +907,28 @@ class OpenDiscoApp(toga.App):
         self._update_find_buttons()
         threading.Thread(target=self._scan, args=(opts,), daemon=True).start()
         asyncio.create_task(self._refresh_while_running())
+
+    async def _show_demo(self):
+        """The demo network (demo.py): made-up gear, listed at once, with nothing sent on the network.
+        Starting it again lists the made-up devices as they are now."""
+        from opendisco import demo
+        await self._release_hold()
+        if self.demo is None:
+            self.demo = demo.Demo(self)
+        self.result = self.live_inv = self.shown_packets = None
+        self.table.data = []
+        self.details.value = self.packets.value = self.wire.value = self.notes.value = ""
+        self.log.value = f"{time.strftime('%H:%M:%S')}  {demo.MODE}: {demo.NOTE}\n"
+        self._finished(self.demo.scan(), None)
+        self.status.text = self.demo.status(self.result)
+
+    def try_demo(self, *args, **kwargs):
+        """Help > Try the demo network (phones: Settings, or the button over an empty list)."""
+        if self.running or self.rescanning or self.finding:
+            self.status.text = "The demo network opens once the scan has finished."
+            return
+        self.mode.value = next(m[0] for m in self.modes if "--demo" in m[2])
+        asyncio.create_task(self.on_start(None))
 
     def on_stop(self, widget, **kwargs):
         core.STOP.set()
@@ -1008,6 +1043,9 @@ class OpenDiscoApp(toga.App):
         self.status.text = (f"{len(result.devices) - hidden} device(s), {heard} answered UBNT discovery, "
                             f"{result.elapsed:.0f}s" + (f", {hidden} hidden" if hidden else "")
                             + (" (stopped early)" if result.interrupted else ""))
+        if not result.devices and not result.trunks and self.demo is None:  # no gear here: the demo shows what it does
+            self.status.text += (". No gear here? " + ("Try the demo network" if self.phone_ui else
+                                                       "Help › Try the demo network") + " shows made-up devices.")
         self.export_button.enabled = bool(result.devices or result.trunks)
         self._update_find_buttons()
         self.hold_button.enabled = bool(result.mgr) and any(d.alias for d in result.devices)
@@ -1225,6 +1263,10 @@ class OpenDiscoApp(toga.App):
         if d is None:
             self.status.text = "Select a device first."
             return
+        if name == "web" and self.demo is not None:
+            from opendisco import demo
+            self.status.text = demo.NO_WEB_UI
+            return
         title, enabled = self._menu_state(d)[name]
         if enabled and not self.caps["mobile"]:
             from opendisco import devicegui
@@ -1301,9 +1343,10 @@ class OpenDiscoApp(toga.App):
             buttons.insert(0, toga.Button("Delete note", on_press=lambda w, **kw: finish(False)))
         if not self.caps["mobile"]:
             buttons.insert(1 if d.note else 0, toga.Box(style=Pack(flex=1)))
+        kept = (f"in OpenDisco's data on {self._here()}, through rescans, restarts and updates" if self.demo is None
+                else "by the demo network until it ends")
         content = toga.Box(style=Pack(direction=COLUMN, flex=1, margin=14, gap=8), children=[
-            toga.Label(self._wrap(f"Kept with {d.mac} in OpenDisco's data on {self._here()}, through rescans, "
-                                  "restarts and updates; Details, the search and the exports include it.")),
+            toga.Label(self._wrap(f"Kept with {d.mac} {kept}; Details, the search and the exports include it.")),
             text, toga.Box(style=Pack(direction=ROW, gap=8), children=buttons)])
         close = self._show_panel(f"Note: {who}", content, (560, 300), resizable=True)
         text.focus()
@@ -1910,7 +1953,7 @@ class OpenDiscoApp(toga.App):
         """Save the Site Report (records.site_report) for the site last named."""
         res, site = self.result, self.settings.get(records.SITE_KEY, "")
         await self._save_export(records.report_file_name(site), "Save the Site Report", ["html"],
-                                lambda path: core.write_export(res, path, site))
+                                lambda path: core.write_export(res, path, site, demo=self.demo is not None))
 
     def _remember_site(self, name: str):
         """The Site Report's site name, offered again next time."""
@@ -1943,6 +1986,10 @@ class OpenDiscoApp(toga.App):
         """Save an export where this platform keeps files: a save dialog on desktops; on phones, the
         share sheet (iOS) or Downloads (Android). write(path) writes it in the format its
         extension names."""
+        if self.demo is not None:  # named and stamped as the demo's
+            from opendisco import demo
+            name, made = demo.file_name(name), write
+            write = lambda path: (made(path), demo.stamp_file(path))  # noqa: E731
         try:
             if self.caps["mobile"]:  # Toga has no save dialog there
                 folder = Path(self.paths.cache) / "exports"  # in place of the last one: shared already, or not wanted
@@ -2090,6 +2137,9 @@ class OpenDiscoApp(toga.App):
             self.commands.add(
                 toga.Command(self.show_terms, text="Terms of Use…", group=group, section=section, order=2),
                 toga.Command(self.show_licenses, text="Open-source licenses…", group=group, section=section, order=3))
+        if not self.caps["mobile"]:  # (phones: in Settings, and over an empty list)
+            self.commands.add(toga.Command(self.try_demo, text="Try the demo network", group=toga.Group.HELP,
+                                           section=-2 if platform == "macos" else 1))
         if not self.phone_ui:
             settings = toga.Command.standard(self, toga.Command.PREFERENCES, text="Settings…")
             self.commands.add(settings or toga.Command(lambda command, **kwargs: self.preferences(), text="Settings…"))
@@ -2282,6 +2332,8 @@ class OpenDiscoApp(toga.App):
         finish = toga.Box(style=Pack(direction=ROW), children=[toga.Box(style=Pack(flex=1)),
                                                               toga.Button("Done", on_press=done)])
         if self.caps["mobile"]:  # (desktops: beside About)
+            options.append(toga.Button("Try the demo network",
+                                       on_press=lambda widget, **kwargs: (done(), self.try_demo())))
             reading = [toga.Button("Terms of Use", on_press=self.show_terms),
                        toga.Button("Open-source licenses", on_press=self.show_licenses)]
             if getattr(self, "wide", False):  # an Android tablet: beside Done, or in landscape Done is off the page
@@ -2665,6 +2717,8 @@ class OpenDiscoApp(toga.App):
             self.result.mgr.remove_all()  # never leave a temporary address behind
         if self.multicast_lock is not None:
             self.multicast_lock.release()
+        if self.demo is not None:
+            self.demo.end(quitting=True)  # its folder
         return True
 
 

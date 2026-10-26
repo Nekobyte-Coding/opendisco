@@ -2,9 +2,9 @@
 
 A phone has no menus, no second windows and no room for a twelve-column table, and lets an app
 run no other program. So there the app opens on its device list, under Quick Scan, Full Scan and
-Stop and a search, with Export (the Site Report and the other reports), the scan's Notes and Log
-and Settings in the title bar. Tapping a device opens
-its own page, titled with its name and address, with its tabs along the bottom: Details,
+Stop and a search (and while it's empty, Try the demo network: demo.py), with Export (the Site
+Report and the other reports), the scan's Notes and Log and Settings in the title bar. Tapping a
+device opens its own page, titled with its name and address, with its tabs along the bottom: Details,
 Packets, Tools, Notes and Log. Tools pings the device (core.ping: the app's own ICMP), opens an
 SSH session to it (phonessh: the app's own SSH), finds its ports, opens its web UI, rescans it,
 reads what it sees of its neighbours (Scan from device, as on the desktop: devicetools), checks
@@ -154,10 +154,13 @@ def main_screen(app) -> toga.Box:
         app.table,
         toga.Box(style=Pack(direction=ROW, align_items="center", gap=8), children=[app.spinner, status_here]),
     ])
+    app.list_box = content
+    app.demo_button = toga.Button("Try the demo network", on_press=lambda w, **kw: app.try_demo())
     style = native(app).style_button
     style(quick)
     style(full)
     style(app.stop_button, "tinted", "systemRedColor")
+    style(app.demo_button, "tinted")
     hook(app, "search_field")(app, app.search)
     app.wide = hook(app, "wide")(app)
     if not app.wide:
@@ -519,8 +522,18 @@ def find_port(app):
     app._device_action(FIND_KINDS[app.port_picker.value])
 
 
+def update_demo_button(app):
+    """Try the demo network, under the scan buttons while the list is empty and no scan runs."""
+    shown = not app.running and not (app.result and app.result.devices)
+    if shown and app.demo_button not in app.list_box.children:
+        app.list_box.insert(1, app.demo_button)
+    elif not shown and app.demo_button in app.list_box.children:
+        app.list_box.remove(app.demo_button)
+
+
 def update_tools(app):
     """Enable what the open device can do; the buttons of what's running read Stop or Disconnect."""
+    update_demo_button(app)
     retitle = native(app).retitle
     d = app._selected_device()
     state = app._menu_state(d)
