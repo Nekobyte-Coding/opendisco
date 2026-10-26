@@ -1,10 +1,11 @@
 """The device tools' windows (desktop only): firmware check and update, the config editor, config
-backups (list, restore, upload with a diff first), reboot, locate, the new login, Scan from
-device (also from an address, for a device not in the table), and the login window they share,
-which can remember a device's login in the operating system's credential store. The work itself
-is opendisco.devicetools, run in worker threads.
+backups (list, compare, restore, upload with a diff first, back up all), reboot, locate, the new
+login, Scan from device (also from an address, for a device not in the table), and the login
+window they share, which can remember a device's login in the operating system's credential
+store. The work itself is opendisco.devicetools, run in worker threads.
 
-app.py only lists the actions in DEVICE_ACTIONS and calls menu_state(), act() and scan_address().
+app.py only lists the actions in DEVICE_ACTIONS and calls menu_state(), act(), scan_address() and
+back_up_all().
 """
 import asyncio
 import os
@@ -32,6 +33,7 @@ _busy: dict = {}  # device key -> what's running on it
 _in_use: dict = {}  # downloaded firmware path -> updates using it
 _locating: dict = {}  # device key -> the login its LED was set blinking with
 _backup_windows: dict = {}  # MAC -> its open Config backups window
+_backup_all = None  # the Back up all configs window, while it's open
 
 
 ROUTED = ("ssh", "ping", "web", "rescan", "find_http", "find_https", "find_ssh", "all_ports")
@@ -1010,9 +1012,66 @@ async def backup_flow(app, d):
     _refresh_backups(d)
 
 
+async def compare_flow(app, d, backup, other=None):
+    """What differs between two of the device's backups (the older first), or, with one, between
+    it and the config the device has now, read over SSH; that one can then be kept as a backup."""
+    kind = devicetools.config_kind(d) or str(backup.meta.get("kind") or "")
+    try:
+        old, new = backup.text(), other.text() if other is not None else None
+    except OSError as e:
+        await app.main_window.dialog(toga.ErrorDialog("Compare", str(e)))
+        return
+    names = (f"backup {backup.date}", f"backup {other.date}" if other is not None else "on the device now")
+    if other is None:
+        if _busy.get(d.key):
+            app.status.text = f"{d.ip} is {_busy[d.key]}: compare once that's done."
+            return
+        login = await ask_route(app, d, f"Log in to read its config ({devicetools.CONFIG_FILES[kind]}) and compare it "
+                                        f"with the backup taken {backup.date}.")
+        if not login:
+            return
+        _busy[d.key] = "reading its config"
+        app.spinner.start()
+        app.status.text = f"Reading the config of {d.ip} to compare…"
+        try:
+            new = await _work(devicetools.read_current, login, kind)
+        except (sshrun.SSHError, devicetools.ToolError) as e:
+            app.status.text = f"{d.ip}: {e}"
+            await app.main_window.dialog(toga.ErrorDialog("Compare", str(e)))
+            return
+        finally:
+            _busy.pop(d.key, None)
+            app.spinner.stop()
+        app.status.text = ""
+    diff, changed = devicetools.config_diff(old, new, *names)
+    heading = (f"{_label(d)}: {changed} line(s) differ between the {names[0]} and the "
+               f"{'config ' + names[1] if other is None else names[1]}." if changed else
+               f"{_label(d)}: no differences between the {names[0]} and the "
+               f"{'config ' + names[1] if other is None else names[1]}.")
+    note = (f"Lines marked - are only in the first ({names[0]}), lines marked + only in the second ({names[1]}); "
+            "the ones around them are in both, for context.")
+    buttons = [("Close", None, True)]
+    if other is None:  # the config now can be kept, unless the last backup has it already
+        latest = devicetools.list_backups(d.mac)
+        try:
+            same = bool(latest) and latest[0].path.read_bytes() == new.encode("utf-8")
+        except OSError:
+            same = False
+        buttons.insert(0, ("Same as its last backup" if same else "Keep it as a backup", "keep", not same))
+    if await _diff_view(app, f"Compare configs: {d.ip}", heading, diff, note, buttons) != "keep":
+        return
+    try:
+        kept = devicetools.save_backup(d, new, kind, "backup")
+    except (OSError, devicetools.ToolError) as e:
+        await app.main_window.dialog(toga.ErrorDialog("Config backup", str(e)))
+        return
+    app._append_log(f"Config backup of {_label(d)}: {kept.path}")
+    _refresh_backups(d)
+
+
 async def backups_flow(app, d):
     window = _backup_windows.get(d.mac)
-    if window is not None:
+    if window is not None and not window.window.closed:
         window.window.show()
         return
     BackupsWindow(app, d)
@@ -1036,23 +1095,26 @@ def _show_folder(path: Path) -> None:
 
 
 class BackupsWindow:
-    """The configs kept for one device, the newest first, with the selected one's text; Restore
+    """The configs kept for one device, the newest first, with the selected one's text; Compare
+    shows what differs between two selected, or between one and the device's config now; Restore
     uploads one (after a diff), Save a copy writes it elsewhere."""
 
     def __init__(self, app, d):
         self.app, self.d = app, d
         self.backups = []
         self.table = toga.Table(columns=["Taken", "Why", "Address", "Firmware", "Size"], on_select=self.selected,
-                                style=Pack(flex=1))
+                                multiple_select=True, style=Pack(flex=1))
         self.text = toga.MultilineTextInput(readonly=True, style=Pack(flex=2, font_family="monospace", font_size=11))
         self.state = toga.Label("", style=Pack(flex=1))
         offered = devicetools.offers(d, "backup")[0] and bool(d.ip) and sshrun.available()
+        self.compare_button = toga.Button("Compare…", on_press=self.compare, enabled=False)
         self.restore_button = toga.Button("Restore…", on_press=self.restore, enabled=False)
         self.copy_button = toga.Button("Save a copy…", on_press=self.save_copy, enabled=False)
         self.delete_button = toga.Button("Delete…", on_press=self.delete, enabled=False)
         kind = devicetools.config_kind(d)
         about = (f"Copies of {devicetools.CONFIG_FILES.get(kind, 'its config')} kept for {d.mac} in "
-                 f"{devicetools.backup_folder(d.mac)}. Restore uploads one to it again (the same model only), "
+                 f"{devicetools.backup_folder(d.mac)}. Compare shows what differs between two selected, or "
+                 "between one and its config now. Restore uploads one to it again (the same model only), "
                  "showing what changes first and keeping its current config as a backup.")
         size = (860, 620)
         self.window = toga.Window(title=f"Config backups: {_label(d)}", size=size, on_close=self.closing,
@@ -1062,9 +1124,9 @@ class BackupsWindow:
             toga.Box(style=Pack(direction=ROW, align_items="center", gap=8), children=[
                 self.state,
                 toga.Button("Back up now", on_press=self.backup_now, enabled=offered),
-                self.restore_button, self.copy_button, self.delete_button,
+                self.compare_button, self.restore_button, self.copy_button, self.delete_button,
                 toga.Button("Show folder", on_press=lambda w: _show_folder(devicetools.backup_folder(d.mac))),
-                toga.Button("Close", on_press=lambda w: self.window.close())])])
+                toga.Button("Close", on_press=lambda w: self.closing(w) and self.window.close())])])
         _backup_windows[d.mac] = self
         self.refresh()
         app._show_over_main(self.window)
@@ -1082,20 +1144,37 @@ class BackupsWindow:
         self.state.text = f"{len(self.backups)} kept." if self.backups else "None kept yet."
         self.selected(self.table)
 
+    def _chosen(self) -> list:
+        """The backups selected (several can be)."""
+        return [row.backup for row in self.table.selection or [] if getattr(row, "backup", None) is not None]
+
     def _current(self):
-        row = self.table.selection
-        return getattr(row, "backup", None) if row is not None else None
+        chosen = self._chosen()
+        return chosen[0] if len(chosen) == 1 else None
 
     def selected(self, widget, **kwargs):
+        chosen = self._chosen()
         backup = self._current()
         can = devicetools.offers(self.d, "upload")[0] and bool(self.d.ip) and sshrun.available()
         self.restore_button.enabled = backup is not None and can and not _busy.get(self.d.key)
         self.copy_button.enabled = self.delete_button.enabled = backup is not None
+        reads = devicetools.offers(self.d, "backup")[0] and bool(self.d.ip) and sshrun.available()
+        self.compare_button.text = ("Compare the two…" if len(chosen) == 2 else "Compare with its config now…"
+                                    if len(chosen) == 1 and reads else "Compare…")
+        self.compare_button.enabled = len(chosen) == 2 or (backup is not None and reads and not _busy.get(self.d.key))
         if backup is not None:
             try:
                 self.text.value = backup.text()
             except OSError as e:
                 self.text.value = f"Can't read {backup.path}: {e}"
+        else:
+            self.text.value = ("Two backups selected: Compare the two shows what differs between them."
+                               if len(chosen) == 2 else "")
+
+    async def compare(self, widget, **kwargs):
+        chosen = sorted(self._chosen(), key=lambda b: b.when)  # the older first
+        if len(chosen) in (1, 2):
+            await _guarded(self.app, self.d, lambda app, d: compare_flow(app, d, *chosen))
 
     async def backup_now(self, widget, **kwargs):
         await _guarded(self.app, self.d, backup_flow)
@@ -1136,6 +1215,172 @@ class _FirmwareOf:
 
     def __init__(self, meta):
         self.info, self.firmware = {"firmware": str(meta.get("firmware") or "")}, ""
+
+
+# ---------------------------------------------------------------------------
+# Back up all configs
+# ---------------------------------------------------------------------------
+
+def _saved_login(app, d, via: tuple = ()) -> sshrun.Login | None:
+    """d's remembered login: its username and port from the settings, its password from the
+    credential store. None when there's none. (It asks the store: from a worker thread.)"""
+    saved = _remembered(app, d)
+    if not saved or not saved.get("user") or not credstore.available():
+        return None
+    password = credstore.load(d.mac)
+    if password is None:
+        return None
+    return _login(app, d, saved["user"], password, int(saved.get("port") or d.port("ssh")), via)
+
+
+async def back_up_all(app):
+    """Device > Back up all configs…: every device in the table that keeps a config, with the
+    login remembered for it (BackupAllWindow). While a run goes on, its window shows again; one
+    that's over makes way for a new run."""
+    last = _backup_all
+    if last is not None and not last.window.closed:
+        if last.running:
+            last.window.show()
+            return
+        last.closing(last.window) and last.window.close()
+    if not sshrun.available():
+        app.status.text = "Back up all configs needs ssh and scp."
+        return
+    devices = [d for d in (app._device(getattr(row, "key", None)) for row in app.table.data) if d is not None]
+    if not any(devicetools.config_kind(d) for d in devices):
+        await app.main_window.dialog(toga.InfoDialog(
+            "Back up all configs", "No device in the table keeps a config the app can back up (airMAX, airFiber, "
+                                   "LTU, GigaBeam, EdgeOS)." if devices else "Scan first: the table is empty."))
+        return
+    app.status.text = "Looking up the saved logins…"
+    jobs = await _work(devicetools.backup_jobs, devices, lambda d, via: _saved_login(app, d, via),
+                       lambda d: route(app, d))
+    app.status.text = ""
+    BackupAllWindow(app, jobs, searched=bool((app.search.value or "").strip()))
+
+
+class BackupAllWindow:
+    """Back up all configs: a line for each device saying how its backup went, as it goes,
+    BACKUP_AT_ONCE at a time; Stop starts no more and cancels those running. The devices without
+    a saved login come last, skipped; once the run is over they, and any that failed, have a
+    Back up… button of their own, which asks for the login. Closed while it runs, it carries on
+    (the status line follows it) and the menu item shows it again."""
+
+    def __init__(self, app, jobs, searched=False):
+        global _backup_all
+        self.app, self.jobs = app, jobs
+        self.stop = threading.Event()
+        self.running = False
+        self.lines = {}  # id(job) -> (the label saying how it went, its Back up… button)
+        rows = []
+        for job in jobs:
+            state = toga.Label(_fill(job.text, 50), style=Pack(flex=1))
+            button = toga.Button("Back up…", style=Pack(visibility="hidden"),
+                                 on_press=lambda w, job=job: asyncio.create_task(_guarded(app, job.d, self._one(job))))
+            self.lines[id(job)] = (state, button)
+            rows.append(toga.Box(style=Pack(direction=ROW, align_items="center", gap=8), children=[
+                toga.Label(_fill(_label(job.d), 36), style=Pack(width=270)), state, button]))
+        which = "each device in the table" + (" (the ones the search shows)" if searched else "")
+        about = (f"Backs up the config of {which} that keeps one (airMAX, airFiber, LTU, GigaBeam, EdgeOS), with the "
+                 f"login remembered for it, {devicetools.BACKUP_AT_ONCE} at a time; one the same as the device's "
+                 "last backup isn't kept again. Devices without a saved login are skipped and listed at the end, "
+                 "each with a Back up… button that asks for its login.")
+        self.bar = toga.ProgressBar(max=100, value=0, style=Pack(flex=1))
+        self.summary = toga.Label("", style=Pack(flex=1))
+        self.stop_button = toga.Button("Stop", on_press=self.stopping, enabled=False)
+        size = (860, 560)
+        self.window = toga.Window(title="Back up all configs", size=size, on_close=self.closing,
+                                  position=app._over_main(size))
+        self.window.content = toga.Box(style=Pack(direction=COLUMN, margin=12, gap=8), children=[
+            toga.Label(_fill(about, 112)),
+            toga.ScrollContainer(horizontal=False, style=Pack(flex=1), content=toga.Box(
+                style=Pack(direction=COLUMN, margin=4, gap=6), children=rows)),
+            self.bar,
+            toga.Box(style=Pack(direction=ROW, align_items="center", gap=8), children=[
+                self.summary, self.stop_button,
+                toga.Button("Show folder", on_press=lambda w: _show_folder(devicetools.backup_root())),
+                toga.Button("Close", on_press=lambda w: self.closing(w) and self.window.close())])])
+        _backup_all = self
+        app._show_over_main(self.window)
+        asyncio.create_task(self.run())
+
+    def closing(self, widget, **kwargs):
+        global _backup_all
+        if self.running:  # it carries on; the menu item shows it again
+            self.window.hide()
+            return False
+        _backup_all = None
+        return True
+
+    def stopping(self, widget, **kwargs):
+        self.stop.set()
+        self.stop_button.enabled = False
+        self.summary.text = "Stopping…"
+
+    async def run(self):
+        app = self.app
+        self.running = True
+        self.stop_button.enabled = True
+        app.spinner.start()
+        try:
+            await _work(devicetools.back_up_all, self.jobs, lambda job: app._from_worker(self.show, job), self.stop,
+                        devicetools.BACKUP_AT_ONCE, _busy)
+        finally:
+            self.running = False
+            app.spinner.stop()
+        self.stop_button.enabled = False
+        for job in self.jobs:
+            self.show(job)
+        said = devicetools.backup_summary(self.jobs)
+        self.summary.text = f"Done: {said}."
+        app._append_log("Back up all configs:\n" + "".join(f"  {_label(job.d)}: {job.text}\n" for job in self.jobs)
+                        + f"  {said}.", status=False)
+        app.status.text = f"Back up all configs: {said}." + (
+            "" if self.window.visible else " Device > Back up all configs… shows how each went.")
+
+    def show(self, job):
+        """How a job went, in its line; with the counts under the lines and in the status line."""
+        state, button = self.lines[id(job)]
+        state.text = _fill(job.text, 50)
+        retry = job.can_retry and not self.running
+        button.style.visibility = "visible" if retry else "hidden"
+        button.enabled = retry
+        if job.state == "backed up":
+            _refresh_backups(job.d)
+        if self.running:
+            done = sum(j.state not in ("waiting", "backing up") for j in self.jobs)
+            self.bar.value = 100 * done / max(1, len(self.jobs))
+            self.summary.text = devicetools.backup_summary(self.jobs) + "…"
+            self.app.status.text = f"Back up all configs: {done} of {len(self.jobs)} done…"
+        else:
+            self.bar.value = 100
+
+    def _one(self, job):
+        return lambda app, d: self.one(job)
+
+    async def one(self, job):
+        """A device's own Back up… button: its login asked for, then backed up as the run does."""
+        app, d = self.app, job.d
+        if _busy.get(d.key):
+            app.status.text = f"{d.ip} is {_busy[d.key]}: back it up once that's done."
+            return
+        _state, button = self.lines[id(job)]
+        login = await ask_route(app, d, f"Log in to back up its config ({devicetools.CONFIG_FILES[job.kind]}).")
+        if not login:
+            return
+        button.enabled = False
+        _busy[d.key] = "backing up"
+        job.state, job.said = "backing up", ""
+        self.show(job)
+        try:
+            job.state, job.backup = await _work(devicetools.back_up, login, d, job.kind)
+        except (sshrun.SSHError, devicetools.ToolError, OSError) as e:
+            job.state, job.said = "failed", str(e)
+        finally:
+            _busy.pop(d.key, None)
+        self.show(job)
+        self.summary.text = f"Done: {devicetools.backup_summary(self.jobs)}."
+        app._append_log(f"Config backup of {_label(d)}: {job.text}")
 
 
 # ---------------------------------------------------------------------------
@@ -1214,7 +1459,6 @@ async def upload_flow(app, d, backup=None):
 
 async def _diff_window(app, d, kind, current, text, source, tools):
     """What uploading the config changes on the device; "save", "apply" or None (cancelled)."""
-    answer = app.loop.create_future()
     diff, changed = devicetools.config_diff(current, text)
     boot = "its boot config" if kind == "edgeos" else "flash"
     heading = (f"{source} → {_label(d)}: {changed} line(s) change." if changed
@@ -1225,6 +1469,16 @@ async def _diff_window(app, d, kind, current, text, source, tools):
     note += f"\n{terms.RISKS['upload']} {terms.RISKS['apply' if tools['apply'] else 'save']} {terms.TESTED}"
     if tools["why"]:
         note += f"\n{tools['why']}"
+    return await _diff_view(app, f"Upload config: {d.ip}", heading, diff, note, [
+        ("Cancel", None, True), (f"Save ({'next boot' if kind == 'edgeos' else 'to flash'})", "save", tools["save"]),
+        ("Apply now", "apply", tools["apply"])])
+
+
+async def _diff_view(app, title, heading, diff, note, buttons):
+    """A diff in a window of its own, under its heading and over a note, with a button for each
+    (text, answer, enabled) in buttons. Returns the answer of the one pressed; None when it's
+    closed."""
+    answer = app.loop.create_future()
 
     def finish(choice):
         if not answer.done():
@@ -1239,15 +1493,13 @@ async def _diff_window(app, d, kind, current, text, source, tools):
     view = toga.MultilineTextInput(readonly=True, value=diff or "(no differences)",
                                    style=Pack(flex=1, font_family="monospace", font_size=11))
     size = (900, 640)
-    window = toga.Window(title=f"Upload config: {d.ip}", size=size, on_close=closing, position=app._over_main(size))
+    window = toga.Window(title=title, size=size, on_close=closing, position=app._over_main(size))
     window.content = toga.Box(style=Pack(direction=COLUMN, margin=12, gap=8), children=[
         toga.Label(_fill(heading, 118)), view, toga.Label(_fill(note, 118)),
         toga.Box(style=Pack(direction=ROW, gap=8), children=[
             toga.Box(style=Pack(flex=1)),
-            toga.Button("Cancel", on_press=lambda w: finish(None)),
-            toga.Button(f"Save ({'next boot' if kind == 'edgeos' else 'to flash'})", on_press=lambda w: finish("save"),
-                        enabled=tools["save"]),
-            toga.Button("Apply now", on_press=lambda w: finish("apply"), enabled=tools["apply"])])])
+            *(toga.Button(text, on_press=lambda w, choice=choice: finish(choice), enabled=enabled)
+              for text, choice, enabled in buttons)])])
     app._show_over_main(window)
     app.cancel_ssh_login = lambda: finish(None)
     try:

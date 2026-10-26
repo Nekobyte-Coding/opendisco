@@ -1050,6 +1050,8 @@ class OpenDiscoApp(toga.App):
                                            text=title, group=group, section=section, order=order))
         self.commands.add(toga.Command(lambda command, **kwargs: self._measure_latency(),
                                        text="Measure latency to all devices", group=group, section=section + 1))
+        self.commands.add(toga.Command(lambda command, **kwargs: self._back_up_all(),
+                                       text="Back up all configs…", group=group, section=section + 1, order=1))
 
     def _install_context_menu(self):
         try:
@@ -1205,6 +1207,13 @@ class OpenDiscoApp(toga.App):
             return {}
         from opendisco import devicegui
         return devicegui.menu_state(self, d, titles)
+
+    def _back_up_all(self):
+        """Device > Back up all configs… (desktops: devicegui.back_up_all)."""
+        if self.caps["mobile"]:
+            return
+        from opendisco import devicegui
+        asyncio.create_task(devicegui._guarded(self, None, lambda app, d: devicegui.back_up_all(app)))
 
     def _device_action(self, name):
         d = self._selected_device()
