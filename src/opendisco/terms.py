@@ -2,7 +2,9 @@
 the same file) and the record of each acceptance, which the app and the command line share:
 terms.json in the app's data folder, the last few acceptances, each with the version, the time
 (UTC), the SHA-256 of the exact text and how it was accepted. Terms whose text changes, in a new
-version or not, are asked again."""
+version or not, are asked again. The app shows them in its language where there's a translation
+(TERMS.es.md, TERMS.pt-BR.md, TERMS.ja.md beside TERMS.md, which binds and controls), with the
+English text a switch away; what's accepted and hashed is always the English text."""
 from __future__ import annotations
 
 import hashlib
@@ -14,17 +16,20 @@ import sys
 import time
 from pathlib import Path
 
-from opendisco import __version__
+from opendisco import __version__, i18n
+from opendisco.i18n import N_, _
 
 FILE = Path(__file__).parent / "resources" / "TERMS.md"
 RECORD = "terms.json"
 KEPT = 10  # acceptances kept, newest last
-TITLE = "OpenDisco Terms of Use"
-PROMPT = ('Selecting "I agree" accepts these terms, including the sections on risk, liability, indemnity and '
-          "release, and confirms that OpenDisco will be used only on networks and devices the User owns or is "
-          "authorized to manage.")
-IOS_NOTE = "Anyone who does not agree must close OpenDisco and delete it from this device."
-AGREE, QUIT = "I agree", "Quit"
+# The app's window (translated where it's shown)
+TITLE = N_("OpenDisco Terms of Use")
+PROMPT = N_('Selecting "I agree" accepts these terms, including the sections on risk, liability, indemnity and '
+            "release, and confirms that OpenDisco will be used only on networks and devices the User owns or is "
+            "authorized to manage.")
+IOS_NOTE = N_("Anyone who does not agree must close OpenDisco and delete it from this device.")
+AGREE, QUIT = N_("I agree"), N_("Quit")
+ORIGINAL = N_("Show the English original")
 ONLINE = "https://github.com/Nekobyte-Coding/opendisco/blob/v{version}/TERMS.md"
 # The command line, which never shows the app's window
 CLI_INTRO = "OpenDisco's terms of use must be accepted before it's used."
@@ -40,28 +45,42 @@ CLI_UNATTENDED_MACOS = ("OpenDisco's terms of use haven't been accepted. Open th
 # Said in each device tool's confirmation (A2 of the terms' review). TESTED stays while it's true,
 # saying the same as TERMS.md section 5 and the README's Limitations: change all three together.
 RISKS = {
-    "firmware": "If the update fails or is interrupted, the device can stop working, and getting it back may need "
-                "someone on site.",
-    "save": "A wrong config takes effect at the next reboot and can cut the device off; getting it back may need "
-            "someone on site.",
-    "apply": "A wrong config takes effect now and can cut the device off; getting it back may need someone on site.",
-    "upload": "Check every line before saving or applying: the file replaces the device's whole config, its radio "
-              "settings, address and logins included.",
-    "login": "If the new login is lost, the device can only be reached again after a reset, which may need someone "
-             "on site.",
-    "reboot": "The device can fail to come back after restarting, and getting it back may need someone on site.",
+    "firmware": N_("If the update fails or is interrupted, the device can stop working, and getting it back may "
+                   "need someone on site."),
+    "save": N_("A wrong config takes effect at the next reboot and can cut the device off; getting it back may need "
+               "someone on site."),
+    "apply": N_("A wrong config takes effect now and can cut the device off; getting it back may need someone on "
+                "site."),
+    "upload": N_("Check every line before saving or applying: the file replaces the device's whole config, its radio "
+                 "settings, address and logins included."),
+    "login": N_("If the new login is lost, the device can only be reached again after a reset, which may need "
+                "someone on site."),
+    "reboot": N_("The device can fail to come back after restarting, and getting it back may need someone on site."),
 }
-TESTED = "OpenDisco's device tools have been tested only on simulated devices, not yet on real equipment."
+TESTED = N_("OpenDisco's device tools have been tested only on simulated devices, not yet on real equipment.")
 
 
 def risk(kind: str) -> str:
-    """The lines a device tool's confirmation ends with."""
-    return f"{RISKS[kind]} {TESTED}"
+    """The lines a device tool's confirmation ends with, in the app's language."""
+    return i18n.sentences(_(RISKS[kind]), _(TESTED))
 
 
 def text() -> str:
     """TERMS.md as published, for this version: what's accepted, and hashed."""
     return FILE.read_text(encoding="utf-8").replace("{version}", __version__)
+
+
+def translation(language: str | None = None) -> str | None:
+    """The terms in a language other than English (the app's by default), as published for this
+    version: None for English, or where there's no translation."""
+    language = i18n.language if language is None else language
+    path = FILE.with_name(f"TERMS.{language}.md")
+    if language == i18n.ENGLISH or not path.is_file():
+        return None
+    try:
+        return path.read_text(encoding="utf-8").replace("{version}", __version__)
+    except OSError:
+        return None
 
 
 def shown(raw: str | None = None) -> str:
@@ -91,11 +110,15 @@ def agreed(folder) -> bool:
     return any((r.get("version"), r.get("sha256")) == wanted for r in accepted(folder))
 
 
-def record(folder, via: str, platform: str, channel: str = "github") -> dict:
-    """Keep an acceptance. via: "app" or "cli"; channel: where this copy came from."""
+def record(folder, via: str, platform: str, channel: str = "github", language: str = i18n.ENGLISH) -> dict:
+    """Keep an acceptance. via: "app" or "cli"; channel: where this copy came from; language: the
+    text on screen when it was accepted (a translation's own SHA-256 is kept beside the English one's)."""
     entry = {"version": __version__, "sha256": digest(),
              "agreed": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
              "via": via, "platform": platform, "channel": channel}
+    translated = translation(language)
+    if translated is not None:
+        entry.update(language=language, translation_sha256=digest(translated))
     folder = Path(folder)
     folder.mkdir(parents=True, exist_ok=True)
     (folder / RECORD).write_text(json.dumps({"accepted": (accepted(folder) + [entry])[-KEPT:]}, indent=1),

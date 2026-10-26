@@ -16,6 +16,8 @@ import toga
 from toga.style import Pack
 from toga.style.pack import COLUMN, ROW
 
+from opendisco.i18n import _
+
 # The iPhone's system colours (light mode), as Android colour ints (ARGB)
 BLUE, RED, GREEN = 0xFF007AFF, 0xFFFF3B30, 0xFF34C759
 LABEL, SECONDARY = 0xFF1C1C1E, 0xFF8A8A8E
@@ -27,6 +29,8 @@ SELECTED = 0x24007AFF  # a tablet's list: the row of the device beside it
 SEARCH_FILL = 0xFFEEEEF0  # the search field
 PAGE_WIDTH = 720  # a tablet's pages over the list and device (config backups, the config editor), in the middle
 COLORS = {"systemBlueColor": BLUE, "systemRedColor": RED, "systemGreenColor": GREEN}
+# (by the English titles of the title bar's buttons and the tabs, whose _() is what shows; bar_button's by
+# the title it's given)
 BAR_ICONS = {"Export": "ios_share", "Notes and Log": "list_alt", "Settings": "settings"}  # bar_button adds more
 SYMBOL_NAMES = {"plus": "add"}  # the iPhone's SF Symbol -> its Material Symbol
 TAB_ICONS = {"Details": "info", "Packets": "manage_search", "Tools": "build", "Notes": "chat_bubble", "Log": "list_alt"}
@@ -300,9 +304,10 @@ def fit(app, export, notes, settings):
     def command(text, action, order):
         return toga.Command(lambda command, **kwargs: action(), text=text, group=toga.Group.COMMANDS, order=order)
 
-    export_command = command("Export", lambda: (app.__dict__.get("_export_menu") or export)(), 1)
+    export_command = command(_("Export"), lambda: (app.__dict__.get("_export_menu") or export)(), 1)
     export_command.enabled = False
-    app.main_window.toolbar.add(export_command, command("Notes and Log", notes, 2), command("Settings", settings, 3))
+    app.main_window.toolbar.add(export_command, command(_("Notes and Log"), notes, 2),
+                                command(_("Settings"), settings, 3))
     app.export_button = CommandButton(export_command)
     for fitting in (_take_up_and_menu, _fit_system_bars, _fit_tabs, _fit_list, _fit_status, _fit_exit,
                     lambda app: _plain_widgets(), lambda app: _fit_lists(), _sized_already, _keep_above_keyboard):
@@ -344,10 +349,11 @@ def _take_up_and_menu(app):
     def prepare(menu):
         shown = toga_prepare(menu)
         try:
+            icons = {_(title): icon for title, icon in BAR_ICONS.items()}  # by the titles as shown
             for index in range(menu.size()):
                 item = menu.getItem(index)
                 item.setVisible(not app._panels)
-                name = BAR_ICONS.get(str(item.getTitle()))
+                name = icons.get(str(item.getTitle()))
                 if name:
                     item.setIcon(_icon(name, LABEL if item.isEnabled() else DISABLED_TEXT))
             overflow = _toolbar().getOverflowIcon()
@@ -426,9 +432,10 @@ def _fit_tabs(app):
 
     impl.set_option_enabled = set_enabled
     impl.resize_tab_content = resize_tab_content
+    icons = {_(title): icon for title, icon in TAB_ICONS.items()}  # by the titles as shown
     for option in impl.options:
         if option.menu_item is not None:
-            name = TAB_ICONS.get(option.text)
+            name = icons.get(option.text)
             if name:
                 option.menu_item.setIcon(_icon(name))
             option.menu_item.setVisible(option.enabled)
@@ -673,7 +680,7 @@ def search_field(app, widget):
     the keyboard away (the list changes as it's typed)."""
     plain_entry(widget)
     if wide(app):  # the list's column is narrow: what fits of what it looks through (no … on a field's hint)
-        widget.placeholder = "Search: IP, MAC, name, note…"
+        widget.placeholder = _("Search: IP, MAC, name, note…")
     try:
         from java import dynamic_proxy, jclass
         EditorInfo = jclass("android.view.inputmethod.EditorInfo")
@@ -723,7 +730,7 @@ def text_box(widget):
 
 def here(app) -> str:
     """What the app's text calls the device it runs on."""
-    return "this tablet" if wide(app) else "this phone"
+    return _("this tablet") if wide(app) else _("this phone")
 
 
 def bar_button(app, symbol, title, action):
@@ -818,7 +825,8 @@ def export_menu(app, choices, pick):
             style_button(button, "tinted")
             rows.append(toga.Box(style=Pack(direction=COLUMN, gap=4), children=[
                 button, toga.Label(app._wrap(detail), style=Pack(font_size=13, color="#8a8a8e", margin_left=4))]))
-        close = phone.push_panel(app, "Export", toga.Box(style=Pack(direction=COLUMN, margin=14, gap=14), children=rows))
+        close = phone.push_panel(app, _("Export"),
+                                 toga.Box(style=Pack(direction=COLUMN, margin=14, gap=14), children=rows))
 
     app._export_menu = show
 

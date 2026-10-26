@@ -35,6 +35,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[2]
 HERE = Path(__file__).resolve().parent
 NEEDED = ("src", "pyproject.toml", "LICENSE")  # with CHANGELOG.md, all Briefcase reads
+TERMS_TRANSLATED = ("TERMS.es.md", "TERMS.pt-BR.md", "TERMS.ja.md")  # beside TERMS.md in the AppImage's docs
 # format -> (container image, the release's name in the file name, how to install packages)
 TARGETS = {
     "deb": ("ubuntu:24.04", "ubuntu-24.04",
@@ -130,7 +131,7 @@ def build_appimage(arch: str, out: Path, version: str) -> list:
            stdout=subprocess.DEVNULL)
     try:
         docker("exec", name, "mkdir", "-p", "/src/packaging/linux")
-        for item in (*NEEDED, "CHANGELOG.md", "NOTICE", "TERMS.md"):
+        for item in (*NEEDED, "CHANGELOG.md", "NOTICE", "TERMS.md", *TERMS_TRANSLATED):
             docker("cp", str(ROOT / item), f"{name}:/src/{item}")
         docker("cp", str(HERE / "appimage"), f"{name}:/src/packaging/linux/appimage")
         docker("exec", name, "bash", "/src/packaging/linux/appimage/build-appimage.sh", version)

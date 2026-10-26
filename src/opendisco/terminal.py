@@ -12,6 +12,7 @@ pane polls it for keystrokes and sends output back in batches.
 """
 import asyncio
 import base64
+import html
 import json
 import os
 import re
@@ -23,6 +24,9 @@ import sys
 import threading
 from collections import deque
 from pathlib import Path
+
+from opendisco import i18n
+from opendisco.i18n import N_, _, tr
 
 IS_WINDOWS = sys.platform == "win32"
 RESOURCES = Path(__file__).with_name("resources")
@@ -224,13 +228,14 @@ class Session:
 
     def _ended(self, code) -> bytes:
         if self.kind == "ping":
-            msg = "Ping stopped. Press Enter to ping again."
+            msg = _("Ping stopped. Press Enter to ping again.")
         else:
-            msg = f"Connection closed{f' (ssh exit code {code})' if code else ''}. Press Enter to connect again."
+            msg = (tr("Connection closed (ssh exit code {code}). Press Enter to connect again.", code=code) if code
+                   else _("Connection closed. Press Enter to connect again."))
             if self.key_changed:
-                msg = ("This device's SSH key changed since the last connection: it was reset or replaced, or "
-                       "something is in between. If that's expected, right-click it and choose Forget SSH key, "
-                       "then press Enter here.")
+                msg = _("This device's SSH key changed since the last connection: it was reset or replaced, or "
+                        "something is in between. If that's expected, right-click it and choose Forget SSH key, "
+                        "then press Enter here.")
         return f"\r\n\x1b[33m[{msg}]\x1b[0m\r\n".encode()
 
     def _emit(self, data: bytes) -> None:
@@ -327,8 +332,8 @@ class OwnSession(Session):
         error = self.shell.error if self.shell else None
         self.key_changed = bool(error and error.kind == "key")
         if reason and not self.key_changed:
-            again = "Press Enter to ping again." if self.kind == "ping" else "Press Enter to connect again."
-            self._emit(f"\r\n\x1b[33m[{reason} {again}]\x1b[0m\r\n".encode())
+            again = _("Press Enter to ping again.") if self.kind == "ping" else _("Press Enter to connect again.")
+            self._emit(f"\r\n\x1b[33m[{i18n.sentences(reason, again)}]\x1b[0m\r\n".encode())
         else:
             self._emit(self._ended(0))
 
@@ -382,6 +387,9 @@ class OwnSession(Session):
 # The pane
 # ---------------------------------------------------------------------------
 
+EMPTY = N_("Right-click a device to get started: Open SSH or Ping.")  # the pane with no session shown
+
+
 def page_html() -> str:
     xterm = RESOURCES / "xterm"
     return """<!doctype html><html><head><meta charset="utf-8"><style>%s
@@ -396,7 +404,7 @@ html, body { margin: 0; height: 100%%; background: #1e1e1e; overflow: hidden; }
          padding: 0 24px; text-align: center; color: #a0a0a0;
          font: 13px -apple-system, "Segoe UI", system-ui, sans-serif; }
 </style><script>%s</script><script>%s</script></head><body>
-<div id="empty">Right-click a device to get started: Open SSH or Ping.</div>
+<div id="empty">%s</div>
 <script>
 const S = {}, outbox = [];
 let current = null;
@@ -441,7 +449,7 @@ function drop(id) {
 function take() { const s = JSON.stringify(outbox); outbox.length = 0; return s; }
 new ResizeObserver(() => { if (current && S[current]) S[current].fit.fit(); }).observe(document.body);
 </script></body></html>""" % ((xterm / "xterm.css").read_text(encoding="utf-8"), (xterm / "xterm.js").read_text(encoding="utf-8"),
-                               (xterm / "addon-fit.js").read_text(encoding="utf-8"))
+                               (xterm / "addon-fit.js").read_text(encoding="utf-8"), html.escape(_(EMPTY)))
 
 
 class TerminalPane:
@@ -461,10 +469,10 @@ class TerminalPane:
         self.view = toga.WebView(style=Pack(flex=1))
         self.view.set_content("https://terminal.invalid/", page_html())
         self.choice = toga.Selection(items=[], on_change=self._chosen, style=Pack(width=360))
-        self.close_button = toga.Button("Close session", on_press=self._close_current, enabled=False)
+        self.close_button = toga.Button(_("Close session"), on_press=self._close_current, enabled=False)
         self.box = toga.Box(style=Pack(direction=COLUMN, flex=1, gap=6), children=[
             toga.Box(style=Pack(direction=ROW, align_items="center", gap=8), children=[
-                toga.Label("Session"), self.choice, self.close_button]),
+                toga.Label(_("Session")), self.choice, self.close_button]),
             self.view])
 
     # -- sessions --------------------------------------------------------
@@ -505,7 +513,8 @@ class TerminalPane:
         if session:
             self.show(session)
         else:
-            self._js(f"show(null, {json.dumps(f'No session with {label} yet. Right-click it for SSH or Ping.')})")
+            message = tr("No session with {device} yet. Right-click it for SSH or Ping.", device=label)
+            self._js(f"show(null, {json.dumps(message)})")
 
     def _show(self, session: Session) -> None:
         if session.sid in self.order:
@@ -525,7 +534,7 @@ class TerminalPane:
             self.show(show)
         elif not self.sessions:
             self.close_button.enabled = False
-            self._js("show(null, 'Right-click a device to get started: Open SSH or Ping.')")
+            self._js(f"show(null, {json.dumps(_(EMPTY))})")
 
     def _close_current(self, widget=None, **kwargs):
         session = next((s for s in self.sessions.values() if s.title == self.choice.value), None)

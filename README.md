@@ -404,7 +404,9 @@ editor still open over the window.
 ### Settings and updates
 
 **Settings…** (in the app menu on macOS and Linux, and the File menu on Windows; on phones, in
-the title bar) has three switches, all on until turned off, and two lists:
+the title bar) has the language, three switches, all on until turned off, and two lists:
+- **Language:** System (the default), English, Español, Português (Brasil) or 日本語 (see
+  [Languages](#languages)). A change takes effect the next time OpenDisco opens.
 - **Check for OpenDisco updates when opening:** asks GitHub for the latest release. When
   there's a newer one, the app says what's in it and offers to update: it downloads the file
   for this platform, checks it against the SHA-256 GitHub lists, installs it the way this copy
@@ -433,6 +435,23 @@ the title bar) has three switches, all on until turned off, and two lists:
 
 On phones, Settings also holds the **Deep checks** switch.
 This product uses the NVD API but is not endorsed or certified by the NVD.
+
+### Languages
+
+The app speaks English, Spanish, Brazilian Portuguese and Japanese. It follows the system's
+language (macOS's and iOS's preferred languages, Windows's display language, Android's
+language, `LANGUAGE`, `LC_ALL`, `LC_MESSAGES` or `LANG` on Linux): the first of the system's
+languages it has, where any Portuguese counts as Brazilian Portuguese and any Spanish as
+Spanish, and English if it has none of them. Settings' **Language** picks one instead, from the
+next time OpenDisco opens.
+
+Translated: the windows, menus, dialogs and status line, the issue messages and Status labels,
+Details, link health, the device tools' confirmations and errors, the Site Report, and the
+terms of use (TERMS.es.md, TERMS.pt-BR.md and TERMS.ja.md). The translated terms are a
+convenience: the English TERMS.md is the binding text and controls, and it's the text that's
+accepted; the terms window has a switch to show it. Staying English: the command line (its
+output, `--help` and its terms prompt), the Log tab's scan lines, CSV and JSON exports' field
+names, Status values and issue tags (FACTORY-LOGIN...), product names, commands and file names.
 
 ### Right-click menu and the Terminal tab
 

@@ -51,7 +51,8 @@ from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
 
 from opendisco import __version__  # one version for the app, the CLI and the installers
-from opendisco import terms, vulns
+from opendisco import i18n, terms, vulns
+from opendisco.i18n import _, N_, tr
 from opendisco import health  # the latest firmware and latency (it imports core back)
 from opendisco import linkhealth  # airMAX link health, read over SSH (it imports core back)
 
@@ -64,8 +65,8 @@ SSDP_ADDR = ("239.255.255.250", 1900)
 FALLBACK_IP = "192.168.1.20"  # where UniFi/airOS devices sit without a DHCP lease
 CHECK_PORTS = (22, 80, 443, 8080, 8443)
 # Where a device can say which port its web UI or SSH is on, best source first.
-PORT_SOURCES = {"discovery": "its discovery reply", "redirect": "its HTTP redirect",
-                "mDNS": "its mDNS services", "UPnP": "its UPnP description"}
+PORT_SOURCES = {"discovery": N_("its discovery reply"), "redirect": N_("its HTTP redirect"),
+                "mDNS": N_("its mDNS services"), "UPnP": N_("its UPnP description")}
 IS_WINDOWS = sys.platform.startswith("win")
 IS_APPLE = sys.platform in ("darwin", "ios")  # macOS and iOS: the same BSD socket options
 
@@ -275,7 +276,7 @@ VIA_ORDER = ("ubnt", "mcast", "announce", "sniff", "wifi", "mdns", "ssdp", "arp"
 # or v0 (seen on UNVR). Field IDs follow Wireshark's packet-ubdp.c and Home
 # Assistant's unifi-discovery library.
 
-WLAN_MODES = {0: "none", 2: "station", 3: "access point"}
+WLAN_MODES = {0: N_("none"), 2: N_("station"), 3: N_("access point")}  # Details translates them
 
 
 def _text(b: bytes) -> str:
@@ -346,40 +347,40 @@ def _guid(b: bytes) -> str:
         return b.hex()  # non-console devices reuse 0x2b for a binary blob
 
 
-# type -> (key, label, decoder, may repeat)
+# type -> (key, label, decoder, may repeat). Details translates the labels; the Packets tab keeps them English.
 TLV = {
-    0x01: ("mac", "MAC address", _mac, False),
-    0x02: ("interfaces", "Interface MAC/IP", _mac_ip, True),
-    0x03: ("firmware", "Firmware", _text, False),
-    0x04: ("ip_addr", "IP address", _ipv4, False),
-    0x05: ("mac_alt", "MAC address (alt)", _mac, False),
-    0x06: ("display_name", "Display name", _text, False),
-    0x07: ("salt", "Salt", bytes.hex, False),
-    0x08: ("rnd_challenge", "Random challenge", bytes.hex, False),
-    0x09: ("challenge", "Challenge", bytes.hex, False),
-    0x0A: ("uptime", "Uptime", _uint, False),
-    0x0B: ("hostname", "Hostname", _text, False),
-    0x0C: ("platform", "Platform", _text, False),
+    0x01: ("mac", N_("MAC address"), _mac, False),
+    0x02: ("interfaces", N_("Interface MAC/IP"), _mac_ip, True),
+    0x03: ("firmware", N_("Firmware"), _text, False),
+    0x04: ("ip_addr", N_("IP address"), _ipv4, False),
+    0x05: ("mac_alt", N_("MAC address (alt)"), _mac, False),
+    0x06: ("display_name", N_("Display name"), _text, False),
+    0x07: ("salt", N_("Salt"), bytes.hex, False),
+    0x08: ("rnd_challenge", N_("Random challenge"), bytes.hex, False),
+    0x09: ("challenge", N_("Challenge"), bytes.hex, False),
+    0x0A: ("uptime", N_("Uptime"), _uint, False),
+    0x0B: ("hostname", N_("Hostname"), _text, False),
+    0x0C: ("platform", N_("Platform"), _text, False),
     0x0D: ("essid", "ESSID", _text, False),
-    0x0E: ("wlan_mode", "Wireless mode", _wlan_mode, False),
-    0x0F: ("webui", "Web UI", _webui, False),
-    0x10: ("sysid", "System ID", _sysid, False),
-    0x12: ("seq", "Sequence counter", _uint, False),
-    0x13: ("serial_mac", "MAC address (serial)", _mac, False),
-    0x14: ("model", "Model", _text, False),
-    0x15: ("product_name", "Product name", _text, False),
-    0x16: ("version", "Version", _text, False),
-    0x17: ("is_default", "Factory default", _flag, False),
-    0x18: ("locating", "Locating (LED blink)", _flag, False),
-    0x19: ("dhcp_client", "DHCP client", _flag, False),
-    0x1A: ("dhcp_bound", "DHCP lease bound", _flag, False),
-    0x1B: ("platform_version", "Platform version", _text_or_hex, False),
-    0x1C: ("ssh_port", "SSH port", _uint, False),
-    0x20: ("device_id", "Device ID", _text_or_hex, False),
-    0x2B: ("guid", "Console GUID", _guid, False),
-    0x2F: ("primary_addr", "Primary address", _mac_ip, False),
-    0x30: ("direct_connect_domain", "Direct-connect domain", _text, False),
-    0x32: ("ports", "Port", _port_info, True),
+    0x0E: ("wlan_mode", N_("Wireless mode"), _wlan_mode, False),
+    0x0F: ("webui", N_("Web UI"), _webui, False),
+    0x10: ("sysid", N_("System ID"), _sysid, False),
+    0x12: ("seq", N_("Sequence counter"), _uint, False),
+    0x13: ("serial_mac", N_("MAC address (serial)"), _mac, False),
+    0x14: ("model", N_("Model"), _text, False),
+    0x15: ("product_name", N_("Product name"), _text, False),
+    0x16: ("version", N_("Version"), _text, False),
+    0x17: ("is_default", N_("Factory default"), _flag, False),
+    0x18: ("locating", N_("Locating (LED blink)"), _flag, False),
+    0x19: ("dhcp_client", N_("DHCP client"), _flag, False),
+    0x1A: ("dhcp_bound", N_("DHCP lease bound"), _flag, False),
+    0x1B: ("platform_version", N_("Platform version"), _text_or_hex, False),
+    0x1C: ("ssh_port", N_("SSH port"), _uint, False),
+    0x20: ("device_id", N_("Device ID"), _text_or_hex, False),
+    0x2B: ("guid", N_("Console GUID"), _guid, False),
+    0x2F: ("primary_addr", N_("Primary address"), _mac_ip, False),
+    0x30: ("direct_connect_domain", N_("Direct-connect domain"), _text, False),
+    0x32: ("ports", N_("Port"), _port_info, True),
     0x33: ("uuid", "UUID", _guid, False),
 }
 TLV_LABELS = {spec[0]: spec[1] for spec in TLV.values()}
@@ -1383,19 +1384,19 @@ ARP_SUDO: list = []  # ["sudo", "-n"] once this run holds sudo: macOS may filter
 
 
 COUNTER_LABELS = {
-    "in_errors": "input errors (damaged frames: bad CRC, runts)",
-    "out_errors": "output errors",
-    "collisions": "collisions",
-    "drops": "dropped packets",
-    "crc_errors": "CRC errors",
-    "frame_errors": "framing errors",
-    "length_errors": "length errors",
-    "overruns": "overruns",
-    "ip_checksum": "IP packets with a bad header checksum",
-    "ip_header": "IP packets with a bad header",
-    "ip_short": "IP packets shorter than their header says",
-    "udp_checksum": "UDP datagrams with a bad checksum",
-    "udp_length": "UDP datagrams with a bad length",
+    "in_errors": N_("input errors (damaged frames: bad CRC, runts)"),
+    "out_errors": N_("output errors"),
+    "collisions": N_("collisions"),
+    "drops": N_("dropped packets"),
+    "crc_errors": N_("CRC errors"),
+    "frame_errors": N_("framing errors"),
+    "length_errors": N_("length errors"),
+    "overruns": N_("overruns"),
+    "ip_checksum": N_("IP packets with a bad header checksum"),
+    "ip_header": N_("IP packets with a bad header"),
+    "ip_short": N_("IP packets shorter than their header says"),
+    "udp_checksum": N_("UDP datagrams with a bad checksum"),
+    "udp_length": N_("UDP datagrams with a bad length"),
 }
 
 
@@ -1472,25 +1473,29 @@ def counter_changes(before: dict, after: dict) -> dict:
             "system_read": bool(before["system"] and after["system"])}
 
 
-def counter_text(up: dict) -> str:
-    return ", ".join(f"{n} {COUNTER_LABELS.get(k, k)}" for k, n in up.items())
+def counter_text(up: dict, english: bool = False) -> str:
+    """The counters that went up, in the app's language (english: as the Packets tab shows them)."""
+    return ", ".join(f"{n} {shown(COUNTER_LABELS[k], english) if k in COUNTER_LABELS else k}" for k, n in up.items())
 
 
 def counter_notes(changes: dict) -> list:
     notes = []
     for name, up in changes.get("interfaces", {}).items():
         errors = {k: n for k, n in up.items() if k != "drops"}
+        shown_name = _("all adapters") if name == "all adapters" else name  # Windows' totals
         if errors:
-            hint = ("collisions on a full-duplex link mean the two ends disagree on duplex: set both to auto"
+            hint = (_("collisions on a full-duplex link mean the two ends disagree on duplex: set both to auto")
                     if "collisions" in errors else
-                    "damaged frames point to the cable or a connector, the switch port, or a speed/duplex mismatch")
-            notes.append(("warn", f"{name} counted {counter_text(errors)} during this scan: {hint}."))
+                    _("damaged frames point to the cable or a connector, the switch port, or a speed/duplex mismatch"))
+            notes.append(("warn", tr("{interface} counted {counters} during this scan: {hint}.", interface=shown_name,
+                                     counters=counter_text(errors), hint=hint)))
         elif up.get("drops") and name != "all adapters":  # Windows' total also counts ignored protocols
-            notes.append(("note", f"{name} dropped {up['drops']} packet(s) during this scan."))
+            notes.append(("note", tr("{interface} dropped {count} packet(s) during this scan.", interface=name,
+                                     count=up["drops"])))
     if changes.get("system"):
-        notes.append(("warn", f"This computer counted {counter_text(changes['system'])} during this scan (all "
-                              "interfaces and programs): packets are arriving damaged. The interface counts "
-                              "above show which interface, if they went up too."))
+        notes.append(("warn", tr("This computer counted {counters} during this scan (all interfaces and programs): "
+                                 "packets are arriving damaged. The interface counts above show which interface, if "
+                                 "they went up too.", counters=counter_text(changes["system"]))))
     return notes
 
 
@@ -2091,7 +2096,7 @@ def ping(ip: str, out, stop, interval: float = 1.0, timeout: float = 2.0, count:
 # Port search: one device's every TCP port, for a service that isn't where it should be
 # ---------------------------------------------------------------------------
 
-SERVICE_NAMES = {"https": "HTTPS", "http": "HTTP", "ssh": "SSH", "all": "services"}
+SERVICE_NAMES = {"https": "HTTPS", "http": "HTTP", "ssh": "SSH", "all": N_("services")}
 # Where web UIs and SSH most often live, tried first so a search can stop early.
 SEARCH_FIRST = {
     "https": (443, 8443, 4443, 7443, 9443, 10443, 8843, 444, 1443, 2443, 3443, 5443, 6443, 8444, 18443,
@@ -2412,7 +2417,7 @@ def packet_lines(data: bytes, problems=None) -> list:
     for off, ftype, raw in fields:
         spec = TLV.get(ftype)
         try:
-            value = _fmt_value(spec[0], spec[2](raw)) if spec else raw.hex()
+            value = _fmt_value(spec[0], spec[2](raw), english=True) if spec else raw.hex()
         except Exception:
             value = raw.hex()
         lines.append(f"   @{off:04x} 0x{ftype:02x} {spec[1] if spec else 'unknown':<22} {len(raw):>4}  {value}")
@@ -2471,9 +2476,9 @@ class Scanner:
                                  "Is the UniFi Network application, WiFiman or another discovery "
                                  "tool running on this computer?")
             self.main = udp_socket(0, broadcast=True)
-            self.notes.append(("warn", f"UDP {self.port} is already in use on this computer (UniFi Network "
-                                       "app, WiFiman or another tool?). Active probes still work, but "
-                                       "unsolicited device announcements can't be heard."))
+            self.notes.append(("warn", tr("UDP {port} is already in use on this computer (UniFi Network "
+                                          "app, WiFiman or another tool?). Active probes still work, but "
+                                          "unsolicited device announcements can't be heard.", port=self.port)))
         if self.bound_discovery_port:
             for i in self.ifaces:
                 try:
@@ -2705,16 +2710,16 @@ class Scanner:
     def finish_notes(self) -> None:
         if not self.opts.listen and self.bcast_errors and self.bcast_ok == 0:
             reason = "; ".join(sorted(set(self.bcast_errors.values())))
-            msg = f"Every discovery broadcast failed to send ({reason})."
+            msg = tr("Every discovery broadcast failed to send ({reason}).", reason=reason)
             if platform_name() == "ios":
-                msg += (" On iOS this usually means OpenDisco lacks Local Network access: Settings > Privacy & "
+                why = _("On iOS this usually means OpenDisco lacks Local Network access: Settings > Privacy & "
                         "Security > Local Network.")
             elif sys.platform == "darwin":
-                msg += (" On macOS this usually means the app running the scan (OpenDisco, or the terminal) "
+                why = _("On macOS this usually means the app running the scan (OpenDisco, or the terminal) "
                         "lacks Local Network access: System Settings > Privacy & Security > Local Network.")
             else:
-                msg += " Check for a local firewall blocking outbound UDP 10001."
-            self.notes.append(("error", msg))
+                why = _("Check for a local firewall blocking outbound UDP 10001.")
+            self.notes.append(("error", i18n.sentences(msg, why)))
 
 
 # ---------------------------------------------------------------------------
@@ -4133,7 +4138,7 @@ def port_outliers(devices) -> dict:
     another stands out. Returns {(device key, "https"/"ssh"): message}."""
     out = {}
     for kind in ("https", "ssh"):
-        name = "web UI" if kind == "https" else "SSH"
+        name = _("web UI") if kind == "https" else "SSH"
         groups = {}
         for d in devices:
             port = d.said_port(kind)
@@ -4143,12 +4148,14 @@ def port_outliers(devices) -> dict:
             usual, n = Counter(p for _, p in pairs).most_common(1)[0]
             if n < 2 or n * 3 < len(pairs) * 2:  # no clear habit to compare with
                 continue
-            what = f"{vendor} {'consoles' if console else 'devices'}"
             for d, port in pairs:
                 if port != usual:
-                    typo = ", one digit off" if _one_digit_off(port, usual) else ""
-                    out[(d.key, kind)] = (f"Its {name} is on port {port}, but the other {n} {what} here use "
-                                          f"{usual}{typo}: a typo in its config?")
+                    typo = _(", one digit off") if _one_digit_off(port, usual) else ""
+                    values = dict(service=name, port=port, count=n, vendor=vendor, usual=usual, typo=typo)
+                    out[(d.key, kind)] = (tr("Its {service} is on port {port}, but the other {count} {vendor} consoles "
+                                             "here use {usual}{typo}: a typo in its config?", **values) if console
+                                          else tr("Its {service} is on port {port}, but the other {count} {vendor} "
+                                                  "devices here use {usual}{typo}: a typo in its config?", **values))
     return out
 
 
@@ -4255,9 +4262,9 @@ def damage_summary(d: Device, found: dict) -> list:
 
 def factory_login_text(user: str, password: str) -> str:
     """The FACTORY-LOGIN issue, which the device tools also show when the login works."""
-    return (f"Takes its factory login ({user}/{password}): anyone who can reach it can log in and change its "
-            "settings. Give it a new password: Change login does that on airMAX gear and EdgeRouters, its web UI "
-            "on the rest, and adopting a UniFi device gives it its own.")
+    return tr("Takes its factory login ({user}/{password}): anyone who can reach it can log in and change its "
+              "settings. Give it a new password: Change login does that on airMAX gear and EdgeRouters, its web UI "
+              "on the rest, and adopting a UniFi device gives it its own.", user=user, password=password)
 
 
 def diagnose(inv: Inventory, all_ifaces, scan_nets, opts, alias_used=(), skipped=(), probed_links=()) -> None:
@@ -4275,147 +4282,164 @@ def diagnose(inv: Inventory, all_ifaces, scan_nets, opts, alias_used=(), skipped
         heard_ubnt = d.ubnt_packets > 0
 
         if info.get("is_default"):
-            msg = "Factory default / not adopted - ready for adoption."
+            msg = _("Factory default / not adopted - ready for adoption.")
             if not d.console:
-                msg += (" Until it's set up or adopted it takes its factory login (ubnt/ubnt, or ui/ui on newer "
-                        "models), so anyone who can reach it can log in: reset by mistake, or left unconfigured? "
-                        f"Adopt it in the UniFi Network app, or SSH to {d.ip or 'it'} with that login and run: "
-                        "set-inform http://<controller-ip>:8080/inform")
+                msg = i18n.sentences(msg, tr(
+                    "Until it's set up or adopted it takes its factory login (ubnt/ubnt, or ui/ui on newer models), "
+                    "so anyone who can reach it can log in: reset by mistake, or left unconfigured? Adopt it in the "
+                    "UniFi Network app, or SSH to {address} with that login and run: "
+                    "set-inform http://<controller-ip>:8080/inform", address=d.ip or _("it")))
             issues.append(("warn" if not d.console else "note", "DEFAULT", msg))
         if d.system.get("isSetup") is False:
-            issues.append(("note", "NOT-SET-UP", "UniFi OS console hasn't been set up yet."))
+            issues.append(("note", "NOT-SET-UP", _("UniFi OS console hasn't been set up yet.")))
         if any(ip.startswith("169.254.") for ip in d.ips):
             issues.append(("error", "LINK-LOCAL",
-                           "Has a 169.254.x.x self-assigned address: it never got a DHCP lease. "
-                           "Check the DHCP server, VLAN/port profile and uplink."))
+                           _("Has a 169.254.x.x self-assigned address: it never got a DHCP lease. "
+                             "Check the DHCP server, VLAN/port profile and uplink.")))
         if FALLBACK_IP in d.ips and info.get("dhcp_bound") is not True and not d.tftp:  # recovery mode sits there
             issues.append(("warn", "FALLBACK-IP",
-                           f"Sitting on the factory fallback address {FALLBACK_IP}, which usually means "
-                           "no DHCP lease. Several devices in this state will conflict with each other."))
+                           tr("Sitting on the factory fallback address {address}, which usually means "
+                              "no DHCP lease. Several devices in this state will conflict with each other.",
+                              address=FALLBACK_IP)))
         if info.get("dhcp_client") is True and info.get("dhcp_bound") is False:
             issues.append(("warn", "NO-LEASE",
-                           "DHCP client is on but has no lease. Check the DHCP server, VLAN tagging "
-                           "and the switch port."))
+                           _("DHCP client is on but has no lease. Check the DHCP server, VLAN tagging "
+                             "and the switch port.")))
         conflicts = sorted({k for ip in d.ips for k in owners.get(ip, ()) if k != d.key})
         if conflicts:
             shared = sorted({ip for ip in d.ips if len(owners.get(ip, ())) > 1})
             issues.append(("error", "IP-CONFLICT",
-                           f"{', '.join(shared)} is also used by {', '.join(conflicts)}."))
+                           tr("{addresses} is also used by {devices}.", addresses=", ".join(shared),
+                              devices=", ".join(conflicts))))
         if heard_ubnt and d.alias and not d.direct:
             a = d.alias
             if a["interface"] in probed_links:
-                why = (f"Only answered once this computer had an address in {a['network']} (temporary "
-                       f"{a['alias']} on {a['interface']}): newer firmware ignores discovery from other subnets.")
+                why = tr("Only answered once this computer had an address in {network} (temporary {alias} on "
+                         "{interface}): newer firmware ignores discovery from other subnets.",
+                         network=a["network"], alias=a["alias"], interface=a["interface"])
             elif a.get("vlan"):
-                why = f"Reached through temporary {a['alias']} on tagged VLAN {a['vlan']} ({a['parent']})."
+                why = tr("Reached through temporary {alias} on tagged VLAN {vlan} ({parent}).",
+                         alias=a["alias"], vlan=a["vlan"], parent=a["parent"])
             else:
-                why = (f"Reached through temporary {a['alias']} on {a['interface']}, which had no address "
-                       "of its own.")
-            issues.append(("note", "ALIAS", why + " Keep addresses (--hold) keeps that address for working on it."))
+                why = tr("Reached through temporary {alias} on {interface}, which had no address of its own.",
+                         alias=a["alias"], interface=a["interface"])
+            issues.append(("note", "ALIAS", i18n.sentences(
+                why, _("Keep addresses (--hold) keeps that address for working on it."))))
         elif (heard_ubnt and d.ips and local_nets and not any(_in_any(ip, local_nets) for ip in d.ips)
                 and not any(_in_any(ip, scan_nets) for ip in d.ips)):
             nets = ", ".join(str(n) for n in local_nets)
             issues.append(("warn", "OFF-SUBNET",
-                           f"Answers discovery from other subnets (older firmware does), but its address "
-                           f"isn't in this computer's subnet(s) ({nets}), so its web UI and SSH can't be "
-                           "reached from here. Probe its subnet through a temporary address (its subnet in the "
-                           "networks file, then Probe listed networks and Keep addresses: -a --hold), or fix "
-                           "its IP/VLAN."))
+                           tr("Answers discovery from other subnets (older firmware does), but its address "
+                              "isn't in this computer's subnet(s) ({networks}), so its web UI and SSH can't be "
+                              "reached from here. Probe its subnet through a temporary address (its subnet in the "
+                              "networks file, then Probe listed networks and Keep addresses: -a --hold), or fix "
+                              "its IP/VLAN.", networks=nets)))
         if d.wifi:
-            msg = f"This computer's Wi-Fi ({d.wifi['iface']}) is joined to this access point (BSSID {d.wifi['bssid']})."
+            msg = tr("This computer's Wi-Fi ({interface}) is joined to this access point (BSSID {bssid}).",
+                     interface=d.wifi["iface"], bssid=d.wifi["bssid"])
             if not d.ip:
-                msg += (" Its management address isn't on that Wi-Fi network: probe its management VLAN with Trunk "
-                        "VLANs (--vlans) from a wired interface on a trunk, or give its subnet with --alias.")
+                msg = i18n.sentences(msg, _(
+                    "Its management address isn't on that Wi-Fi network: probe its management VLAN with Trunk "
+                    "VLANs (--vlans) from a wired interface on a trunk, or give its subnet with --alias."))
             issues.append(("note", "WIFI-AP", msg))
         link = d.alias.get("interface")
         clashes = sorted(ip for ip in d.ips if (link, ip) in alias_used)
         if clashes:
             issues.append(("warn", "ALIAS-CONFLICT",
-                           f"Uses {', '.join(clashes)}, which this tool borrowed on {link} for a few seconds "
-                           "before it knew the address was taken. For a whole subnet, pin another alias "
-                           "with alias= in the networks file."))
+                           tr("Uses {addresses}, which this tool borrowed on {interface} for a few seconds "
+                              "before it knew the address was taken. For a whole subnet, pin another alias "
+                              "with alias= in the networks file.", addresses=", ".join(clashes), interface=link)))
         for port in info.get("ports", []):
             if isinstance(port, dict) and port.get("type") == "WAN" and port.get("plugged") is False:
-                issues.append(("warn", "WAN-DOWN", f"WAN port {port.get('name', '?')} reports no link."))
+                issues.append(("warn", "WAN-DOWN", tr("WAN port {port} reports no link.", port=port.get("name", "?"))))
         if info.get("locating"):
-            issues.append(("note", "LOCATING", "Locate mode is on (LED flashing)."))
+            issues.append(("note", "LOCATING", _("Locate mode is on (LED flashing).")))
         up = info.get("uptime")
         if isinstance(up, int) and up < 300:
             issues.append(("warn", "REBOOTED",
-                           f"Uptime is only {fmt_uptime(up)}. If it keeps rebooting, check PoE budget, "
-                           "cabling and firmware."))
+                           tr("Uptime is only {uptime}. If it keeps rebooting, check PoE budget, "
+                              "cabling and firmware.", uptime=fmt_uptime(up))))
         if not heard_ubnt and d.vendor == "Ubiquiti" and any(_in_any(ip, skipped) for ip in d.ips):
             issues.append(("note", "NOT-PROBED",
-                           "Both addresses in its /30 are taken (or one is its gateway), so it wasn't probed: "
-                           "getting an answer would mean borrowing one of them."))
+                           _("Both addresses in its /30 are taken (or one is its gateway), so it wasn't probed: "
+                             "getting an answer would mean borrowing one of them.")))
         elif (not heard_ubnt and "sniff" in d.via and not d.alias and local_nets and d.ips
               and not any(_in_any(ip, local_nets) for ip in d.ips)):
             nets = ", ".join(sorted({str(ipaddress.IPv4Network(f"{ip}/24", strict=False)) for ip in d.ips}))
             if d.vlan and not (opts.vlans or opts.vlan_ids or opts.direct):
-                advice = (" It's on tagged VLAN %d: Trunk VLANs (--vlans) probes it through a temporary tagged "
-                          "interface." % d.vlan)
+                advice = tr("It's on tagged VLAN {vlan}: Trunk VLANs (--vlans) probes it through a temporary tagged "
+                            "interface.", vlan=d.vlan)
             elif opts.alias_mode:
-                advice = " It didn't answer probes from a temporary address in its subnet." if d.vendor == "Ubiquiti" else ""
+                advice = (_("It didn't answer probes from a temporary address in its subnet.")
+                          if d.vendor == "Ubiquiti" else "")
             else:
-                advice = " Adding Probe listed networks (-a) probes it through a temporary address in its subnet."
-            issues.append(("note", "OTHER-SUBNET", f"Heard on the wire, outside this computer's subnets ({nets})."
-                           + advice))
+                advice = _("Adding Probe listed networks (-a) probes it through a temporary address in its subnet.")
+            issues.append(("note", "OTHER-SUBNET", i18n.sentences(
+                tr("Heard on the wire, outside this computer's subnets ({networks}).", networks=nets), advice)))
         elif d.tftp:
             issues.append(("error", "TFTP-RECOVERY",
-                           f"A TFTP server answers on {d.ip} and UBNT discovery doesn't: it's in TFTP recovery "
-                           "mode, waiting for firmware. Upload a firmware image for this model with a TFTP client "
-                           f"in binary mode (tftp -i {d.ip} put <firmware>.bin) and leave it powered until it "
-                           "reboots, which can take 10 minutes."))
+                           tr("A TFTP server answers on {ip} and UBNT discovery doesn't: it's in TFTP recovery "
+                              "mode, waiting for firmware. Upload a firmware image for this model with a TFTP client "
+                              "in binary mode (tftp -i {ip} put <firmware>.bin) and leave it powered until it "
+                              "reboots, which can take 10 minutes.", ip=d.ip)))
         elif not heard_ubnt and not opts.listen and d.via and d.ips and d.vendor == "Ubiquiti":
             seen = "/".join(v for v in VIA_ORDER if v in d.via)
-            hint = (f" Sitting at {FALLBACK_IP} without discovery, it may be in TFTP recovery mode (its LEDs "
-                    "cycle): then it takes firmware over TFTP." if FALLBACK_IP in d.ips else "")
-            issues.append(("warn", "NO-DISCOVERY",
-                           f"Seen via {seen} but didn't answer UBNT discovery: discovery may be turned "
-                           "off on the device, UDP 10001 filtered (firewall, client isolation), or the "
-                           "model doesn't support it." + hint))
+            hint = (tr("Sitting at {address} without discovery, it may be in TFTP recovery mode (its LEDs cycle): "
+                       "then it takes firmware over TFTP.", address=FALLBACK_IP) if FALLBACK_IP in d.ips else "")
+            issues.append(("warn", "NO-DISCOVERY", i18n.sentences(
+                tr("Seen via {via} but didn't answer UBNT discovery: discovery may be turned "
+                   "off on the device, UDP 10001 filtered (firewall, client isolation), or the "
+                   "model doesn't support it.", via=seen), hint)))
         for kind, tag, standard in (("https", "HTTPS-PORT", opts.https_ports), ("ssh", "SSH-PORT", opts.ssh_ports)):
-            name = "web UI" if kind == "https" else "SSH"
+            name = _("web UI") if kind == "https" else "SSH"
             said = d.said_ports(kind)
             reported = d.said_port(kind)
             if len(set(said.values())) > 1:
-                issues.append(("warn", tag, f"Gives different {name} ports: " + "; ".join(
-                    f"{port} from {PORT_SOURCES[source]}" for source, port in said.items()) + "."))
+                issues.append(("warn", tag, tr("Gives different {service} ports: {ports}.", service=name,
+                                               ports="; ".join(tr("{port} from {source}", port=port,
+                                                                  source=_(PORT_SOURCES[source]))
+                                                               for source, port in said.items()))))
             if (d.key, kind) in odd_ports:
                 issues.append(("warn", tag, odd_ports[(d.key, kind)]))
             if reported and standard and reported not in standard:
-                issues.append(("warn", tag, f"Reports its {name} on port {reported}, not the standard "
-                                            f"{', '.join(map(str, standard))} given: a typo in its config?"))
+                issues.append(("warn", tag, tr("Reports its {service} on port {port}, not the standard "
+                                               "{standard} given: a typo in its config?", service=name,
+                                               port=reported, standard=", ".join(map(str, standard)))))
             if reported and d.ports is not None:
                 found = d.services.get(reported)
                 elsewhere = sorted(p for p, k in d.services.items() if k == kind and p != reported)
                 if found is None:
-                    issues.append(("warn", tag, f"Reports its {name} on port {reported}, but nothing answers there"
-                                   + (f"; {kind.upper()} answers on {', '.join(map(str, elsewhere))}." if elsewhere
-                                      else ".")))
+                    issues.append(("warn", tag, tr("Reports its {service} on port {port}, but nothing answers there; "
+                                                   "{protocol} answers on {ports}.", service=name, port=reported,
+                                                   protocol=kind.upper(), ports=", ".join(map(str, elsewhere)))
+                                   if elsewhere else tr("Reports its {service} on port {port}, but nothing answers "
+                                                        "there.", service=name, port=reported)))
                 elif kind == "https" and found == "http":
-                    issues.append(("note", tag, f"The web UI on port {reported} is plain HTTP, not HTTPS."))
+                    issues.append(("note", tag, tr("The web UI on port {port} is plain HTTP, not HTTPS.",
+                                                   port=reported)))
                 elif found != kind:
-                    issues.append(("warn", tag, f"Port {reported} answers, but not with {kind.upper()} ({found})."))
+                    issues.append(("warn", tag, tr("Port {port} answers, but not with {protocol} ({found}).",
+                                                   port=reported, protocol=kind.upper(), found=found)))
         if d.ports is not None and not d.ports:
             issues.append(("warn", "NO-PORTS",
-                           f"No management ports open ({', '.join(map(str, CHECK_PORTS))}): firewalled, "
-                           "still booting, or not reachable at layer 3."))
+                           tr("No management ports open ({ports}): firewalled, still booting, or not reachable "
+                              "at layer 3.", ports=", ".join(map(str, CHECK_PORTS)))))
         if d.packets:
             bad = damage_summary(d, packet_findings(d))
-            if bad:
-                issues.append(("warn", "DAMAGED",
-                               f"Discovery packets arrived damaged: {'; '.join(bad[:4])}"
-                               + (f" and {len(bad) - 4} more" if len(bad) > 4 else "")
-                               + ". On this computer's own subnet, damage that comes and goes points to a cable or "
-                                 "connector, a failing port, or a speed/duplex mismatch. See its packets "
-                                 "(Packets tab, or -v --raw)."))
+            if bad:  # what was damaged in the Packets tab's words, which stay English
+                damage = (tr("Discovery packets arrived damaged: {damage} and {count} more.", damage="; ".join(bad[:4]),
+                             count=len(bad) - 4) if len(bad) > 4
+                          else tr("Discovery packets arrived damaged: {damage}.", damage="; ".join(bad[:4])))
+                issues.append(("warn", "DAMAGED", i18n.sentences(damage, _(
+                    "On this computer's own subnet, damage that comes and goes points to a cable or connector, a "
+                    "failing port, or a speed/duplex mismatch. See its packets (Packets tab, or -v --raw)."))))
         answered, sent = reply_rounds(d, inv.rounds)
         if sent >= 5 and sent - answered >= 2 and (sent - answered) / sent >= 0.1:
             issues.append(("warn", "LOSS",
-                           f"Answered {answered} of {sent} rounds of discovery probes while in view: "
-                           f"{sent - answered} went unanswered. On this computer's own subnet that's packet loss: "
-                           "Wi-Fi interference, a bad cable or port, a busy link, or a busy device."))
+                           tr("Answered {answered} of {sent} rounds of discovery probes while in view: "
+                              "{missed} went unanswered. On this computer's own subnet that's packet loss: "
+                              "Wi-Fi interference, a bad cable or port, a busy link, or a busy device.",
+                              answered=answered, sent=sent, missed=sent - answered)))
         issues += health.issues(d)
         linkhealth.apply(d)  # a reading taken earlier in the run, before this scan found it again
         issues += linkhealth.issues(d)
@@ -4498,40 +4522,56 @@ def nested_ip(d: Device, depth: int) -> str:
 
 # What the Status column says for each finding, in a word or two; Diagnostics say the rest.
 STATUS_LABELS = {
-    "IP-CONFLICT": "IP conflict", "LINK-LOCAL": "Self-assigned IP", "DEFAULT": "Factory default",
-    "LOCATING": "Locating (LED)", "NOT-SET-UP": "Not set up", "NOT-PROBED": "Not probed",
-    "OTHER-SUBNET": "Other subnet", "WIFI-AP": "This Wi-Fi's AP", "ALIAS": "Via temporary address",
-    "ALIAS-CONFLICT": "Address clash", "DAMAGED": "Damaged packets", "FALLBACK-IP": "Fallback IP",
-    "LOSS": "Missed replies", "NO-DISCOVERY": "No discovery reply", "NO-LEASE": "No DHCP lease",
-    "NO-PORTS": "No ports open", "OFF-SUBNET": "Wrong subnet", "REBOOTED": "Rebooted recently",
-    "WAN-DOWN": "WAN down", "HTTPS-PORT": "HTTPS port problem", "SSH-PORT": "SSH port problem",
-    "CVE": "CVE risk", "TFTP-RECOVERY": "TFTP recovery mode",
-    "HIGH-LATENCY": "High latency", "PING-LOSS": "Packet loss", "FACTORY-LOGIN": "Factory login",
-    "WEAK-SIGNAL": "Weak signal", "HOT-SIGNAL": "Signal too strong", "CHAIN-IMBALANCE": "Uneven chains",
-    "LOW-SNR": "Low SNR", "LOW-CAPACITY": "Low capacity", "LOW-QUALITY": "Low airMAX quality",
+    "IP-CONFLICT": N_("IP conflict"), "LINK-LOCAL": N_("Self-assigned IP"), "DEFAULT": N_("Factory default"),
+    "LOCATING": N_("Locating (LED)"), "NOT-SET-UP": N_("Not set up"), "NOT-PROBED": N_("Not probed"),
+    "OTHER-SUBNET": N_("Other subnet"), "WIFI-AP": N_("This Wi-Fi's AP"), "ALIAS": N_("Via temporary address"),
+    "ALIAS-CONFLICT": N_("Address clash"), "DAMAGED": N_("Damaged packets"), "FALLBACK-IP": N_("Fallback IP"),
+    "LOSS": N_("Missed replies"), "NO-DISCOVERY": N_("No discovery reply"), "NO-LEASE": N_("No DHCP lease"),
+    "NO-PORTS": N_("No ports open"), "OFF-SUBNET": N_("Wrong subnet"), "REBOOTED": N_("Rebooted recently"),
+    "WAN-DOWN": N_("WAN down"), "HTTPS-PORT": N_("HTTPS port problem"), "SSH-PORT": N_("SSH port problem"),
+    "CVE": N_("CVE risk"), "TFTP-RECOVERY": N_("TFTP recovery mode"),
+    "HIGH-LATENCY": N_("High latency"), "PING-LOSS": N_("Packet loss"), "FACTORY-LOGIN": N_("Factory login"),
+    "WEAK-SIGNAL": N_("Weak signal"), "HOT-SIGNAL": N_("Signal too strong"), "CHAIN-IMBALANCE": N_("Uneven chains"),
+    "LOW-SNR": N_("Low SNR"), "LOW-CAPACITY": N_("Low capacity"), "LOW-QUALITY": N_("Low airMAX quality"),
 }
 LEVEL_ORDER = ("ok", "note", "warn", "error")
 NVD_URL = "https://nvd.nist.gov/vuln/detail/{}"
 
 
-def status_label(tag: str) -> str:
-    return STATUS_LABELS.get(tag, tag.replace("-", " ").capitalize())
+def status_label(tag: str, english: bool = False) -> str:
+    """The Status column's word or two for a finding, in the app's language (english: as the CSV
+    export keeps it)."""
+    label = STATUS_LABELS.get(tag)
+    if label is None:
+        return tag.replace("-", " ").capitalize()
+    return label if english else _(label)
+
+
+def shown(text: str, english: bool = False, **values) -> str:
+    """A text marked with N_(), filled in with values like tr(): in the app's language, or with english
+    as written, for what stays English (the CSV export's vocabularies, the Packets tab)."""
+    template = text if english else _(text)
+    try:
+        return template.format(**values) if values else template
+    except (KeyError, IndexError, ValueError):  # a translation's placeholders don't match: English, then
+        return text.format(**values)
 
 
 ALERT = "\u2757"  # a red exclamation mark (an emoji, so it's red without colour support)
 
 
-def status_cell(d: Device) -> tuple:
+def status_cell(d: Device, english: bool = False) -> tuple:
     """Plain and coloured text for the Status column: the finding in a word or two, or "Multiple
     issues" when there's more than one (Details and the issue list name them all). A device with
-    known CVEs starts with a red exclamation mark."""
+    known CVEs starts with a red exclamation mark. english: as the CSV export keeps it."""
     if not d.issues:
-        text, level = ("Console", "note") if d.console else ("OK", "ok")
+        text, level = (N_("Console"), "note") if d.console else (N_("OK"), "ok")
+        text = shown(text, english)
     elif len(d.issues) == 1:
-        level, tag, _ = d.issues[0]
-        text = status_label(tag)
+        level, tag = d.issues[0][:2]
+        text = status_label(tag, english)
     else:
-        text = f"Multiple issues ({len(d.issues)})"
+        text = shown(N_("Multiple issues ({count})"), english, count=len(d.issues))
         level = max((lv for lv, _, _ in d.issues), key=LEVEL_ORDER.index)
     plain, coloured = text, Style.level(text, level)
     if d.cves:
@@ -4560,21 +4600,25 @@ def render_table(devs) -> str:
     return "\n".join(out)
 
 
-def _fmt_value(key: str, value) -> str:
+def _fmt_value(key: str, value, english: bool = False) -> str:
+    """A field's value as Details shows it; english: as the Packets tab does."""
     if key == "uptime" and isinstance(value, int):
         return f"{fmt_uptime(value)} ({value}s)"
     if isinstance(value, bool):
-        return "yes" if value else "no"
+        return shown(N_("yes") if value else N_("no"), english)
     if isinstance(value, dict):
         if key == "webui" and "port" in value:
-            web = " (the web UI)" if value.get("flags", 0) & 1 else " (not marked as the web UI)"
-            return f"port {value['port']}, flags 0x{value.get('flags', 0):04x}{web}"
+            web = (N_("port {port}, flags 0x{flags:04x} (the web UI)") if value.get("flags", 0) & 1
+                   else N_("port {port}, flags 0x{flags:04x} (not marked as the web UI)"))
+            return shown(web, english, port=value["port"], flags=value.get("flags", 0))
         bits = [str(value[k]) for k in ("name", "type") if value.get(k)]
         if "plugged" in value:
-            bits.append("link up" if value["plugged"] else "no link")
+            bits.append(shown(N_("link up") if value["plugged"] else N_("no link"), english))
         bits += [str(value[k]) for k in ("mac", "ip") if k in value]
         bits += [f"{k}={v}" for k, v in value.items() if k not in ("name", "type", "plugged", "mac", "ip")]
         return "  ".join(bits)
+    if key == "wlan_mode" and value in WLAN_MODES.values():
+        return shown(value, english)
     return str(value)
 
 
@@ -4598,11 +4642,11 @@ def render_details(d: Device) -> str:
     title = "  ".join(x for x in (d.ip, d.mac or "", d.model) if x)
     out = [Style.bold(f"== {title} " + "=" * max(4, 74 - len(title)))]
 
-    def row(label, value):
-        out.append(f"  {label:<22} {value}")
+    def row(label, value):  # padded by display width: a Japanese character takes two columns
+        out.append(f"  {label}{' ' * max(0, 22 - i18n.width(label))} {value}")
 
     for n, line in enumerate(d.note.splitlines()):
-        row("Note" if n == 0 else "", line)
+        row(_("Note") if n == 0 else "", line)
     for spec in TLV.values():
         key = spec[0]
         value = d.info.get(key)
@@ -4610,92 +4654,99 @@ def render_details(d: Device) -> str:
             continue
         if isinstance(value, list):
             for n, v in enumerate(value):
-                row(spec[1] if n == 0 else "", _fmt_value(key, v))
+                row(_(spec[1]) if n == 0 else "", _fmt_value(key, v))
         else:
-            row(spec[1], _fmt_value(key, value))
+            row(_(spec[1]), _fmt_value(key, value))
     if len(d.ips) > 1:
-        row("All IPs", ", ".join(d.ips))
+        row(_("All IPs"), ", ".join(d.ips))
     if d.other_macs:
-        row("Other MACs", ", ".join(sorted(d.other_macs)))
-    row("Seen via", ", ".join(v for v in VIA_ORDER if v in d.via))
+        row(_("Other MACs"), ", ".join(sorted(d.other_macs)))
+    row(_("Seen via"), ", ".join(v for v in VIA_ORDER if v in d.via))
     if d.vlan is not None:
-        how = f"tagged, on {d.vlan_parent}" if d.vlan else f"untagged on {d.vlan_parent}"
+        how = (tr("tagged, on {interface}", interface=d.vlan_parent) if d.vlan
+               else tr("untagged on {interface}", interface=d.vlan_parent))
         row("VLAN", f"{d.vlan_label} ({how})")
     if d.seen_on:
-        row("Answered on", ", ".join(sorted(d.seen_on)))
+        row(_("Answered on"), ", ".join(sorted(d.seen_on)))
     if d.found_by:
-        row("Found through", f"{d.found_by.get('ip', '?')}" + (f" ({d.found_by['how']})" if d.found_by.get("how") else ""))
+        row(_("Found through"), f"{d.found_by.get('ip', '?')}"
+            + (f" ({_(d.found_by['how'])})" if d.found_by.get("how") else ""))
     if d.lldp:
         bits = [d.lldp.get(k) for k in ("system", "description") if d.lldp.get(k)]
         if d.lldp.get("mgmt_ip"):
-            bits.append(f"mgmt {d.lldp['mgmt_ip']}")
-        row("LLDP", "  ".join(bits) or "(announced, no identity)")
+            bits.append(tr("mgmt {ip}", ip=d.lldp["mgmt_ip"]))
+        row("LLDP", "  ".join(bits) or _("(announced, no identity)"))
     if d.alias:
         a = d.alias
-        row("Reached via alias", f"{a['alias']}/{a['prefix']} on {a['interface']}"
-                                 + ("  (also answered without it)" if d.direct else ""))
+        row(_("Reached via alias"), tr("{alias}/{prefix} on {interface}", alias=a["alias"], prefix=a["prefix"],
+                                       interface=a["interface"])
+            + ("  " + _("(also answered without it)") if d.direct else ""))
     if d.protocols:
         n = d.ubnt_packets
-        row("UBNT protocol", ", ".join(sorted(d.protocols)) + f"  ({n} packet{'' if n == 1 else 's'})")
+        row(_("UBNT protocol"), ", ".join(sorted(d.protocols)) + "  "
+            + (tr("({count} packet)", count=n) if n == 1 else tr("({count} packets)", count=n)))
     if d.mac:
-        row("Vendor (MAC)", vendor_of(d.mac) or "not in the built-in lists")
+        row(_("Vendor (MAC)"), vendor_of(d.mac) or _("not in the built-in lists"))
     if d.mdns:
         if d.mdns.get("hostnames"):
-            row("mDNS hostnames", ", ".join(d.mdns["hostnames"]))
+            row(_("mDNS hostnames"), ", ".join(d.mdns["hostnames"]))
         if d.mdns.get("services"):
-            row("mDNS services", ", ".join(d.mdns["services"]))
+            row(_("mDNS services"), ", ".join(d.mdns["services"]))
         for inst, txt in list(d.mdns.get("txt", {}).items())[:6]:
-            row("mDNS TXT", f"{inst}: {' '.join(txt)[:120]}")
+            row(_("mDNS TXT"), f"{inst}: {' '.join(txt)[:120]}")
     if d.ssdp:
         desc = " / ".join(d.ssdp[k] for k in ("friendlyName", "manufacturer", "modelName", "modelDescription")
                           if d.ssdp.get(k))
         if desc:
             row("SSDP", desc)
         if d.ssdp.get("server"):
-            row("SSDP server", d.ssdp["server"])
+            row(_("SSDP server"), d.ssdp["server"])
     if d.api:
         s = d.system
         hw = s.get("hardware") if isinstance(s.get("hardware"), dict) else {}
         bits = [f"{k}={v}" for k, v in (("name", s.get("name")), ("hardware", hw.get("shortname")),
                                         ("isSetup", s.get("isSetup")), ("mac", s.get("mac"))) if v is not None]
         if bits:
-            row("Console API", "  ".join(bits))
+            row(_("Console API"), "  ".join(bits))
         if d.api.get("apps"):
-            row("Console apps", ", ".join(d.api["apps"]))
-    for kind, label in (("http", "HTTP port"), ("https", "HTTPS port"), ("ssh", "SSH port")):
+            row(_("Console apps"), ", ".join(d.api["apps"]))
+    for kind, label in (("http", N_("HTTP port")), ("https", N_("HTTPS port")), ("ssh", N_("SSH port"))):
         said = d.said_ports(kind)
         if said:
-            row(label, "; ".join(f"{port} ({PORT_SOURCES[source]})" for source, port in said.items()))
+            row(_(label), "; ".join(f"{port} ({_(PORT_SOURCES[source])})" for source, port in said.items()))
     if d.ports is not None:
         if not d.ports:
-            row("Open TCP ports", "none")
+            row(_("Open TCP ports"), _("none"))
         for n, p in enumerate(d.ports):
-            row("Open TCP ports" if n == 0 else "",
+            row(_("Open TCP ports") if n == 0 else "",
                 f"{p:<5} {d.services.get(p, ''):<6} {d.service_info.get(p, '')}".rstrip())
     if d.port_search:
         ps = d.port_search
-        what = "every TCP port" if ps["checked"] >= 65535 else f"{ps['checked']} of 65535 TCP ports"
-        why = (" (stopped)" if ps.get("stopped") else
-               f" (stopped once {SERVICE_NAMES[ps['for']]} turned up)" if ps["checked"] < 65535 else "")
-        row("Port search", f"{what}{why}, {time.strftime('%H:%M', time.localtime(ps['at']))}")
+        what = _("every TCP port") if ps["checked"] >= 65535 else tr("{count} of 65535 TCP ports", count=ps["checked"])
+        why = (" " + _("(stopped)") if ps.get("stopped") else
+               " " + tr("(stopped once {service} turned up)", service=_(SERVICE_NAMES[ps["for"]]))
+               if ps["checked"] < 65535 else "")
+        row(_("Port search"), f"{what}{why}, {time.strftime('%H:%M', time.localtime(ps['at']))}")
     url = web_url(d)
     if url:
-        row("Web UI URL", url)
+        row(_("Web UI URL"), url)
     if d.unknown_tlvs:
         for n, (t, v) in enumerate(sorted(d.unknown_tlvs.items())):
-            row("Unknown TLVs" if n == 0 else "", f"{t} = {v[:64]}{'...' if len(v) > 64 else ''}")
-    for label, text in health.detail_rows(d) + linkhealth.detail_rows(d):
+            row(_("Unknown TLVs") if n == 0 else "", f"{t} = {v[:64]}{'...' if len(v) > 64 else ''}")
+    for label, text in health.detail_rows(d):  # its labels stay English, for the Site Report to find
+        row(_(label), text)
+    for label, text in linkhealth.detail_rows(d):
         row(label, text)
     if d.cves:
-        out.append(f"  Known CVEs ({len(d.cves)}, from the {vulns.list_label()}):")
+        out.append("  " + tr("Known CVEs ({count}, from the {list}):", count=len(d.cves), list=vulns.list_label()))
         for m, line in zip(d.cves, vulns.detail_lines(d.cves)):
             out.append(f"    {Style.level(line[:16], vulns.LEVELS.get(m.cve.get('severity'), 'warn'))}{line[16:]}")
     elif d.cves is not None:
-        row("Known CVEs", f"none in the {vulns.list_label()} (no match isn't proof it's safe)")
+        row(_("Known CVEs"), tr("none in the {list} (no match isn't proof it's safe)", list=vulns.list_label()))
     elif d.ubnt_packets:
-        row("Known CVEs", "not checked: the CVE list doesn't cover this model or firmware")
+        row(_("Known CVEs"), _("not checked: the CVE list doesn't cover this model or firmware"))
     if d.issues:
-        out.append("  Diagnostics:")
+        out.append("  " + _("Diagnostics:"))
         for level, tag, msg in d.issues:
             out.append(f"    {Style.level(f'[{tag}]', level)} {msg}")
     return "\n".join(out)
@@ -4747,10 +4798,11 @@ def render_packets(d: Device, inv: Inventory | None = None, counters: dict | Non
                 up = counters["interfaces"][name]
                 if name == "all adapters":  # Windows' total drops also count protocols it just ignores
                     up = {k: n for k, n in up.items() if k != "drops"}
-                row(name, f"during the scan: {counter_text(up)}" if up else "no errors or drops during the scan")
+                row(name, f"during the scan: {counter_text(up, english=True)}" if up
+                    else "no errors or drops during the scan")
         if counters.get("system_read"):
-            row("This computer", f"during the scan: {counter_text(counters['system'])}" if counters["system"]
-                else "no IP or UDP errors during the scan")
+            row("This computer", f"during the scan: {counter_text(counters['system'], english=True)}"
+                if counters["system"] else "no IP or UDP errors during the scan")
     if d.ubnt_packets:
         out.append("  Checked: lengths, field sizes, text, repeated fields, changes between replies"
                    + ("; IP/UDP checksums of packets captured off the wire" if any(r.frame for r in packets) else ""))
@@ -4852,28 +4904,31 @@ def render_notes(inv: Inventory, sc: Scanner, opts) -> list:
     if controllers:
         who = ", ".join(sorted(controllers))
         level = "warn" if len(controllers) > 1 else "note"
-        msg = (f"Other hosts are sending UBNT discovery probes from port {opts.port}: {who}. That's normally "
-               "a UniFi Network application, WiFiman or another discovery tool.")
+        msg = tr("Other hosts are sending UBNT discovery probes from port {port}: {hosts}. That's normally "
+                 "a UniFi Network application, WiFiman or another discovery tool.", port=opts.port, hosts=who)
         if len(controllers) > 1:
-            msg += " More than one controller on a network can adopt devices out from under each other."
+            msg = i18n.sentences(msg, _("More than one controller on a network can adopt devices out from under "
+                                        "each other."))
         notes.append((level, msg))
     checked = [d for d in inv.devices.values() if d.cves is not None]
     if checked:
         info = vulns.list_info()
-        notes.append(("note", f"The firmware of {len(checked)} device(s) was checked against {info['cves']} known CVEs "
-                              f"({vulns.list_label()}, from the NVD and Ubiquiti's security advisories). No match "
-                              "isn't proof a device is safe: only models and firmware versions discovery identifies "
-                              "for certain are checked, and the newest CVEs may be missing from the list. "
-                              + vulns.NVD_NOTICE))
+        notes.append(("note", i18n.sentences(
+            tr("The firmware of {count} device(s) was checked against {cves} known CVEs ({list}, from the NVD and "
+               "Ubiquiti's security advisories). No match isn't proof a device is safe: only models and firmware "
+               "versions discovery identifies for certain are checked, and the newest CVEs may be missing from the "
+               "list.", count=len(checked), cves=info["cves"], list=vulns.list_label()), _(vulns.NVD_NOTICE))))
     if not inv.devices and not opts.listen and not opts.direct:
-        notes.append(("note", "Nothing answered. Check that this computer is on the same VLAN as the devices, "
-                              "that Wi-Fi client isolation isn't on, and that the firewall allows inbound UDP. "
-                              "Newer gear on another subnet needs a temporary address in it (Probe listed "
-                              "networks, -a); for routed or VPN networks, give the device subnet: "
-                              "opendisco.py 10.0.5.0/24"
-                              + (". On macOS, also check that OpenDisco (or the terminal running it) is allowed in "
-                                 "System Settings > Privacy & Security > Local Network: blocked, it hears nothing "
-                                 "and macOS doesn't say so." if sys.platform == "darwin" else "")))
+        nothing = _("Nothing answered. Check that this computer is on the same VLAN as the devices, "
+                    "that Wi-Fi client isolation isn't on, and that the firewall allows inbound UDP. "
+                    "Newer gear on another subnet needs a temporary address in it (Probe listed "
+                    "networks, -a); for routed or VPN networks, give the device subnet: "
+                    "opendisco.py 10.0.5.0/24")
+        if sys.platform == "darwin":
+            nothing = tr("{nothing}. On macOS, also check that OpenDisco (or the terminal running it) is allowed in "
+                         "System Settings > Privacy & Security > Local Network: blocked, it hears nothing "
+                         "and macOS doesn't say so.", nothing=nothing)
+        notes.append(("note", nothing))
     return notes
 
 
@@ -5171,9 +5226,10 @@ class ScanResult:
     finished: float = field(default_factory=time.time)  # when the scan ended (the Site Report's date)
 
     def wire_title(self) -> str:
+        """The Wire tab's heading, in English (the Site Report translates it)."""
         if self.opts.direct:
-            return "Plugged directly into"
-        return "Heard on the wire" if self.opts.sniff else "VLANs heard on wired interfaces"
+            return N_("Plugged directly into")
+        return N_("Heard on the wire") if self.opts.sniff else N_("VLANs heard on wired interfaces")
 
     def wire_text(self, verbose: bool = False) -> str:
         if not self.trunks:
@@ -5200,8 +5256,9 @@ def result_to_dict(res: ScanResult) -> dict:
     }
 
 
-EXPORT_COLUMNS = ("IP", "VLAN", "Vendor", "MAC", "Model", "Name", "Firmware", "Latency", "HTTP", "HTTPS", "SSH",
-                  "Uptime", "Via", "Status")
+# The table's and the CSV export's columns: the CSV keeps them English, the table translates them
+EXPORT_COLUMNS = ("IP", "VLAN", N_("Vendor"), "MAC", N_("Model"), N_("Name"), N_("Firmware"), N_("Latency"), "HTTP",
+                  "HTTPS", "SSH", N_("Uptime"), N_("Via"), N_("Status"))
 
 
 def port_cell(d: Device, kind: str) -> str:
@@ -5218,11 +5275,12 @@ def port_cell(d: Device, kind: str) -> str:
     return ", ".join([verdict] + elsewhere)
 
 
-def device_row(d: Device) -> list:
-    """The values the table, CSV and HTML exports show for a device."""
-    return [d.ip or "", d.vlan_label, d.vendor, d.mac or "", d.model, d.name, health.firmware_cell(d),
-            health.latency_cell(d), port_cell(d, "http"), port_cell(d, "https"), port_cell(d, "ssh"),
-            fmt_uptime(d.info.get("uptime")), ",".join(v for v in VIA_ORDER if v in d.via), status_cell(d)[0]]
+def device_row(d: Device, english: bool = False) -> list:
+    """The values the table, CSV and HTML exports show for a device; english: as the CSV keeps them."""
+    return [d.ip or "", d.vlan_label, d.vendor, d.mac or "", d.model, d.name, health.firmware_cell(d, english),
+            health.latency_cell(d, english), port_cell(d, "http"), port_cell(d, "https"), port_cell(d, "ssh"),
+            fmt_uptime(d.info.get("uptime")), ",".join(v for v in VIA_ORDER if v in d.via),
+            status_cell(d, english)[0]]
 
 
 def export_csv(res: ScanResult) -> str:
@@ -5232,7 +5290,7 @@ def export_csv(res: ScanResult) -> str:
     writer = csv.writer(out)
     writer.writerow(EXPORT_COLUMNS + ("Diagnostics", "Found through", "Latest firmware", "Note"))
     for d in res.devices:
-        writer.writerow(device_row(d) + [" | ".join(f"[{tag}] {msg}" for _, tag, msg in d.issues),
+        writer.writerow(device_row(d, english=True) + [" | ".join(f"[{tag}] {msg}" for _, tag, msg in d.issues),
                                          d.found_by.get("ip", ""), health.latest_version(d), d.note])
     return out.getvalue()
 
@@ -5309,9 +5367,11 @@ def run_scan(opts, log, progress=None, on_inventory=None):
                 kept.append(t)
             elif t.network not in overlap_noted:
                 overlap_noted.add(t.network)
-                extra_notes.append(("note", f"No alias for {t.network}: {clash} is already in it, so it was "
-                                            "probed directly. If gear on another interface uses that subnet too, "
-                                            "disconnect this network (e.g. turn Wi-Fi off) and run again."))
+                # i18n.tr in run_scan, whose own tr is a trunk
+                extra_notes.append(("note", i18n.tr("No alias for {network}: {interface} is already in it, so it "
+                                                    "was probed directly. If gear on another interface uses that "
+                                                    "subnet too, disconnect this network (e.g. turn Wi-Fi off) and "
+                                                    "run again.", network=t.network, interface=clash)))
         return kept
 
     def merged(*groups) -> list:
@@ -5344,8 +5404,9 @@ def run_scan(opts, log, progress=None, on_inventory=None):
                 print(f"\n  * {msg}")
             return 0
     elif unaddressed:
-        extra_notes += [("note", f"{l.name} ({l.label}) has link but no IPv4 address (no DHCP?). Probe listed "
-                                 "networks (-a) reaches gear on it through temporary addresses.")
+        extra_notes += [("note", i18n.tr("{interface} ({label}) has link but no IPv4 address (no DHCP?). Probe "
+                                         "listed networks (-a) reaches gear on it through temporary addresses.",
+                                         interface=l.name, label=l.label))
                         for l in unaddressed]
     if not all_ifaces and not opts.alias_mode and not links:  # an IPv6-only network, or none at all
         raise SystemExit("error: no IPv4 network here. UBNT discovery, the sweep, mDNS and SSDP all work over "
@@ -5507,8 +5568,9 @@ def run_scan(opts, log, progress=None, on_inventory=None):
                     heard, pairs, wants = heard_on(trunk, vid)
                     targets = merged(drop_overlaps(infer_targets(heard, pairs, base_targets, opts.direct)), base_targets)
                     if not targets:
-                        extra_notes.append(("note", f"VLAN {vid} on {link.name}: no subnets heard and nothing in "
-                                                    "the networks file to try, so it wasn't probed."))
+                        extra_notes.append(("note", i18n.tr("VLAN {vlan} on {interface}: no subnets heard and "
+                                                            "nothing in the networks file to try, so it wasn't "
+                                                            "probed.", vlan=vid, interface=link.name)))
                     plans.append({"link": Link(existing, f"VLAN {vid}", vlan=vid, parent=link.name),
                                   "targets": targets, "busy": set(heard) | wants})
             vlans = sorted({p["link"].vlan for p in plans if p["link"].vlan and p["targets"]})
@@ -5537,22 +5599,23 @@ def run_scan(opts, log, progress=None, on_inventory=None):
     notes = render_notes(inv, sc, opts) + extra_notes + counter_notes(counters)
     unread = {ip: recs for ip, recs in inv.garbled.items() if not inv.find(ip=ip)}
     if unread:
-        notes.append(("warn", f"Unreadable packets arrived on UDP {opts.port} from {', '.join(sorted(unread))}: "
-                              "damaged, or something other than discovery uses the port. -v --raw shows them."))
+        notes.append(("warn", i18n.tr("Unreadable packets arrived on UDP {port} from {addresses}: damaged, or "
+                                      "something other than discovery uses the port. -v --raw shows them.",
+                                      port=opts.port, addresses=", ".join(sorted(unread)))))
     if macs_hidden():
         if ARP_SUDO and _parse_arp(_run(ARP_SUDO + ["arp", "-an"])):
-            notes.append(("note", "macOS hides MAC addresses and the ARP table from Python; this run read the "
-                                  "ARP table through sudo instead."))
+            notes.append(("note", i18n.tr("macOS hides MAC addresses and the ARP table from Python; this run read "
+                                          "the ARP table through sudo instead.")))
         else:
-            notes.append(("warn", "macOS is hiding MAC addresses and the ARP table from Python, so ARP-based "
-                                  "vendor detection is off. Allow Local Network access for the app running it "
-                                  "(OpenDisco, Terminal, iTerm, VS Code...) in System Settings > Privacy & Security > "
-                                  "Local Network, then quit and reopen it. Modes that use sudo (-a, --sniff, "
-                                  "--vlans, --direct) read the ARP table as root instead."))
-    notes += [("note", f"{net}: no free address to borrow (both are in use, or one is what a device keeps "
-                       "asking for), so it wasn't probed. If that device's uplink is down, nothing else is "
-                       "using the address it asks for, so giving this computer that address by hand reaches "
-                       "the device.") for net in skipped]
+            notes.append(("warn", i18n.tr("macOS is hiding MAC addresses and the ARP table from Python, so ARP-based "
+                                          "vendor detection is off. Allow Local Network access for the app running "
+                                          "it (OpenDisco, Terminal, iTerm, VS Code...) in System Settings > Privacy "
+                                          "& Security > Local Network, then quit and reopen it. Modes that use sudo "
+                                          "(-a, --sniff, --vlans, --direct) read the ARP table as root instead.")))
+    notes += [("note", i18n.tr("{network}: no free address to borrow (both are in use, or one is what a device keeps "
+                               "asking for), so it wasn't probed. If that device's uplink is down, nothing else is "
+                               "using the address it asks for, so giving this computer that address by hand reaches "
+                               "the device.", network=net)) for net in skipped]
 
     return ScanResult(opts, devs, notes, trunks, ifaces, links, base_targets, inv, mgr, elapsed, interrupted,
                       counters, diag_args)

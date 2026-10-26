@@ -22,6 +22,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from opendisco import __version__, core, tls
+from opendisco.i18n import _, tr
 
 REPO = "Nekobyte-Coding/opendisco"
 API_URL = os.environ.get("OPENDISCO_UPDATE_URL") or f"https://api.github.com/repos/{REPO}/releases/latest"
@@ -34,7 +35,8 @@ CREATE_NEW_PROCESS_GROUP = getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0x000
 
 
 class UpdateError(Exception):
-    """What stopped a check, download or install, worded for the app to show."""
+    """What stopped a check, download or install, worded for the app to show (in its language;
+    "cancelled", a stopped download, stays as it is: app.py looks for it)."""
 
 
 @dataclass
@@ -85,12 +87,13 @@ def latest(timeout: float = 10) -> Release:
         with _get(API_URL, timeout, "application/vnd.github+json") as r:
             data = json.loads(r.read(4 << 20))
     except urllib.error.HTTPError as e:
-        raise UpdateError(f"GitHub answered {e.code} {e.reason}") from e  # 403: rate limit; 404: no release
+        # 403: rate limit; 404: no release
+        raise UpdateError(tr("GitHub answered {code} {reason}", code=e.code, reason=e.reason)) from e
     except (urllib.error.URLError, OSError, ValueError) as e:
-        raise UpdateError(f"couldn't reach GitHub ({_reason(e)})") from e
+        raise UpdateError(tr("couldn't reach GitHub ({reason})", reason=_reason(e))) from e
     tag = str(data.get("tag_name") or "")
     if not version_key(tag):
-        raise UpdateError(f"the latest release's tag, {tag!r}, isn't a version number")
+        raise UpdateError(tr("the latest release's tag, {tag}, isn't a version number", tag=repr(tag)))
     assets = {}
     for a in data.get("assets") or []:
         digest = str(a.get("digest") or "")
@@ -192,13 +195,13 @@ def cannot_update(kind: str, target) -> str:
     """Why this copy can't replace itself, or "" when it can."""
     if kind == "macos":
         if "/AppTranslocation/" in str(target) or _read_only(target):
-            return (f"OpenDisco is running from {target.parent}, which can't be changed (a disk image, or "
-                    "a download macOS keeps apart). Move OpenDisco.app to the Applications folder, open it "
-                    "from there, and update again")
+            return tr("OpenDisco is running from {folder}, which can't be changed (a disk image, or a download "
+                      "macOS keeps apart). Move OpenDisco.app to the Applications folder, open it from there, and "
+                      "update again", folder=target.parent)
     if kind in ("tarball", "appimage") and not (os.access(target, os.W_OK) and os.access(target.parent, os.W_OK)):
-        return f"this user can't change {target}"
+        return tr("this user can't change {path}", path=target)
     if kind == "windows" and not os.access(target, os.W_OK):
-        return f"this user can't change {target}"
+        return tr("this user can't change {path}", path=target)
     return ""
 
 
@@ -215,7 +218,7 @@ def download(asset: Asset, folder: Path, progress=None, cancel=None, timeout: fl
     file that matches is kept, under its own name. progress(done, total) is called as it
     goes; setting cancel (a threading.Event) stops it."""
     if not re.fullmatch(r"[0-9a-f]{64}", asset.sha256):
-        raise UpdateError(f"GitHub lists no SHA-256 checksum for {asset.name}, so it can't be checked")
+        raise UpdateError(tr("GitHub lists no SHA-256 checksum for {file}, so it can't be checked", file=asset.name))
     dest = Path(folder) / asset.name
     if dest.is_file() and _sha256(dest) == asset.sha256:  # downloaded and checked already
         if progress:
@@ -245,11 +248,12 @@ def download(asset: Asset, folder: Path, progress=None, cancel=None, timeout: fl
         raise
     except (urllib.error.URLError, OSError, ValueError) as e:
         part.unlink(missing_ok=True)
-        raise UpdateError(f"downloading {asset.name} failed ({_reason(e)})") from e
+        raise UpdateError(tr("downloading {file} failed ({reason})", file=asset.name, reason=_reason(e))) from e
     if digest.hexdigest() != asset.sha256:
         part.unlink(missing_ok=True)
-        raise UpdateError(f"{asset.name} doesn't match the SHA-256 checksum GitHub lists for it (it's "
-                          f"{digest.hexdigest()[:16]}…, not {asset.sha256[:16]}…), so it wasn't used")
+        raise UpdateError(tr("{file} doesn't match the SHA-256 checksum GitHub lists for it (it's {found}…, not "
+                             "{listed}…), so it wasn't used", file=asset.name, found=digest.hexdigest()[:16],
+                             listed=asset.sha256[:16]))
     part.replace(dest)
     return dest
 
@@ -268,17 +272,19 @@ def download_folder() -> Path:
 
 # -- installing ------------------------------------------------------------------
 def _run(argv: list, what: str, log, timeout: float = 600) -> str:
+    """Run a step of an install; what names it ("Copying the new app", translated) for its error."""
     try:
         r = subprocess.run(argv, capture_output=True, text=True, errors="replace", timeout=timeout,
                            creationflags=CREATE_NO_WINDOW if core.IS_WINDOWS else 0)
     except (OSError, subprocess.SubprocessError) as e:
-        raise UpdateError(f"{what} failed ({e})") from e
+        raise UpdateError(tr("{what} failed ({error})", what=what, error=e)) from e
     out = "\n".join(l for l in (r.stdout + r.stderr).strip().splitlines() if "is deprecated" not in l)  # hdiutil's
     if out:
         log(out)
     if r.returncode:
-        last = next((l.strip() for l in reversed(out.splitlines()) if l.strip()), f"exit code {r.returncode}")
-        raise UpdateError(f"{what} failed: {last}")
+        last = next((l.strip() for l in reversed(out.splitlines()) if l.strip()),
+                    tr("exit code {code}", code=r.returncode))
+        raise UpdateError(tr("{what} failed: {detail}", what=what, detail=last))
     return r.stdout
 
 
@@ -298,25 +304,26 @@ def install_macos(dmg: Path, bundle: Path, version: str, log) -> None:
     checked first, then the two are swapped, so a failure leaves this copy as it was."""
     sudo = []
     if not (os.access(bundle.parent, os.W_OK) and os.access(bundle, os.W_OK)):
-        sudo = _sudo(f"Updating {bundle} needs an administrator password.", log)
+        sudo = _sudo(tr("Updating {app} needs an administrator password.", app=bundle), log)
     staged = bundle.with_name(f".{bundle.stem}-{version}.app")  # same folder, so the swap is a rename
     old = bundle.with_name(f".{bundle.stem}-replaced-{os.getpid()}.app")
     mount = Path(tempfile.mkdtemp(prefix="opendisco-dmg-"))
     try:
         _run(["hdiutil", "attach", "-quiet", "-nobrowse", "-readonly", "-noautoopen", "-mountpoint", str(mount), str(dmg)],
-             "Opening the disk image", log, timeout=180)
+             _("Opening the disk image"), log, timeout=180)
         try:
             new = next((p for p in sorted(mount.glob("*.app")) if _bundle_info(p).get("CFBundleIdentifier") == APP_ID),
                        None)
             if new is None:
-                raise UpdateError(f"{dmg.name} holds no OpenDisco.app")
+                raise UpdateError(tr("{file} holds no OpenDisco.app", file=dmg.name))
             found = _bundle_info(new).get("CFBundleShortVersionString")
             if found != version:
-                raise UpdateError(f"{dmg.name} holds OpenDisco {found}, not {version}")
+                raise UpdateError(tr("{file} holds OpenDisco {found}, not {version}", file=dmg.name, found=found,
+                                     version=version))
             if staged.exists():
-                _run(sudo + ["rm", "-rf", str(staged)], "Clearing an earlier attempt", log)
+                _run(sudo + ["rm", "-rf", str(staged)], _("Clearing an earlier attempt"), log)
             log(f"Copying the new OpenDisco.app next to {bundle}")
-            _run(sudo + ["ditto", str(new), str(staged)], "Copying the new app", log)
+            _run(sudo + ["ditto", str(new), str(staged)], _("Copying the new app"), log)
         finally:
             if _quiet(["hdiutil", "detach", str(mount), "-quiet"]):
                 _quiet(["hdiutil", "detach", str(mount), "-quiet", "-force"])
@@ -326,13 +333,13 @@ def install_macos(dmg: Path, bundle: Path, version: str, log) -> None:
         except OSError:
             pass
     try:
-        _run(["codesign", "--verify", "--deep", "--strict", str(staged)], "Checking the new app's signature", log)
-        _run(sudo + ["mv", str(bundle), str(old)], f"Moving {bundle.name} aside", log)
+        _run(["codesign", "--verify", "--deep", "--strict", str(staged)], _("Checking the new app's signature"), log)
+        _run(sudo + ["mv", str(bundle), str(old)], tr("Moving {name} aside", name=bundle.name), log)
     except UpdateError:
         _quiet(sudo + ["rm", "-rf", str(staged)])
         raise
     try:
-        _run(sudo + ["mv", str(staged), str(bundle)], "Putting the new app in place", log)
+        _run(sudo + ["mv", str(staged), str(bundle)], _("Putting the new app in place"), log)
     except UpdateError:
         _quiet(sudo + ["mv", str(old), str(bundle)])
         _quiet(sudo + ["rm", "-rf", str(staged)])
@@ -351,9 +358,9 @@ def install_package(path: Path, kind: str, log) -> None:
         argv = ["dnf", "install", "-y", str(path)]
     else:
         argv = ["rpm", "-U", str(path)]
-    sudo = _sudo(f"Installing {path.name} needs an administrator password.", log)
+    sudo = _sudo(tr("Installing {file} needs an administrator password.", file=path.name), log)
     log(f"Installing {path.name} with {argv[2] if kind == 'deb' else argv[0]}")
-    _run(sudo + argv, f"Installing {path.name}", log)
+    _run(sudo + argv, tr("Installing {file}", file=path.name), log)
 
 
 def install_tarball(archive: Path, folder: Path, version: str, log) -> None:
@@ -370,18 +377,20 @@ def install_tarball(archive: Path, folder: Path, version: str, log) -> None:
                 else:  # Python before 3.11.4
                     for m in tar.getmembers():
                         if m.name.startswith("/") or ".." in Path(m.name).parts or m.issym() or m.islnk():
-                            raise UpdateError(f"{archive.name} holds an unsafe path ({m.name})")
+                            raise UpdateError(tr("{file} holds an unsafe path ({path})", file=archive.name,
+                                                 path=m.name))
                     tar.extractall(work)
         except (tarfile.TarError, OSError) as e:
-            raise UpdateError(f"unpacking {archive.name} failed ({e})") from e
+            raise UpdateError(tr("unpacking {file} failed ({error})", file=archive.name, error=e)) from e
         tops = list(work.iterdir())
         new = tops[0] if len(tops) == 1 else None
         init = new / "src" / "opendisco" / "__init__.py" if new else None
         if not (init and init.is_file() and (new / "opendisco").is_file()):
-            raise UpdateError(f"{archive.name} isn't OpenDisco's portable version")
+            raise UpdateError(tr("{file} isn't OpenDisco's portable version", file=archive.name))
         found = re.search(r'__version__ = "([^"]+)"', init.read_text(encoding="utf-8"))
         if not found or found[1] != version:
-            raise UpdateError(f"{archive.name} holds OpenDisco {found[1] if found else '?'}, not {version}")
+            raise UpdateError(tr("{file} holds OpenDisco {found}, not {version}", file=archive.name,
+                                 found=found[1] if found else "?", version=version))
         for item in folder.iterdir():
             if not (new / item.name).exists():
                 if item.is_dir() and not item.is_symlink():
@@ -391,12 +400,13 @@ def install_tarball(archive: Path, folder: Path, version: str, log) -> None:
         try:
             folder.rename(old)
         except OSError as e:
-            raise UpdateError(f"moving {folder} aside failed ({e.strerror})") from e
+            raise UpdateError(tr("moving {path} aside failed ({error})", path=folder, error=e.strerror)) from e
         try:
             new.rename(folder)
         except OSError as e:
             old.rename(folder)
-            raise UpdateError(f"putting the new version in {folder} failed ({e.strerror})") from e
+            raise UpdateError(tr("putting the new version in {path} failed ({error})", path=folder,
+                                 error=e.strerror)) from e
         shutil.rmtree(old, ignore_errors=True)
         log(f"Replaced {folder} with OpenDisco {version}")
     finally:
@@ -410,7 +420,7 @@ def install_appimage(image: Path, target: Path, version: str, log) -> None:
     with open(image, "rb") as f:
         head = f.read(16)
     if not (head.startswith(b"\x7fELF") and head[8:11] == b"AI\x02"):  # the type 2 AppImage mark
-        raise UpdateError(f"{image.name} isn't an AppImage")
+        raise UpdateError(tr("{file} isn't an AppImage", file=image.name))
     new = target.with_name(f".{target.name}-update-{os.getpid()}")
     try:
         shutil.copyfile(image, new)
@@ -418,7 +428,8 @@ def install_appimage(image: Path, target: Path, version: str, log) -> None:
         new.replace(target)
     except OSError as e:
         new.unlink(missing_ok=True)
-        raise UpdateError(f"putting the new version in place of {target} failed ({e.strerror})") from e
+        raise UpdateError(tr("putting the new version in place of {path} failed ({error})", path=target,
+                             error=e.strerror)) from e
     log(f"Replaced {target} with OpenDisco {version}")
 
 
