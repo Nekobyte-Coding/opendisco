@@ -256,7 +256,9 @@ def offers(d, action: str) -> tuple:
         ok = (kind or fam) in REBOOT
     elif action == "locate":
         ok = fam in LOCATE
-    else:
+    elif action == "link":
+        ok = fam == "airos"
+    else:  # login
         ok = fam in ("airos", "edgeos")
     return ok, "" if ok else NOT_OFFERED[action].get(_kind(d), NOT_OFFERED[action][""])
 
