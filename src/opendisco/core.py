@@ -5013,6 +5013,8 @@ def parse_args(argv=None):
     g.add_argument("--no-firmware-check", dest="firmware_check", action="store_false",
                    help="don't ask Ubiquiti's firmware server for the latest release of each device's firmware "
                         "(-v, --json and --export show it; the answers are kept a day)")
+    g.add_argument("--demo", action="store_true",
+                   help="list the demo network instead of scanning: a small WISP's tower, made up (sends nothing)")
     g.add_argument("--port", type=int, default=UBNT_PORT, help=argparse.SUPPRESS)
     o = p.add_argument_group("output")
     o.add_argument("-v", "--verbose", action="store_true", help="per-device details and diagnostics")
@@ -5102,6 +5104,9 @@ def parse_args(argv=None):
             p.error("--all-ports needs the devices' addresses as targets, e.g. --all-ports 192.168.1.20")
         if any("/" in t and not t.endswith(("/32", "/31")) for t in opts.targets):
             p.error("--all-ports takes single addresses, not subnets: it checks 65535 ports on each")
+    if opts.demo and (opts.targets or opts.listen or opts.watch or opts.alias_mode or opts.sniff
+                      or opts.cleanup_aliases or opts.list_interfaces):
+        p.error("--demo lists made-up devices: it can't be combined with scanning options or targets")
     if opts.timeout is None:
         opts.timeout = 30.0 if opts.listen else 6.0
     opts.rate = max(10, opts.rate)
@@ -5146,7 +5151,7 @@ def expand_targets(targets, parser_error):
         except ValueError:
             try:
                 net = ipaddress.IPv4Network(socket.gethostbyname(t))
-            except OSError:
+            except (OSError, UnicodeError):  # (a name with a label over 63 characters can't be encoded)
                 parser_error(f"can't resolve target {t!r}")
         if net.num_addresses > 65536:
             parser_error(f"{t} is larger than a /16; split it up")
@@ -5690,12 +5695,16 @@ def main(argv=None) -> int:
             sys.stderr.write("\r" + " " * 60 + "\r" if done is None else f"\r  {done}/{total} ports, {n} open ")
             sys.stderr.flush()
 
-    res = run_scan(opts, log, progress)
-    if not isinstance(res, ScanResult):
-        return res
-    health.check_scan(res, opts, log)  # latency, and the latest firmware where it's shown
-    from opendisco import records
-    records.Notes(vulns.CACHE_DIR).apply(res.devices)  # the app's device notes, for -v and the exports
+    if opts.demo:  # made up, with its own latency, firmware and notes
+        from opendisco import demo
+        res = demo.cli_scan(opts, log)
+    else:
+        res = run_scan(opts, log, progress)
+        if not isinstance(res, ScanResult):
+            return res
+        health.check_scan(res, opts, log)  # latency, and the latest firmware where it's shown
+        from opendisco import records
+        records.Notes(vulns.CACHE_DIR).apply(res.devices)  # the app's device notes, for -v and the exports
     if opts.all_ports:
         log("Note: to intrusion prevention (UniFi's IPS / Threat Management, a firewall's port-scan detection) "
             "this looks like a port scan from this computer: it may raise an alert, a false alarm here, or block "
@@ -5705,12 +5714,15 @@ def main(argv=None) -> int:
             find_ports(res, d, "all", log, port_progress)
             port_progress(None, None, None)
     for path in opts.export:
-        write_export(res, path, opts.site)
+        write_export(res, path, opts.site, opts.demo)
+        if opts.demo:  # the scan data too
+            demo.stamp_file(path)
         log(f"Saved {path}")
     devs, notes, trunks, inv = res.devices, res.notes, res.trunks, res.inv
 
     if opts.json:
-        print(json.dumps(result_to_dict(res), indent=2, default=str))
+        print(json.dumps({"demo": demo.STAMP, **result_to_dict(res)} if opts.demo else result_to_dict(res), indent=2,
+                         default=str))
         return 0 if devs else 1
 
     if devs:

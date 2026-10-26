@@ -202,7 +202,9 @@ Help on Windows and Linux, and in Settings on phones and tablets.
 
 **The window:**
 - Pick a mode and an **Interface** (the network adapter to scan from, or "Any interface"),
-  then press Start. 1.5.0 and earlier label this picker **Port**, with "Any port".
+  then press Start. 1.5.0 and earlier label this picker **Port**, with "Any port". No gear at
+  hand? The **Demo network** mode lists a made-up tower instead, and its device tools work:
+  see [The demo network](#the-demo-network).
 - Devices fill the table as they're found. Selecting one shows everything it reported and
   what to check. A device found through another device (Scan from device) is listed under it,
   indented.
@@ -323,6 +325,46 @@ tag VLANs, so the app only offers the modes the platform supports:
   it hears, and probes the untagged network. Many network card drivers also remove VLAN tags
   before Npcap sees them: if no tagged VLANs show up on a trunk, look for a "Packet Priority
   & VLAN" setting on the adapter (Device Manager > Advanced) and turn VLAN off there.
+
+### The demo network
+
+**Demo network**, the last entry in the mode list, shows the app with made-up gear: the small
+WISP's tower in the pictures above (a router, three sectors, a 60 GHz backhaul, customer
+radios and a spare on the bench). Start lists it at once, and nothing is sent on the network.
+It's there for trying the app without any Ubiquiti gear. **Help › Try the demo network**
+opens it too; on phones and tablets, **Try the demo network** sits over the empty list and in
+Settings. When a real scan finds nothing, the status line suggests it. Every name, MAC and
+address in it is invented.
+
+- **The device tools work on it,** on simulated devices. Log in as `demo` / `demo`; the bench
+  spare takes its factory login, `ubnt` / `ubnt`, and shows `FACTORY-LOGIN` until Change login
+  gives it another. The login windows start filled in, and every device's login is remembered
+  (in the demo's memory), so Back up all configs backs up all of them. Firmware check and update,
+  Edit config (Save and Apply), Change login, Link health, config backups, Compare, Restore and
+  Upload, Back up all, Reboot, Scan from device, SSH and ping in the Terminal tab (the phones'
+  Tools console), latency, Rescan and the port search all run against them, about as long as on
+  real gear, minus most of the minutes a firmware update or a reboot takes offline.
+  - The firmware server and the firmware file are simulated too: nothing is downloaded. A radio
+    restarts and comes back running the new version. The EdgeRouter (ER-X, EdgeOS
+    2.0.9-hotfix.7) adds EdgeOS 3.0.1 as the image it boots, keeps 2.0.9-hotfix.7 as its backup
+    and restarts into it; from then on Change login holds a new password to EdgeOS 3's rules.
+  - The sectors' link health was read already: on Tower1-Sector-South, CPE-Mill-Road (where
+    trees are growing into the path) shows a weak signal, uneven chains, a low SNR and low
+    capacity. Link health reads it again; each radio answers as airOS 8 does.
+  - Tower1-Sector-East has a station on a subnet only the sector reaches: Scan from device on
+    the sector lists it under it, and the tools reach it through the sector.
+  - The devices have no web UI to open.
+- **Kept apart:** the demo's notes, config backups, SSH host keys, remembered logins, hidden
+  devices and factory-login flags are its own, in a temporary folder and in memory, deleted
+  when the demo ends: when a real scan starts, or the app quits. Nothing it does reaches the
+  app's data folder or its settings. Start in Demo network again lists the made-up devices as
+  they are now (a firmware update or a new name shows). A firmware update or reboot under way
+  has to finish before a real scan can start.
+- **Always labelled:** the window's title says Demo, and every export made from it (the Site
+  Report, the scan data, the extras, a device's report) is named `opendisco-demo-…` and stamped
+  "Demo network: made-up devices".
+- **On the command line,** `opendisco --demo` prints the same table, for docs and tests. `-v`,
+  `--json` and `--export` work as after a scan, the exports stamped the same way.
 
 ### Finding a port
 
@@ -717,7 +759,8 @@ IP           VLAN  VENDOR    MAC                MODEL         NAME              
 ```
 
 Every problem found is listed below the table. `-v` shows every field each device reported.
-(Sample output: the devices are made up.)
+(Sample output: the devices are made up. `--demo` lists all of them, the made-up network of
+[The demo network](#the-demo-network), without scanning.)
 
 ## Common uses
 
@@ -735,6 +778,7 @@ Every problem found is listed below the table. `-v` shows every field each devic
 | `opendisco.py -v --raw` | Also lists each device's packets at the end, checked for damage and loss |
 | `opendisco.py --json > scan.json` | Machine-readable output |
 | `opendisco.py --export report.html --site "Tower 1"` | Also saves the Site Report (`.html`: opens on any phone, prints to PDF), headed with the site's name; `.csv` and `.json` save the scan's data |
+| `opendisco.py --demo` | Lists the made-up demo network instead of scanning, sending nothing. See [The demo network](#the-demo-network) |
 | `opendisco.py --update-cves` | Downloads the current list of known firmware CVEs from the NVD. See [Known vulnerabilities](#known-vulnerabilities-cves) |
 | `opendisco.py --interfaces` | Shows the active Ethernet/Wi-Fi interfaces it found, including ones with link but no address |
 | `opendisco.py -a` | Also probes the networks in `networks.txt` through temporary IP aliases. See below |
