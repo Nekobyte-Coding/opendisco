@@ -56,6 +56,19 @@ cp -r /src/src/opendisco "$SITE/"
 find "$SITE/opendisco" \( -name __pycache__ -o -name .DS_Store -o -name '*.icns' -o -name '*.ico' \
     -o -name '*.ps1' \) -prune -exec rm -rf {} +
 install -D -m 644 "$HERE/opendisco" "$APPDIR/usr/bin/opendisco"
+# Package metadata, which Toga reads for Help > Visit homepage and the About box.
+mkdir -p "$SITE/opendisco-$VERSION.dist-info"
+cat > "$SITE/opendisco-$VERSION.dist-info/METADATA" <<METADATA
+Metadata-Version: 2.1
+Name: opendisco
+Version: $VERSION
+Summary: Open Discovery Tool for Ubiquiti Devices: find and diagnose Ubiquiti and other WISP gear
+Home-page: https://github.com/Nekobyte-Coding/opendisco
+Author: Michael Froehlke
+License: Apache-2.0
+Formal-Name: OpenDisco
+App-ID: com.michaelfroehlke.opendisco
+METADATA
 
 echo "--- trimming"
 # What a GUI app over GTK never uses: Tk (and the X11 libraries it brings), IDLE, the test suite,
@@ -67,8 +80,9 @@ rm -rf "$LIB"/{test,idlelib,tkinter,turtledemo,turtle.py,ensurepip,lib2to3} \
 # python-build-standalone builds its modules into libpython, except _tkinter and _dbm, which links
 # Berkeley DB (Sleepycat licence: copyleft over the whole app). Anything else showing up here in a
 # newer Python needs its licence checked (THIRD-PARTY-NOTICES.md) before it ships.
-if [ -n "$(ls -A "$LIB/lib-dynload" 2>/dev/null)" ]; then
-    echo "error: new modules in lib-dynload: $(ls "$LIB/lib-dynload" | tr '\n' ' ')" >&2
+EXTRA=$(find "$LIB/lib-dynload" -name '*.so' -printf '%f ' 2>/dev/null)
+if [ -n "$EXTRA" ]; then
+    echo "error: new modules in lib-dynload: $EXTRA" >&2
     exit 1
 fi
 find "$APPDIR" -name __pycache__ -prune -exec rm -rf {} +
