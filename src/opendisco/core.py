@@ -5091,7 +5091,7 @@ def expand_targets(targets, parser_error):
         except ValueError:
             try:
                 net = ipaddress.IPv4Network(socket.gethostbyname(t))
-            except OSError:
+            except (OSError, UnicodeError):  # (a name with a label over 63 characters can't be encoded)
                 parser_error(f"can't resolve target {t!r}")
         if net.num_addresses > 65536:
             parser_error(f"{t} is larger than a /16; split it up")
