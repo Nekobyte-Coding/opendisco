@@ -8,13 +8,17 @@ here runs in a worker thread.
   release for the device's platform: UniFi gear is listed by board name ("platform"), airMAX,
   airFiber, EdgeRouter and the rest by product name.
 - Updates download the release in the app, check its size and SHA-256, copy it to the device
-  with scp and start the family's installer, then wait for the device to restart.
+  with scp and start the family's installer, then wait for the device to restart. An
+  EdgeRouter adds the image with EdgeOS's own command, and the app restarts it once EdgeOS
+  shows the new image as the one it boots.
 - airOS keeps its whole configuration in one file, /tmp/system.cfg: it's edited as text, saved
   to flash, or saved and applied in place the way the web UI's Apply does.
 - A new login goes into the same file, its password hashed the way the device hashes the one
   it has now (airOS uses MD5-crypt), and only after that hash is checked against the current
-  password. A factory password (FACTORY_LOGINS) isn't taken, and a device the User logs in to
-  with a factory login is flagged (note_login).
+  password. On an EdgeRouter it goes through EdgeOS's config commands, which hash it
+  themselves; a renamed login is made and checked before the old one is deleted. A factory
+  password (FACTORY_LOGINS) isn't taken, and a device the User logs in to with a factory login
+  is flagged (note_login).
 - Config backups (every family but UniFi, whose controller keeps its config): the device's
   config file, kept in the app's data folder by MAC with the time it was taken, and uploaded
   again (Restore) only to the same model. airMAX, airFiber and LTU keep theirs in
@@ -28,6 +32,7 @@ import json
 import os
 import re
 import secrets
+import shlex
 import shutil
 import socket
 import ssl
@@ -62,10 +67,26 @@ FAMILY_NAMES = {"airos": "airOS", "unifi": "UniFi", "unifi-os": "UniFi OS", "edg
 #            steps for EdgeSwitch XP, and Ubiquiti Community answers for airMAX.
 #  unifi:    help.ui.com "UniFi - Advanced Updating Techniques", UniFi Access Point/Switch (No Internet).
 #  unifi-os: the same article, UniFi Consoles/Gateways (No Internet), UniFi OS 2 and later.
+#  edgeos:   UISP Help Center "EdgeRouter - How to Upgrade the EdgeOS Firmware", Command Line: the file
+#            copied with SCP to /tmp/firmware.tar, "add system image /tmp/firmware.tar", "show system
+#            image" to check the new image is the default boot, then "reboot". The op commands go through
+#            vyatta-op-cmd-wrapper, as "EdgeRouter - Run Operational Mode Command from Scripts" runs them.
+#            EdgeOS keeps two images: the new one replaces the one not running, and the one running now
+#            stays as the backup. add system image (EdgeOS's /usr/bin/ubnt-upgrade) asks its questions on
+#            standard input; given none, it takes each default, as pressing Enter does: replace the backup
+#            image (Yes), go on and lose config changes not saved (No: it stops), delete the backup first
+#            when there isn't room for both (Yes).
+EDGEOS_OP = "/opt/vyatta/bin/vyatta-op-cmd-wrapper"
+EDGEOS_IMAGE = "/tmp/firmware.tar"
+# EdgeOS has logins of its own, each its own Linux user, and /tmp is shared: a log another login left
+# there can't be replaced (one deleted by Change login, say), so each login writes its own.
+EDGEOS_UPDATE_LOG = "/tmp/opendisco-update-$(id -u).log"
+EDGEOS_CONFIG_LOG = "/tmp/opendisco-config-$(id -u).log"
 UPDATE_STEPS = {
     "airos": {"path": "/tmp/fwupdate.bin", "check": "/sbin/fwupdate -c", "install": "/sbin/fwupdate -m"},
     "unifi": {"path": "/tmp/fwupdate.bin", "check": None, "install": "syswrapper.sh upgrade2"},
     "unifi-os": {"path": "/tmp/fwupdate.bin", "check": None, "install": "ubnt-systool fwupdate /tmp/fwupdate.bin"},
+    "edgeos": {"path": EDGEOS_IMAGE, "check": None, "install": f"{EDGEOS_OP} add system image {EDGEOS_IMAGE}"},
 }
 # airOS config (from the airOS SDK's /etc/profile and rc.softrestart): "save" is cfgmtd -w -p /etc/,
 # which writes /tmp/system.cfg to flash; rc.softrestart save applies the changes it finds against
@@ -128,11 +149,11 @@ EDGESWITCH_PLATFORMS = {"eswh", "esgh", "esx", "esxp"}
 _NO_CONFIG = {"unifi": "set by its UniFi controller", "unifi-os": "UniFi OS: in its own settings",
               "edgeswitch": "EdgeSwitch: in its web UI", "": "not for this device"}
 NOT_OFFERED = {
-    "update": {"edgeos": "not for EdgeOS yet", "": "not for this device"},
+    "update": {"": "not for this device"},
     "config": dict(_NO_CONFIG, edgeos="not for EdgeOS here"),
     "edit": _NO_CONFIG, "backup": _NO_CONFIG, "upload": _NO_CONFIG,
     "login": {"unifi": "set by its UniFi controller", "unifi-os": "UniFi OS: in its own settings",
-              "edgeos": "not for EdgeOS yet", "isp": "airMAX only", "": "not for this device"},
+              "isp": "airMAX and EdgeOS only", "": "not for this device"},
     "scan": {"": "not for this device"},
     "reboot": {"edgeswitch": "EdgeSwitch: in its web UI", "": "not for this device"},
     "locate": {"airos": "airOS has no LED command", "isp": "no LED command known",
@@ -222,7 +243,7 @@ def offers(d, action: str) -> tuple:
     elif action == "locate":
         ok = fam in LOCATE
     else:
-        ok = fam == "airos"
+        ok = fam in ("airos", "edgeos")
     return ok, "" if ok else NOT_OFFERED[action].get(_kind(d), NOT_OFFERED[action][""])
 
 
@@ -407,6 +428,8 @@ def fits(d, release: dict) -> str:
             return "The release found isn't UniFi OS firmware."
         if version_key(device_version(d))[:1] < (2,):
             return "UniFi OS 1.x installs differently: update it in its own settings first."
+    if fam == "edgeos" and (platform != "edgerouter" or product.lower() != d.fw_platform.lower()):
+        return f"The release found isn't EdgeRouter firmware for {d.fw_platform}."
     return ""
 
 
@@ -498,14 +521,20 @@ def detached(command: str, log: str, run: str = "") -> str:
     return f"rm -f {log}; {body} >{log} 2>&1 &"
 
 
-def install_firmware(d, login: sshrun.Login, path: Path, report, stop=None) -> float:
+def install_firmware(d, login: sshrun.Login, path: Path, report, stop=None, version: str = "") -> float:
     """Copy the firmware to the device, check it there and start the installer, then wait for
-    the device to go down and come back. report(text, percent or None). Returns the seconds it
-    was offline."""
+    the device to go down and come back. report(text, percent or None). version: the release's,
+    which an EdgeRouter must show as its default boot image before it's restarted. Returns the
+    seconds it was offline."""
     steps = UPDATE_STEPS[family(d)]
     target = steps["path"]
     report("Making room on the device…", None)
     sshrun.run(login, f"rm -f {target}", stop=stop)
+    if family(d) == "edgeos":
+        free = re.findall(r"^\S+\s+\d+\s+\d+\s+(\d+)", sshrun.run(login, "df -k /tmp", stop=stop).out, re.M)
+        if free and int(free[-1]) * 1024 < path.stat().st_size + (4 << 20):
+            raise ToolError(f"It has {fmt_size(int(free[-1]) * 1024)} free in /tmp, too little for the "
+                            f"{fmt_size(path.stat().st_size)} firmware file, so nothing was copied.")
     report(f"Copying the firmware to {target}…", 0)
     sshrun.upload(login, path, target, progress=lambda p: report(None, p), stop=stop)
 
@@ -520,6 +549,8 @@ def install_firmware(d, login: sshrun.Login, path: Path, report, stop=None) -> f
             sshrun.run(login, f"rm -f {target}", stop=stop)
             said = _said(result)
             raise ToolError("The device rejected the firmware file" + (f": {said}" if said else "."))
+    if family(d) == "edgeos":
+        return _install_edgeos(d, login, target, version, report, stop)
     upgrade_time = 0
     if family(d) == "airos":
         result = sshrun.run(login, "sed -n 's/^board.upgrade=//p' /etc/board.info 2>/dev/null", stop=stop)
@@ -547,6 +578,147 @@ def install_firmware(d, login: sshrun.Login, path: Path, report, stop=None) -> f
         raise ToolError(f"The device hasn't come back after {within // 60} minutes. It may still be installing: "
                         "give it a few more minutes before power-cycling it.")
     return time.monotonic() - started
+
+
+# -- EdgeOS's two images -----------------------------------------------------------------
+
+@dataclass
+class Image:
+    """One of the two firmware images an EdgeRouter keeps, as show system image lists it."""
+    name: str  # "v2.0.9-hotfix.7.5622731.230615.0857"
+    running: bool
+    default: bool  # the one it boots next
+
+    @property
+    def version(self) -> str:
+        """"2.0.9-hotfix.7" from v2.0.9-hotfix.7.5622731.230615.0857, "1.9.7-hotfix.4" from
+        v1.9.7+hotfix.4.5024279.170803.0249, "3.0.1" from v3.0.1.5862409.250924.1407."""
+        m = re.match(r"v?(\d+\.\d+(?:\.\d+)?)([-+]hotfix\.\d+)?", self.name)
+        return m.group(1) + (m.group(2) or "").replace("+", "-") if m else self.name
+
+
+def parse_images(text: str) -> list:
+    """show system image's list: each image's name, followed by "(running image)" and "(default
+    boot)" where they apply (EdgeOS's ubnt-upgrade --show prints it so)."""
+    return [Image(m.group(1), "(running image)" in m.group(2), "(default boot)" in m.group(2))
+            for m in re.finditer(r"(?m)^\s*(v\d[\w.+-]*)[ \t]*((?:\((?:running image|default boot)\)[ \t]*)*)",
+                                 text.replace("\r", ""))]
+
+
+def edgeos_images(login: sshrun.Login, stop=None) -> list:
+    """Its images, from show system image."""
+    result = sshrun.run(login, f"{EDGEOS_OP} show system image </dev/null", timeout=90, stop=stop)
+    images = parse_images(result.out)
+    if not images:
+        said = _said(result)
+        raise ToolError("EdgeOS didn't list its firmware images" + (f": {said}" if said else "."))
+    return images
+
+
+# How EdgeOS's ubnt-upgrade itself asks whether the running config has changes committed but not
+# saved, which installing would lose: lines of difference between the boot config and the active one.
+EDGEOS_UNSAVED = ("cli-shell-api showConfig --show-cfg1 /config/config.boot --show-cfg2 @ACTIVE "
+                  "--show-context-diff")
+
+
+def edgeos_unsaved(login: sshrun.Login, stop=None) -> bool | None:
+    """Whether its running config has changes committed but not saved; None when it can't tell."""
+    out = sshrun.run(login, "if command -v cli-shell-api >/dev/null; then echo opendisco-unsaved="
+                            f"$({EDGEOS_UNSAVED} 2>/dev/null | wc -l); fi", timeout=60, stop=stop).out
+    m = re.search(r"opendisco-unsaved=\s*(\d+)", out)
+    return int(m.group(1)) > 0 if m else None
+
+
+EDGEOS_UNSAVED_TEXT = ("It has config changes that are committed but not saved, which installing would lose: "
+                       "EdgeOS's installer stops for them. Save them (save, in its CLI) or undo them, then update it.")
+
+
+def edgeos_update_note(login: sshrun.Login, version: str, stop=None) -> str:
+    """What installing version does to an EdgeRouter's two images, said before it's confirmed;
+    ToolError when EdgeOS would stop at config changes not saved."""
+    if edgeos_unsaved(login, stop):
+        raise ToolError(EDGEOS_UNSAVED_TEXT)
+    return image_plan(edgeos_images(login, stop), version)
+
+
+def image_plan(images: list, version: str) -> str:
+    """What installing version does to the images it keeps, in a sentence."""
+    running = next((i for i in images if i.running), None)
+    other = next((i for i in images if not i.running), None)
+    text = f"EdgeOS keeps two firmware images: {version} goes in as the one it boots"
+    if running:
+        text += f", and {running.version}, which it runs now, stays as the backup"
+    if other:
+        text += f"; {other.version}, the backup it has now, is deleted"
+    return text + "."
+
+
+def _install_edgeos(d, login: sshrun.Login, target: str, version: str, report, stop) -> float:
+    """add system image, run detached and logged; then, once show system image has the new image
+    as the default boot, restart the router to run it. Returns the seconds it took to come back."""
+    before = edgeos_images(login, stop)
+    if stop is not None and stop.is_set():
+        raise ToolError("Cancelled.")
+    report("Starting the installation: EdgeOS writes the new image to its flash, which takes a few minutes. "
+           "Don't unplug it.", None)
+    run = secrets.token_hex(6)
+    sshrun.run(login, detached(UPDATE_STEPS["edgeos"]["install"], EDGEOS_UPDATE_LOG, run), timeout=60)
+    start, said = time.monotonic(), None
+    while said is None:
+        time.sleep(3)
+        try:
+            out = sshrun.run(login, f"cat {EDGEOS_UPDATE_LOG} 2>/dev/null; echo opendisco-read", timeout=30).out
+        except sshrun.SSHError as e:
+            if e.kind in ("auth", "key"):
+                raise
+            out = ""  # it carries on by itself: ask again
+        if f"opendisco-run={run}" in out and "opendisco-exit=" in out:
+            said = out.replace("opendisco-read", "")
+        elif "opendisco-read" in out and f"opendisco-run={run}" not in out:  # named before it starts
+            try:
+                sshrun.run(login, f"rm -f {target}")
+            except sshrun.SSHError:
+                pass
+            raise ToolError("EdgeOS's installer didn't start (the app couldn't write its log in /tmp), so nothing was "
+                            "installed.")
+        elif time.monotonic() - start > 1200:
+            raise ToolError("EdgeOS hasn't finished adding the image after 20 minutes, so the app didn't restart it. "
+                            "Look at show system image in its CLI before restarting it.")
+        else:
+            report(f"Installing: EdgeOS is writing the new image… {time.monotonic() - start:.0f}s", None)
+    said = re.sub(r"opendisco-(?:run|exit)=\w+\s*", "", said).strip()
+    try:
+        sshrun.run(login, f"rm -f {target}")  # done with, whatever it did
+    except sshrun.SSHError:
+        pass
+    after = edgeos_images(login)
+    new = next((i for i in after if i.default), None)
+    if new is None or version_key(new.version) != version_key(version):
+        lost = [i.version for i in before if i.name not in {a.name for a in after}]
+        raise ToolError(_edgeos_refused(said) + " It wasn't restarted."
+                        + (f" EdgeOS had already deleted its backup image, {lost[0]}." if lost else ""))
+    kept = next((i for i in after if not i.default), None)
+    report(f"EdgeOS added {new.name} as the image it boots" + (f"; {kept.version} stays as the backup" if kept else "")
+           + ". Restarting it to run the new one…", None)
+    try:
+        return reboot(login, d, report=lambda text: report(text, None), within=900)
+    except ToolError as e:
+        raise ToolError(f"EdgeOS added {version} as the image it boots, but restarting it failed: {e} It runs the new "
+                        "firmware once it's restarted.") from None
+
+
+def _edgeos_refused(said: str) -> str:
+    """Why add system image installed nothing, from what it said (EdgeOS's ubnt-upgrade's messages)."""
+    if "changes have not been saved" in said:
+        return "Nothing was installed. " + EDGEOS_UNSAVED_TEXT
+    if "needs a reboot before upgrade" in said:
+        return "EdgeOS already has a new image waiting for a restart, so it took no other: Reboot it, then update it."
+    if "does not support the device" in said:
+        return "EdgeOS says the image isn't for this router, so it installed nothing."
+    if "enough disk space" in said:
+        return "There isn't room for the new image on its flash, so nothing was installed."
+    last = ([l.strip() for l in said.split("\n") if l.strip()] or [""])[-1][-300:]  # its verdict
+    return "EdgeOS didn't install the image" + (f". It said: {last}" if last else ".")
 
 
 def _said(result: sshrun.Result) -> str:
@@ -696,14 +868,17 @@ def _unix(text: str) -> str:
     return text if text.endswith("\n") else text + "\n"
 
 
-def _stage(login: sshrun.Login, files: list, what: str, untouched: str, stop=None) -> None:
+def _stage(login: sshrun.Login, files: list, what: str, untouched: str, stop=None, private: bool = False) -> None:
     """Copy each (text, path on the device) there and check it arrived whole; a break here
-    leaves the device as it was (LostConnection "not done")."""
+    leaves the device as it was (LostConnection "not done"). private: readable by the login only
+    (the copy keeps the mode of a file that's there, or takes this one's)."""
     folder = Path(tempfile.mkdtemp(prefix="opendisco-"))
     try:
         for n, (text, path) in enumerate(files):
             local = folder / f"file{n}"
             local.write_bytes(text.encode("utf-8"))
+            if private:
+                os.chmod(local, 0o600)
             sshrun.upload(login, local, path, stop=stop)
             arrived = sshrun.run(login, _ARRIVED.format(path=path), stop=stop).out
             if not _arrived_whole(arrived, local):
@@ -718,20 +893,20 @@ def _stage(login: sshrun.Login, files: list, what: str, untouched: str, stop=Non
 
 
 def _run_staged(login: sshrun.Login, command: str, staged: str, what: str, apply: bool, logins: list,
-                within: float, stop, say) -> tuple:
+                within: float, stop, say, log: str = CONFIG_LOG) -> tuple:
     """Start the command that takes the staged file, detached, and read how it went (reconnecting
     as needed). Returns (exit code, what it said, whether the start went through, whether the
     connection dropped); LostConnection when it never started or the app can't tell."""
     run = secrets.token_hex(6)
     sent = True
     try:
-        sshrun.run(login, detached(command, CONFIG_LOG, run), timeout=60, stop=stop)
+        sshrun.run(login, detached(command, log, run), timeout=60, stop=stop)
     except sshrun.SSHError as e:
         if e.kind in ("auth", "key"):
             raise
         sent = False  # it may or may not have got there
         say(f"Connection lost while starting it ({e}). Reconnecting to find out what the device did…")
-    state, code, said, dropped = _confirm(logins, run, within, stop, say, staged)
+    state, code, said, dropped = _confirm(logins, run, within, stop, say, staged, log)
     if state == "done":
         return code, said, sent, dropped
     if state == "not started":
@@ -769,7 +944,8 @@ def _arrived_whole(said: str, local: Path) -> bool:
     return bool(size) and int(size.group(1)) == local.stat().st_size
 
 
-def _confirm(logins, run: str, within: float, stop, say, staged: str = STAGED_CONFIG) -> tuple:
+def _confirm(logins, run: str, within: float, stop, say, staged: str = STAGED_CONFIG,
+             log: str = CONFIG_LOG) -> tuple:
     """Read the outcome of a detached config command from its log, reconnecting as needed (the
     new login works once it's applied, the old one until then). Returns (state, exit code, what
     it said, whether a reconnect was needed): "done", "not started" (the log doesn't name the
@@ -781,7 +957,7 @@ def _confirm(logins, run: str, within: float, stop, say, staged: str = STAGED_CO
         out = None
         for attempt in logins:
             try:
-                out = sshrun.run(attempt, f"cat {CONFIG_LOG} 2>/dev/null; test -e {staged} && echo "
+                out = sshrun.run(attempt, f"cat {log} 2>/dev/null; test -e {staged} && echo "
                                           "opendisco-staged", timeout=30, stop=stop).out
                 break
             except sshrun.SSHError as e:
@@ -875,17 +1051,13 @@ def edgeos_script(apply: bool) -> str:
     return ("#!/bin/sh\n"
             f"# OpenDisco: {'loads, commits and saves' if apply else 'checks, then saves for the next boot,'} "
             f"the config in {EDGEOS_STAGED}.\n"
-            "# EdgeOS's config commands run in its vyattacfg group, as its own scripts do.\n"
-            'if [ "$1" != in-group ] && [ "$(id -u)" != 0 ] && [ "$(id -gn)" != vyattacfg ] '
-            "&& command -v sg >/dev/null; then\n"
-            f'  exec sg vyattacfg -c "sh {EDGEOS_SCRIPT} in-group"\n'
-            "fi\n"
+            + _edgeos_in_group(EDGEOS_SCRIPT) +
             f"W={EDGEOS_WRAPPER}\n"
             f"F={EDGEOS_STAGED}\n"
             "OUT=/tmp/opendisco-load.out\n"
             'mv -f "$F" "$F.run" || exit 3\n'
             'cp "$F.run" "$F.load" || exit 3  # load migrates the file it loads in place\n'
-            'trap \'rm -f "$F.run" "$F.load" "$OUT"\' EXIT\n'
+            f'trap \'rm -f "$F.run" "$F.load" "$OUT" {EDGEOS_SCRIPT}\' EXIT  # another login can\'t replace them\n'
             '$W begin || { echo "EdgeOS did not start a config session."; exit 4; }\n'
             '$W load "$F.load" >"$OUT" 2>&1\n'
             "rc=$?\n"
@@ -932,7 +1104,7 @@ def write_edgeos(login: sshrun.Login, text: str, apply: bool, report=None, stop=
     say("Loading and committing it: EdgeOS restarts what the change affects…" if apply
         else "Checking that EdgeOS reads it, then saving it as the boot config…")
     code, said, sent, dropped = _run_staged(login, f"sh {EDGEOS_SCRIPT}", EDGEOS_STAGED, what, apply, [login],
-                                            confirm_within, stop, say)
+                                            confirm_within, stop, say, EDGEOS_CONFIG_LOG)
     nothing = "opendisco: nothing to commit" in said
     said = "\n".join(l for l in said.split("\n") if not l.startswith("opendisco:")).strip()
     if code:
@@ -1480,6 +1652,13 @@ def forget_factory_login(d) -> None:
         core.FACTORY_LOGINS_FOUND.pop(core.norm_mac(d.mac), None)
 
 
+def _check_password(new_password: str) -> None:
+    if not new_password or any(ord(c) < 32 for c in new_password):
+        raise ToolError("The new password can't be empty or hold control characters.")
+    if new_password in FACTORY_PASSWORDS:
+        raise ToolError(f"{new_password} is a factory password, the first one anyone tries: choose another.")
+
+
 def change_login(text: str, user: str, password: str, new_user: str, new_password: str) -> tuple:
     """The config with the login `user` renamed to new_user and its password replaced, hashed
     the way the device hashed the current one. The current hash is checked against `password`
@@ -1487,10 +1666,7 @@ def change_login(text: str, user: str, password: str, new_user: str, new_passwor
     if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._-]{0,31}", new_user):
         raise ToolError("A username is 1 to 32 letters, digits, dots, dashes or underscores, starting with a "
                         "letter or digit.")
-    if not new_password or any(ord(c) < 32 for c in new_password):
-        raise ToolError("The new password can't be empty or hold control characters.")
-    if new_password in FACTORY_PASSWORDS:
-        raise ToolError(f"{new_password} is a factory password, the first one anyone tries: choose another.")
+    _check_password(new_password)
     lines = text.replace("\r", "").split("\n")
     names = {m.group(1): (n, line.split("=", 1)[1]) for n, line in enumerate(lines)
              if (m := re.match(r"users\.(\d+)\.name=", line))}
@@ -1514,6 +1690,210 @@ def change_login(text: str, user: str, password: str, new_user: str, new_passwor
     lines[names[slot][0]] = f"users.{slot}.name={new_user}"
     lines[at] = key + new_hash(new_password, current)
     return "\n".join(lines), scheme
+
+
+# -- EdgeOS logins --------------------------------------------------------------------------
+# UISP Help Center "EdgeRouter - User Accounts" (CLI): set system login user <user> authentication
+# plaintext-password <secret>, set system login user <user> level admin, commit; save; log in again with
+# the new login, then delete system login user ubnt, commit; save. The commands go through
+# vyatta-cfg-cmd-wrapper, as for config uploads. EdgeOS's commit hashes the password itself (SHA-512, with
+# mkpasswd) into encrypted-password and blanks plaintext-password (its templates, system/login/user/...),
+# and quotes it with ' to do so. Deleting a login ends its sessions first (Vyatta/Login/User.pm): one more
+# reason the old one is deleted only once the new one has logged in. The password is on the command line
+# of EdgeOS's commands while they run, as when it's typed in its CLI; the script that holds it is
+# readable by the login alone, and deletes itself as it starts.
+EDGEOS_LOGIN_SCRIPT = "/tmp/opendisco-login.sh"
+# EdgeOS 3's rules for a plaintext-password (its template's syntax lines).
+EDGEOS3_PASSWORD = ((r"[a-z]", "lower case letter"), (r"[A-Z]", "upper case letter"), (r"[0-9]", "digit"),
+                    (r"[^0-9A-Za-z]", "character that's neither a letter nor a digit"))
+_WORD = re.compile(r'"(?:[^"\\]|\\.)*"|[^\s"]+')
+
+
+def _boot_lines(text: str):
+    """Each node and setting of a config.boot: (the words of its path, from the top, whether it's a
+    node holding others)."""
+    body = re.sub(r"/\*.*?\*/", "", text.replace("\r", ""), flags=re.S)
+    stack = []
+    for line in body.split("\n"):
+        line = line.strip()
+        if line == "}":
+            if stack:
+                stack.pop()
+        elif line.endswith("{"):
+            stack.append([w[1:-1].replace('\\"', '"') if w.startswith('"') else w for w in _WORD.findall(line[:-1])])
+            yield [w for part in stack for w in part], True
+        elif line:
+            words = [w[1:-1].replace('\\"', '"') if w.startswith('"') else w for w in _WORD.findall(line)]
+            yield [w for part in stack for w in part] + words, False
+
+
+def edgeos_users(text: str) -> list:
+    """The login names a config.boot has (system login user <name>)."""
+    return [path[3] for path, node in _boot_lines(text) if node and len(path) == 4
+            and path[:3] == ["system", "login", "user"]]
+
+
+def boot_settings(text: str, path: tuple) -> list | None:
+    """The settings under a node of a config.boot (path: ("system", "login", "user", "ubnt")), each as
+    the words that follow the path in EdgeOS's set command: ["level", "admin"], ["authentication",
+    "public-keys", "me@laptop", "key", "AAAA…"]. None when it has no such node."""
+    found = None
+    for words, node in _boot_lines(text):
+        if words[:len(path)] == list(path):
+            found = found if found is not None else []
+            if not node and len(words) > len(path):
+                found.append(words[len(path):])
+    return found
+
+
+def edgeos_login(text: str, user: str, new_user: str, new_password: str, version: str = "") -> list:
+    """The steps of a new login for an EdgeRouter whose config.boot is text, logged in to as user:
+    each a list of config commands (lists of words), committed and saved in turn. A new password is
+    one step; a new name two: the new login, with the old one's level and settings, then (logged in
+    with it) deleting the old one. version: the EdgeOS it runs, whose password rules apply."""
+    if not re.fullmatch(r"[a-z_][a-z0-9_-]{0,31}", new_user):
+        raise ToolError("An EdgeOS username is 1 to 32 lower case letters, digits, underscores or dashes, starting "
+                        "with a letter or an underscore.")
+    _check_password(new_password)
+    if "'" in new_password:
+        raise ToolError("EdgeOS can't take a ' in a password: it quotes the password with them to hash it.")
+    if version_key(version)[:1] >= (3,):
+        lacks = (["it's shorter than 12 characters"] if len(new_password) < 12 else []) + [
+            f"it has no {what}" for pattern, what in EDGEOS3_PASSWORD if not re.search(pattern, new_password)]
+        if lacks:
+            raise ToolError("EdgeOS 3 won't take this password: " + "; ".join(lacks) + ".")
+    users = edgeos_users(text)
+    if user not in users:
+        raise ToolError(f"Its boot config has no login named {user}, so the app can't tell how it's set up.")
+    if new_user != user and new_user in users:
+        raise ToolError(f"It already has another login named {new_user}.")
+    password = ["set", "system", "login", "user", new_user, "authentication", "plaintext-password", new_password]
+    if new_user == user:
+        return [[password]]
+    kept = [s for s in boot_settings(text, ("system", "login", "user", user)) or []
+            if s[:2] not in (["authentication", "encrypted-password"], ["authentication", "plaintext-password"])
+            and s[:1] != ["home-directory"]]  # the new login gets a home of its own
+    return [[["set", "system", "login", "user", new_user, *s] for s in kept] + [password],
+            [["delete", "system", "login", "user", user]]]
+
+
+def new_login(d, login, text: str, new_user: str, new_password: str) -> tuple:
+    """What changing d's login takes, for the windows asking for it: (airMAX: the new config,
+    the hash scheme) or (EdgeOS: edgeos_login's steps, None). ToolError when it can't be done."""
+    if config_kind(d) == "edgeos":
+        return edgeos_login(text, login.user, new_user, new_password, device_version(d)), None
+    return change_login(text, login.user, login.password, new_user, new_password)
+
+
+def new_login_note(d) -> str:
+    """How the new password is kept, said where it's typed."""
+    if config_kind(d) != "edgeos":
+        return ("The new password is stored on the device hashed the way it hashes the current one, never as plain "
+                "text; the app checks its hashing against the current password first.")
+    note = "EdgeOS hashes the new password itself and stores it so, never as plain text."
+    if version_key(device_version(d))[:1] >= (3,):
+        note += (" EdgeOS 3 takes a password of 12 characters or more, with lower and upper case letters, a digit "
+                 "and a character that's neither a letter nor a digit.")
+    return note
+
+
+def _edgeos_in_group(script: str) -> str:
+    """The start of a script that runs EdgeOS's config commands: in its vyattacfg group, as its own
+    scripts do."""
+    return ("# EdgeOS's config commands run in its vyattacfg group, as its own scripts do.\n"
+            'if [ "$1" != in-group ] && [ "$(id -u)" != 0 ] && [ "$(id -gn)" != vyattacfg ] '
+            "&& command -v sg >/dev/null; then\n"
+            f'  exec sg vyattacfg -c "sh {script} in-group"\n'
+            "fi\n")
+
+
+def edgeos_login_script(commands: list) -> str:
+    """The script for one step of a login change on an EdgeRouter: the config commands, then commit
+    and save; one refused, or the commit failing, discards them all. Exit codes: 4 no config
+    session, 5 a command refused, 6 commit failed, 7 saving failed."""
+    return ("#!/bin/sh\n"
+            "# OpenDisco: changes a login on this EdgeRouter, with EdgeOS's config commands, commit and save.\n"
+            + _edgeos_in_group(EDGEOS_LOGIN_SCRIPT) +
+            f"rm -f {EDGEOS_LOGIN_SCRIPT}  # it holds the new password: read, and gone\n"
+            f"W={EDGEOS_WRAPPER}\n"
+            "rc=0\n"
+            '$W begin || { echo "EdgeOS did not start a config session."; exit 4; }\n'
+            + "".join(f"[ $rc = 0 ] && {{ $W {' '.join(shlex.quote(w) for w in words)} || rc=5; }}\n"
+                      for words in commands) +
+            "if [ $rc = 0 ]; then $W commit || rc=6; fi\n"
+            "if [ $rc = 0 ]; then $W save || rc=7; fi\n"
+            "case $rc in 5|6) $W discard ;; esac\n"
+            "$W end\n"
+            "exit $rc\n")
+
+
+EDGEOS_LOGIN_FAILURES = {
+    4: "EdgeOS didn't start a config session, so nothing was changed",
+    5: "EdgeOS refused the change, so nothing was changed",
+    6: "EdgeOS's commit failed, so nothing was changed",
+    7: "It's committed, but saving it to the boot config failed: it holds only until the next restart",
+}
+
+
+def change_edgeos_login(login: sshrun.Login, new: sshrun.Login, steps: list, report=None, stop=None,
+                        confirm_within: float = 240) -> str:
+    """Change an EdgeRouter's login (the steps of edgeos_login): the new login or password committed
+    and saved, then checked by logging in with it; for a new name, the old login is then deleted,
+    logged in as the new one. Staged and run detached like write_edgeos. Returns what happened;
+    ToolError, LostConnection or SSHError when it didn't."""
+    say = report or (lambda message: None)
+    tools = config_tools(login, "edgeos", stop)
+    if not tools["apply"]:
+        raise ToolError(tools["why"])
+    script = EDGEOS_LOGIN_SCRIPT
+    dropped_any = False
+    for n, commands in enumerate(steps):
+        acting, logins = (login, [login, new]) if n == 0 else (new, [new])  # each login reads its own log
+        both = f" The new login works; {login.user} wasn't deleted, so both work now."
+        untouched = ("Connection lost: the login wasn't changed. The change didn't reach the device." if n == 0
+                     else "Connection lost:" + both)
+        say("Copying the change to the device…" if n == 0 else f"Deleting the old login {login.user}, logged in as "
+                                                               f"{new.user}…")
+        try:
+            sshrun.run(acting, f"rm -f {script}; (umask 077; : >{script})", stop=stop)  # new, and the login's alone
+        except sshrun.SSHError as e:
+            if e.kind in ("auth", "key", "cancelled"):
+                raise
+            raise LostConnection(f"{untouched} ({e})", "not done") from None
+        _stage(acting, [(edgeos_login_script(commands), script)], "changed", untouched, stop, private=True)
+        say("Committing and saving it…")
+        code, said, sent, dropped = _run_staged(acting, f"sh {script}", script, "changed", True, logins,
+                                                confirm_within, stop, say, EDGEOS_CONFIG_LOG)
+        dropped_any = dropped_any or dropped or not sent
+        if code:
+            told = EDGEOS_LOGIN_FAILURES.get(code, f"It failed (exit code {code})") + (
+                f". EdgeOS said: {said[-400:]}" if said else ".")
+            if n:
+                raise ToolError(f"Deleting {login.user} failed: {told}" + both + f" Delete {login.user} in "
+                                "EdgeOS's web UI or CLI.")
+            raise ToolError(told)
+        if n == 0:
+            say("Logging in with the new login…")
+            try:
+                sshrun.check_login(new, stop=stop)
+            except sshrun.SSHError as e:
+                kept = f" {login.user} was kept, so both are set on it." if len(steps) > 1 else ""
+                raise ToolError(f"EdgeOS took the new login, but logging in with it failed ({e}).{kept}") from None
+    if len(steps) > 1:
+        done = f"Committed and saved: {new.user} logs in (checked), and {login.user} is deleted."
+    else:
+        done = f"Committed and saved: {new.user} takes the new password (checked by logging in with it)."
+    try:
+        users = edgeos_users(_fetch(new, EDGEOS_CONFIG, stop))
+    except sshrun.SSHError:
+        users = None
+    if users is None:
+        done += f" The app couldn't read {EDGEOS_CONFIG} back to check it."
+    elif new.user not in users or (len(steps) > 1 and login.user in users):
+        done += f" Its {EDGEOS_CONFIG} lists other logins than expected: {', '.join(users) or 'none'}."
+    if dropped_any:
+        done += " The connection dropped meanwhile: the device finished on its own, checked after reconnecting."
+    return done
 
 
 # MD5-crypt ($1$) and SHA-crypt ($5$, $6$), the formats crypt(3) reads, written out here

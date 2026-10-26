@@ -624,6 +624,19 @@ async def update_flow(app, d, check=None):
                    f"The app downloads it from Ubiquiti ({devicetools.fmt_size(check.size)}), checks it, copies it to "
                    "the device and starts the installation. The device restarts to install it and is offline for "
                    "a few minutes: don't unplug it or turn it off until it's back.")
+        if devicetools.family(d) == "edgeos":
+            app.status.text = f"Reading the firmware images of {d.ip}…"
+            try:
+                note = await _work(devicetools.edgeos_update_note, login, check.latest)
+            except (devicetools.ToolError, sshrun.SSHError) as e:
+                app.status.text = f"Firmware update of {d.ip}: {e}"
+                await app.main_window.dialog(toga.ErrorDialog("Firmware update", str(e)))
+                return
+            message = (f"Install EdgeOS firmware {check.latest} on {_label(d)}? It runs {check.current} now.\n\n"
+                       f"The app downloads it from Ubiquiti ({devicetools.fmt_size(check.size)}), checks it, copies it "
+                       "to the router and adds it with EdgeOS's add system image. Once EdgeOS lists it as the image it "
+                       "boots, the app restarts the router, which is offline for a few minutes: don't unplug it or "
+                       f"turn it off until it's back.\n\n{note}")
         if devicetools.family(d) in ("unifi", "unifi-os"):
             message += ("\n\nUbiquiti's help center describes updating over SSH as a last resort, for when the UniFi "
                         "app can't update the device.")
@@ -655,7 +668,8 @@ async def _install(app, d, check, login):
                     progress.no_cancel()
                 progress.show(text, percent)
 
-            outcome["offline"] = devicetools.install_firmware(d, login, path, report, stop=progress.stop)
+            outcome["offline"] = devicetools.install_firmware(d, login, path, report, stop=progress.stop,
+                                                              version=check.latest)
         except (devicetools.ToolError, sshrun.SSHError) as e:
             outcome["error"] = str(e)
         except Exception as e:
@@ -853,7 +867,8 @@ async def login_flow(app, d):
     login = await ask_route(app, d, "Log in with its current username and password first.")
     if not login:
         return
-    if not login.password:
+    kind = devicetools.config_kind(d)  # "airos" or "edgeos"
+    if not login.password and kind == "airos":
         await app.main_window.dialog(toga.ErrorDialog(
             "Change login", "Changing the login needs the current password (an SSH key isn't enough): the app "
                             "checks it against the device's stored hash before writing a new one."))
@@ -862,8 +877,12 @@ async def login_flow(app, d):
     try:
         app.status.text = f"Reading the config of {d.ip}…"
         try:
-            text, pending = await _work(devicetools.read_config, login)
-        except sshrun.SSHError as e:
+            if kind == "edgeos":
+                text, _pending = await _work(devicetools.read_device_config, login, kind)
+                pending = await _work(devicetools.edgeos_unsaved, login)
+            else:
+                text, pending = await _work(devicetools.read_config, login)
+        except (sshrun.SSHError, devicetools.ToolError) as e:
             await app.main_window.dialog(toga.ErrorDialog("Change login", str(e)))
             return
         answer = await _new_login_window(app, d, login, text)
@@ -872,11 +891,23 @@ async def login_flow(app, d):
         new_text, new_user, new_password, scheme = answer
         what = (f"the password of {login.user} on {_label(d)}" if new_user == login.user
                 else f"the login of {_label(d)} from {login.user} to {new_user} with the new password")
-        message = (f"Change {what}? It's applied right away and saved to flash; the old login stops working.\n\n"
-                   f"The password is stored on the device as an {scheme} hash, the format it uses now.")
-        if pending:
-            message += ("\n\nIts config also has changes that aren't applied yet (made in its web UI, or saved "
-                        "without applying): they're applied with it.")
+        if kind == "edgeos":
+            message = (f"Change {what}? EdgeOS commits it right away and saves it to its boot config; the old "
+                       f"{'password' if new_user == login.user else 'login'} stops working.")
+            if new_user != login.user:
+                message += (f"\n\nAs Ubiquiti's help center does it, {new_user} is made first, with {login.user}'s "
+                            f"level and settings, and the app logs in with it; only then is {login.user} deleted, "
+                            f"logged in as {new_user}.")
+            message += "\n\nEdgeOS hashes the password itself and stores it so, never as plain text."
+            if pending:
+                message += ("\n\nIts config also has changes that are committed but not saved (in its CLI): saving "
+                            "the new login saves them too.")
+        else:
+            message = (f"Change {what}? It's applied right away and saved to flash; the old login stops working.\n\n"
+                       f"The password is stored on the device as an {scheme} hash, the format it uses now.")
+            if pending:
+                message += ("\n\nIts config also has changes that aren't applied yet (made in its web UI, or saved "
+                            "without applying): they're applied with it.")
         message += "\n\n" + terms.risk("login")
         if not await app.main_window.dialog(toga.QuestionDialog("Change login?", message)):
             return
@@ -889,8 +920,11 @@ async def login_flow(app, d):
         def work():
             try:
                 if d.mac:  # what it had, kept before it's replaced
-                    devicetools.save_backup(d, text, "airos", "before login change")
+                    devicetools.save_backup(d, text, kind, "before login change")
                     app._from_worker(_refresh_backups, d)
+                if kind == "edgeos":  # new_text: the steps; it logs in with the new login itself
+                    outcome["said"] = devicetools.change_edgeos_login(login, new, new_text, report=progress.show)
+                    return
                 outcome["said"] = devicetools.write_config(login, new_text, True, report=progress.show,
                                                            new_login=new)
                 progress.show("Logging in with the new login…")
@@ -910,7 +944,8 @@ async def login_flow(app, d):
         devicetools.forget_factory_login(d)
         app._save_settings()
         app._rediagnose()
-        progress.finish(f"Done: {d.ip} takes the new login ({new_user}), applied and saved to flash.")
+        progress.finish(f"Done: {d.ip} takes the new login ({new_user}). {outcome['said']}" if kind == "edgeos"
+                        else f"Done: {d.ip} takes the new login ({new_user}), applied and saved to flash.")
         app.status.text = f"{d.ip}: the login is now {new_user}."
     finally:
         _busy.pop(d.key, None)
@@ -931,8 +966,7 @@ async def _new_login_window(app, d, login, text):
                 trouble.text = "The two passwords differ."
                 return
             try:
-                new_text, scheme = devicetools.change_login(text, login.user, login.password, user_box.value.strip(),
-                                                            first.value)
+                new_text, scheme = devicetools.new_login(d, login, text, user_box.value.strip(), first.value)
             except devicetools.ToolError as e:
                 trouble.text = _fill(e, 76)
                 return
@@ -955,8 +989,7 @@ async def _new_login_window(app, d, login, text):
                          position=app._over_main(size))
     window.content = toga.Box(style=Pack(direction=COLUMN, margin=14, gap=8), children=[
         toga.Label(_label(d)),
-        toga.Label(_fill("The new password is stored on the device hashed the way it hashes the current one, never "
-                         "as plain text; the app checks its hashing against the current password first.", 76)),
+        toga.Label(_fill(devicetools.new_login_note(d), 76)),
         toga.Box(style=row, children=[toga.Label("Username", style=label), user_box]),
         toga.Box(style=row, children=[toga.Label("New password", style=label), first]),
         toga.Box(style=row, children=[toga.Label("Again", style=label), second]),
