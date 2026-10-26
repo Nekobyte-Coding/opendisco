@@ -53,6 +53,7 @@ from dataclasses import dataclass, field
 from opendisco import __version__  # one version for the app, the CLI and the installers
 from opendisco import terms, vulns
 from opendisco import health  # the latest firmware and latency (it imports core back)
+from opendisco import linkhealth  # airMAX link health, read over SSH (it imports core back)
 
 UBNT_PORT = 10001
 UBNT_MCAST = "233.89.188.1"
@@ -656,7 +657,8 @@ class Device:
     last_seen: float = field(default_factory=time.time)
     issues: list = field(default_factory=list)  # (level, tag, message)
     cves: list | None = None  # known CVEs its firmware matches (vulns.check); None = not checked
-    health: dict = field(default_factory=dict)  # health.py: "firmware" (its latest release), "latency"
+    # health.py: "firmware" (its latest release), "latency"; linkhealth.py: "link" (an airMAX radio's link)
+    health: dict = field(default_factory=dict)
     note: str = ""  # what's written about it, kept by MAC (records.Notes puts it here)
 
     def add_ip(self, ip: str | None) -> None:
@@ -4415,6 +4417,8 @@ def diagnose(inv: Inventory, all_ifaces, scan_nets, opts, alias_used=(), skipped
                            f"{sent - answered} went unanswered. On this computer's own subnet that's packet loss: "
                            "Wi-Fi interference, a bad cable or port, a busy link, or a busy device."))
         issues += health.issues(d)
+        linkhealth.apply(d)  # a reading taken earlier in the run, before this scan found it again
+        issues += linkhealth.issues(d)
         factory = FACTORY_LOGINS_FOUND.get(norm_mac(d.mac)) if d.mac else None
         if factory:
             issues.append(("warn", "FACTORY-LOGIN", factory_login_text(*factory)))
@@ -4503,6 +4507,8 @@ STATUS_LABELS = {
     "WAN-DOWN": "WAN down", "HTTPS-PORT": "HTTPS port problem", "SSH-PORT": "SSH port problem",
     "CVE": "CVE risk", "TFTP-RECOVERY": "TFTP recovery mode",
     "HIGH-LATENCY": "High latency", "PING-LOSS": "Packet loss", "FACTORY-LOGIN": "Factory login",
+    "WEAK-SIGNAL": "Weak signal", "HOT-SIGNAL": "Signal too strong", "CHAIN-IMBALANCE": "Uneven chains",
+    "LOW-SNR": "Low SNR", "LOW-CAPACITY": "Low capacity", "LOW-QUALITY": "Low airMAX quality",
 }
 LEVEL_ORDER = ("ok", "note", "warn", "error")
 NVD_URL = "https://nvd.nist.gov/vuln/detail/{}"
@@ -4678,7 +4684,7 @@ def render_details(d: Device) -> str:
     if d.unknown_tlvs:
         for n, (t, v) in enumerate(sorted(d.unknown_tlvs.items())):
             row("Unknown TLVs" if n == 0 else "", f"{t} = {v[:64]}{'...' if len(v) > 64 else ''}")
-    for label, text in health.detail_rows(d):
+    for label, text in health.detail_rows(d) + linkhealth.detail_rows(d):
         row(label, text)
     if d.cves:
         out.append(f"  Known CVEs ({len(d.cves)}, from the {vulns.list_label()}):")
@@ -4823,6 +4829,7 @@ def device_to_dict(d: Device) -> dict:
         "issues": [{"level": lv, "tag": t, "message": m} for lv, t, m in d.issues],
         "cves": vulns.to_dict(d.cves) if d.cves is not None else None,  # None: not checked
         **health.to_dict(d),
+        **linkhealth.to_dict(d),
         "last_packet_hex": d.last_packet.hex() if d.last_packet else None,
         "packets_received": d.ubnt_packets,
         "packets": [packet_to_dict(r) for r in list(d.packets)[-10:]],
@@ -5246,9 +5253,10 @@ def export_html(res: ScanResult) -> str:
                          + re.sub(r"\bCVE-\d{4}-\d{4,}\b", lambda m: f'<a href="{links[m.group(0)]}">{m.group(0)}</a>',
                                   escape(msg)) + "</li>" for _, tag, msg in d.issues)
         note = f'<div class="note">\u270e {escape(d.note)}</div>' if d.note else ""
+        link = linkhealth.html(d)
         rows.append(f"<tr>{cells}<td>{tags}</td></tr>"
-                    + (f'<tr class="issues"><td colspan="{len(EXPORT_COLUMNS)}">{note}<ul>{issues}</ul></td></tr>'
-                       if issues or note else ""))
+                    + (f'<tr class="issues"><td colspan="{len(EXPORT_COLUMNS)}">{note}<ul>{issues}</ul>{link}</td></tr>'
+                       if issues or note or link else ""))
     notes = "".join(f"<li>{escape(m)}</li>" for _, m in res.notes)
     wire = res.wire_text(verbose=True)
     head = "".join(f"<th>{c}</th>" for c in EXPORT_COLUMNS)
@@ -5259,6 +5267,8 @@ def export_html(res: ScanResult) -> str:
 table{{border-collapse:collapse;width:100%;font-size:13px}}th,td{{border-bottom:1px solid #ddd;padding:6px;text-align:left;vertical-align:top}}
 th{{background:#f4f4f4;position:sticky;top:0}}tr.issues td{{border-bottom:2px solid #ccc;color:#444}}ul{{margin:0;padding-left:18px}}
 pre{{background:#f6f6f6;padding:10px;overflow-x:auto}}.wrap{{overflow-x:auto}}.note{{white-space:pre-wrap;margin-bottom:4px}}
+table.link{{width:auto;margin-top:4px}}table.link th,table.link td{{border:0;padding:1px 8px 1px 0;background:none;position:static;font-weight:normal}}
+table.link th{{opacity:.7;white-space:nowrap}}
 @media (prefers-color-scheme: dark){{body{{background:#121212;color:#ddd}}th{{background:#222}}th,td{{border-color:#333}}pre{{background:#1e1e1e}}}}</style>
 </head><body><h1>OpenDisco</h1><p>{when} &middot; {len(res.devices)} device(s) &middot; {res.elapsed:.0f}s</p>
 <div class="wrap"><table><tr>{head}</tr>{''.join(rows)}</table></div>

@@ -359,8 +359,8 @@ with tabs along the bottom: **Details**, **Packets**, **Tools**, **Notes** and *
 **Tools** has:
 - **Ping**, the app's own, and an **SSH** session through the app's own SSH client (phones
   can't run other programs);
-- **Find** (a port: HTTP, HTTPS, SSH or all of them), **Web UI**, **Rescan** and **Scan from
-  device**;
+- **Find** (a port: HTTP, HTTPS, SSH or all of them), **Web UI**, **Rescan**, **Scan from
+  device** and **Link health** (airMAX);
 - **Firmware** (check and update), **Config** (the config editor) and **Login**, as on the
   desktop;
 - **Backups** (back up now, the backups kept, restoring one, uploading a file, with what
@@ -428,6 +428,8 @@ Right-click a device in the table (or select it and use the **Device** menu):
 - **Measure latency** pings it a few times and puts the result in Details and the Latency
   column. The Device menu's **Measure latency to all devices** does every device; each scan
   does it anyway when it ends.
+- **Link health…** (airMAX) reads the radio's wireless link into Details: see
+  [Link health (airMAX)](#link-health-airmax).
 - **Find HTTP / HTTPS / SSH port** and **Scan all ports:** see [Finding a port](#finding-a-port).
 - **Show issues…** lists the device's issues, with links to each CVE's NVD page.
 - **Rescan device** probes just that device again (discovery sent straight to it from both
@@ -509,7 +511,7 @@ OpenSSH client (Settings > Optional features > OpenSSH Client, if it's missing).
 ### Device tools over SSH
 
 The device tools (Scan from device, firmware updates, config backups, the config editor and
-uploads, Reboot, Locate and Change login) log in with the computer's own `ssh` and `scp`, the
+uploads, Reboot, Locate, Change login and Link health) log in with the computer's own `ssh` and `scp`, the
 same known-hosts file and host keys as the Terminal tab; on phones, with the app's own SSH
 client, and so on a Linux system without `ssh` and `scp` (the AppImage and the portable
 version bring that client: asyncssh). Their login window can
@@ -598,6 +600,43 @@ are committed but not saved (the app checks for those first, the way the install
 deletes the backup image first if there's no room for both. Then the app reads `show system
 image`, and only when the new image is the one it boots does it restart the router and wait
 for it to come back.
+
+### Link health (airMAX)
+
+**Link health…** (the Device menu and right-click; **Link health** in a phone's Tools) logs in
+to an airMAX radio (airOS 8 on AC, airOS 5 and 6 on M) and reads how its wireless link is
+doing, from two of airOS's own commands: `mca-status`, the radio itself (its mode, channel and
+noise floor, and on a station its signal and rates), and `wstalist`, its station list (on an
+access point each station, on a station its AP). Details gets a **Link** section: the radio's
+mode, SSID, frequency, channel width, noise floor and output power, then each link:
+
+- the signal at each end, and each chain's ("-58 dBm at the AP (chains -59/-60), -57 dBm at
+  the station (chains -58/-59)");
+- the noise floor at each end, the SNR (the signal over the noise floor) and, between two
+  airMAX AC radios, the CINR (airOS lists one for an airMAX M station in compatibility mode
+  too, which means nothing there, so it's left out);
+- the capacity down and up, with what airOS expects of the link (airOS 8), or the data rates
+  with airMAX Quality, airMAX Capacity and CCQ (airMAX M);
+- the airtime it takes sending and receiving (airOS 8), the distance and the latency.
+
+The JSON export has it as each device's `link` (`null` when it wasn't read), and the HTML
+export under the device's issues. The reading lasts while the app is open: Rescan device and
+new scans keep it (by MAC address). It isn't saved, as a link's numbers are of the moment. It's
+offered for airMAX only: airFiber, LTU and UniFi gear list their links differently.
+
+Weak links are flagged with Ubiquiti's own figures, from the UISP Help Center ("airMAX -
+Frequently Asked Questions (FAQs)" and "ISP Wireless - Link with Poor Wireless Performance");
+an access point's issue names the stations it's found on. Ubiquiti says the SNR decides what
+signal a link needs, so a weak signal alone is a note, and a low SNR a warning.
+
+| Tag | Level | When |
+|---|---|---|
+| `WEAK-SIGNAL` | Note | Weaker than -65 dBm at either end: Ubiquiti recommends -45 to -65 dBm |
+| `HOT-SIGNAL` | Note | -40 dBm or stronger, which Ubiquiti says raises EVM and lowers throughput |
+| `CHAIN-IMBALANCE` | Note | Its chains 4 dB or more apart (Ubiquiti: less than 4 dB) |
+| `LOW-SNR` | Warning | An SNR or CINR under 25 dB at either end (Ubiquiti: at least 25, better 30) |
+| `LOW-CAPACITY` | Warning | Under half the capacity airOS expects of the link (airOS 8, where the link has an expectation), or an airMAX Capacity under 50% (airMAX M: a perfect 1x1 link's). Ubiquiti gives no figure for this one |
+| `LOW-QUALITY` | Warning | airMAX M: an airMAX Quality under 80% (Ubiquiti: above 80% needs no changes) |
 
 ## Quick start (command line)
 
@@ -958,6 +997,12 @@ opened.
 | `LOSS` | Missed 10% or more of the rounds of probes (at least 2) while in view | Wi-Fi interference, a bad cable or port, a busy link or device |
 | `PING-LOSS` | 20% or more of its pings went unanswered, with some replies | On a wired link: a bad cable, connector or switch port, or a speed/duplex mismatch. On a wireless hop: interference, a weak signal or a busy channel. Or the device is too busy to answer |
 | `HIGH-LATENCY` | Pings take 100 ms or more on average | A congested link on the way, interference or a weak signal on a wireless hop, or a device short of CPU |
+| `WEAK-SIGNAL` | Link health: a radio's signal is weaker than -65 dBm at either end of a link (a note) | Alignment, line of sight and the Fresnel zone, antenna gain. See [Link health (airMAX)](#link-health-airmax) |
+| `HOT-SIGNAL` | Link health: a signal of -40 dBm or stronger (a note) | Turn the output power down |
+| `CHAIN-IMBALANCE` | Link health: a link's chains are 4 dB or more apart (a note) | Alignment, or an obstruction or reflection on one chain |
+| `LOW-SNR` | Link health: an SNR or CINR under 25 dB | A clearer channel (airView from both ends), a narrower channel width, a stronger signal |
+| `LOW-CAPACITY` | Link health: under half the capacity airOS expects of the link, or airMAX Capacity under 50% | Its signal, SNR and alignment: a slow link takes airtime from every station on the AP |
+| `LOW-QUALITY` | Link health (airMAX M): airMAX Quality under 80% | Retries, likely interference: another channel |
 | `FACTORY-LOGIN` | A device tool logged in to it with a factory login (`ubnt`/`ubnt`, `ui`/`ui`, `root`/`ubnt` or `root`/`ui`) | Give it a new password: **Change login…** on airMAX, its web UI on other gear; adopting a UniFi device gives it its own |
 | `CVE` | Its firmware has known vulnerabilities; Status starts with a red ❗ | Upgrade to the version the message names. See [Known vulnerabilities](#known-vulnerabilities-cves) |
 
@@ -1190,6 +1235,7 @@ Linux one inside containers, so nothing big ends up in iCloud. Finished installe
 | `src/opendisco/sshrun.py`, `phonessh.py`, `credstore.py` | SSH for the device tools (the computer's `ssh` and `scp`; asyncssh on phones and on a Linux system without them) and remembered logins in the system's credential store |
 | `src/opendisco/vulns.py` | The CVE check and its updates from the NVD and Ubiquiti's advisories |
 | `src/opendisco/health.py` | Each device's latest firmware, and latency |
+| `src/opendisco/linkhealth.py` | airMAX link health: airOS's `mca-status` and `wstalist` read, the weak links flagged, Details' Link section and the exports' part |
 | `src/opendisco/records.py` | Search, device notes, the device report and the site-wide exports, Settings' subnet list |
 | `src/opendisco/update.py` | Checking for, downloading and installing OpenDisco updates |
 | `src/opendisco/winnet.py` | Windows networking: adapters, Npcap capture, administrator rights |
