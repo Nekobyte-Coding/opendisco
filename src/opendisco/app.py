@@ -63,15 +63,16 @@ PORT_SEARCH_WARNING = ("A port search connects to {ip}'s TCP ports: all 65,535 o
                        "firewall's port-scan detection) can take that for a port scan from this computer: it may "
                        "raise an alert, a false alarm here, or block this computer for a while.")
 NO_SESSION = "Right-click a device to get started: Open SSH or Ping."
+SITE_EXAMPLE = "Tower 1, Main office…"  # the Site Report's site name, before one is typed
 # The Settings window's checkboxes: settings.json key -> text. All are on until turned off.
 SETTINGS = {"check_app_updates": "Check for OpenDisco updates when opening",
             "check_cve_updates": "Check for new CVEs when opening",
             "check_firmware": "Check firmware versions during scans"}
 # What settings.json keeps; "update" remembers an update while the app restarts into it,
-# "deep_checks" is iOS's Deep checks switch (in Settings there) and "sweep_subnets" Settings' list
-# of subnets every scan also sweeps (records.SWEEP_KEY).
+# "deep_checks" is iOS's Deep checks switch (in Settings there), "sweep_subnets" Settings' list
+# of subnets every scan also sweeps (records.SWEEP_KEY) and "site_name" the last Site Report's site.
 SAVED_SETTINGS = ("hidden", "ssh_user", "skip_port_warning", "device_logins", "factory_logins", *SETTINGS, "update",
-                  "deep_checks", records.SWEEP_KEY)
+                  "deep_checks", records.SWEEP_KEY, records.SITE_KEY)
 # Where earlier versions kept their data, by the parts of the data folder's path that changed:
 # folder name now -> patterns for its earlier names. macOS names the folder after the app ID
 # (earlier IDs ended .opendisco or .ubnt-discover); Windows after the publisher (until 1.4.1,
@@ -1821,8 +1822,8 @@ class OpenDiscoApp(toga.App):
 
     # -- exports and holding addresses ---------------------------------------------
     async def on_export(self, widget, **kwargs):
-        """The scan report; on desktops, first a choice of it or the extras (records.SITE_EXPORTS).
-        (Phones: the scan report as before; their Export offers the extras through _export.)"""
+        """The Site Report; on desktops, first a choice of it, the scan's data or the extras
+        (records.SITE_EXPORTS). (Phones: the Site Report; their Export offers the rest through _export.)"""
         if not self.result:
             return
         if self.caps["mobile"]:
@@ -1831,19 +1832,24 @@ class OpenDiscoApp(toga.App):
         self._export_chooser()
 
     def _export_chooser(self):
-        """Export: the scan report first, as it always was, then the site-wide extras."""
+        """Export: the Site Report first, for the site named above it (kept for next time), then the
+        scan's data and the site-wide extras."""
         backups = records.all_backups()
         notes = len(self.device_notes.items)
         state = {"backups": (bool(backups), f"{sum(len(p) for _, p in backups)} file(s) from {len(backups)} device(s)"
                              if backups else "none saved yet"),
                  "notes": (bool(notes), f"{notes} note(s)" if notes else "none written yet")}
         choices = []
-        for kind, button, text, types in [records.SCAN_EXPORT, *records.SITE_EXPORTS]:
+        for kind, button, text, types in [records.SCAN_EXPORT, records.DATA_EXPORT, *records.SITE_EXPORTS]:
             enabled, extra = state.get(kind, (True, ""))
             saved = types[:1] if self.caps["mobile"] else types  # phones save the first type only
             choices.append((kind, button, records.choice_text(text, saved, extra), enabled))
+        site = toga.TextInput(value=self.settings.get(records.SITE_KEY, ""), placeholder=SITE_EXAMPLE,
+                              style=Pack(flex=1))
 
         def pick(kind):
+            if kind == "scan":  # before closing: Windows empties a window's text boxes as it closes it
+                self._remember_site(site.value)
             close()
             asyncio.create_task(self._export(kind))
 
@@ -1853,31 +1859,66 @@ class OpenDiscoApp(toga.App):
                     toga.Label(textwrap.fill(text, 58), style=Pack(flex=1))])
                 for kind, button, text, enabled in choices]
         content = toga.Box(style=Pack(direction=COLUMN, margin=14, gap=10), children=[
+            toga.Box(style=Pack(direction=ROW, align_items="center", gap=10), children=[
+                toga.Label("Site name:", style=Pack(width=170, text_align="right")), site]),
             *rows, toga.Box(style=Pack(direction=ROW), children=[
                 toga.Box(style=Pack(flex=1)), toga.Button("Close", on_press=lambda w, **kw: close())])])
-        close = self._show_panel("Export", content, (640, 290))
+        close = self._show_panel("Export", content, (640, 380))
 
     async def _export(self, kind: str):
-        """Save the scan report ("scan") or one of records.SITE_EXPORTS, named for now."""
+        """Save the Site Report ("scan"), the scan's data ("data") or one of records.SITE_EXPORTS,
+        named for now. On phones the Site Report asks for the site's name first."""
         stamp = time.strftime("%Y%m%d-%H%M")
         devices = self._all_devices()
         if kind == "scan":
+            if self.caps["mobile"]:  # (desktops ask in Export's choices)
+                self._ask_site_name()
+            else:
+                await self._save_site_report()
+            return
+        if kind == "data":
             res = self.result
-            if self.phone_ui:  # the phones' own: iOS's share sheet, Android's Downloads
-                try:
-                    phone.native(self).export(self, f"opendisco-scan-{stamp}.html")
-                except Exception as e:
-                    self.status.text = f"Couldn't save the export: {getattr(e, 'strerror', None) or e}"
-                return
-            await self._save_export(f"opendisco-scan-{stamp}.html",
-                                    "Export results (.html opens on any phone; .csv, .json)", records.SCAN_EXPORT[3],
-                                    lambda path: core.write_export(res, path))
+            await self._save_export(f"opendisco-scan-{stamp}.csv", "Export: Scan data (.csv for a spreadsheet, .json)",
+                                    records.DATA_EXPORT[3], lambda path: core.write_export(res, path))
             return
         _kind, button, _text, types = next(e for e in records.SITE_EXPORTS if e[0] == kind)
         names = {"security": "security", "backups": "config-backups", "notes": "notes", "log": "log"}
         log = self.log.value
         await self._save_export(f"opendisco-{names[kind]}-{stamp}.{types[0]}", f"Export: {button.rstrip('…')}", types,
                                 lambda path: records.write_site_export(kind, path, devices, self.device_notes, log))
+
+    async def _save_site_report(self):
+        """Save the Site Report (records.site_report) for the site last named."""
+        res, site = self.result, self.settings.get(records.SITE_KEY, "")
+        await self._save_export(records.report_file_name(site), "Save the Site Report", ["html"],
+                                lambda path: core.write_export(res, path, site))
+
+    def _remember_site(self, name: str):
+        """The Site Report's site name, offered again next time."""
+        name = " ".join(name.split())
+        if name != self.settings.get(records.SITE_KEY, ""):
+            self.settings[records.SITE_KEY] = name
+            self._save_settings()
+
+    def _ask_site_name(self):
+        """Phones: the site the Site Report is for (kept for next time), then the report saved and
+        shared."""
+        site = toga.TextInput(value=self.settings.get(records.SITE_KEY, ""), placeholder=SITE_EXAMPLE,
+                              style=Pack(flex=1))
+
+        def save(widget, **kwargs):
+            if self.phone_ui:
+                phone.hook(self, "end_editing")(self)  # so the name has its last character
+            self._remember_site(site.value)
+            close()
+            asyncio.create_task(self._save_site_report())
+
+        content = toga.Box(style=Pack(direction=COLUMN, margin=14, gap=10), children=[
+            toga.Label(self._wrap("The site this report is for, named in its heading (kept for the next one); "
+                                  "leave it empty for none.")),
+            site, toga.Box(style=Pack(direction=ROW), children=[toga.Button("Save", on_press=save)])])
+        close = self._show_panel("Site Report", content, (440, 170))
+        site.focus()
 
     async def _save_export(self, name: str, title: str, file_types: list, write):
         """Save an export where this platform keeps files: a save dialog on desktops; on phones, the

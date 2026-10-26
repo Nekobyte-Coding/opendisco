@@ -4956,7 +4956,9 @@ def parse_args(argv=None):
     o.add_argument("-v", "--verbose", action="store_true", help="per-device details and diagnostics")
     o.add_argument("--json", action="store_true", help="JSON output")
     o.add_argument("--export", action="append", default=[], metavar="FILE",
-                   help="also save a report: .html (opens on any phone), .csv or .json (repeatable)")
+                   help="also save a report: .html the Site Report (opens on any phone, prints to PDF), .csv or "
+                        ".json the scan's data (repeatable)")
+    o.add_argument("--site", default="", metavar="NAME", help="the site the Site Report is for, in its heading")
     o.add_argument("--raw", action="store_true", help="decode and hex-dump UBNT packets as they arrive; with -v, each device's packets "
                         "checked for damage")
     o.add_argument("-w", "--watch", action="store_true", help="keep running and report changes")
@@ -5159,6 +5161,7 @@ class ScanResult:
     interrupted: bool = False
     counters: dict = field(default_factory=dict)  # error counters that went up during the scan
     diag_args: tuple = ()  # diagnose()'s other arguments, to diagnose again after a rescan
+    finished: float = field(default_factory=time.time)  # when the scan ended (the Site Report's date)
 
     def wire_title(self) -> str:
         if self.opts.direct:
@@ -5227,56 +5230,24 @@ def export_csv(res: ScanResult) -> str:
     return out.getvalue()
 
 
-def export_html(res: ScanResult) -> str:
-    """A self-contained report that opens on any phone or computer."""
-    from html import escape
-    colors = {"error": "#c62828", "warn": "#b26a00", "note": "#1565c0"}
-    rows = []
-    for d, depth in tree_order(res.devices):
-        values = device_row(d)[:-1]
-        values[0] = nested_ip(d, depth)
-        cells = "".join(f"<td>{escape(str(v)).replace(' ', '&nbsp;') if n == 0 else escape(str(v))}</td>"
-                        for n, v in enumerate(values))
-        tags = ", ".join(f'<span style="color:{colors.get(lv, "#2e7d32")}">{escape(status_label(tag))}</span>'
-                         for lv, tag, _ in d.issues) or '<span style="color:#2e7d32">OK</span>'
-        if d.cves:
-            tags = f'<b style="color:{colors["error"]}">!</b> {tags}'
-        links = dict(issue_links(d))
-        issues = "".join(f"<li><b>{escape(status_label(tag))}</b> "
-                         + re.sub(r"\bCVE-\d{4}-\d{4,}\b", lambda m: f'<a href="{links[m.group(0)]}">{m.group(0)}</a>',
-                                  escape(msg)) + "</li>" for _, tag, msg in d.issues)
-        note = f'<div class="note">\u270e {escape(d.note)}</div>' if d.note else ""
-        rows.append(f"<tr>{cells}<td>{tags}</td></tr>"
-                    + (f'<tr class="issues"><td colspan="{len(EXPORT_COLUMNS)}">{note}<ul>{issues}</ul></td></tr>'
-                       if issues or note else ""))
-    notes = "".join(f"<li>{escape(m)}</li>" for _, m in res.notes)
-    wire = res.wire_text(verbose=True)
-    head = "".join(f"<th>{c}</th>" for c in EXPORT_COLUMNS)
-    when = time.strftime("%Y-%m-%d %H:%M")
-    return f"""<!doctype html><html><head><meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1"><title>OpenDisco {when}</title>
-<style>body{{font:14px -apple-system,Segoe UI,Roboto,sans-serif;margin:16px;color:#222;background:#fff}}
-table{{border-collapse:collapse;width:100%;font-size:13px}}th,td{{border-bottom:1px solid #ddd;padding:6px;text-align:left;vertical-align:top}}
-th{{background:#f4f4f4;position:sticky;top:0}}tr.issues td{{border-bottom:2px solid #ccc;color:#444}}ul{{margin:0;padding-left:18px}}
-pre{{background:#f6f6f6;padding:10px;overflow-x:auto}}.wrap{{overflow-x:auto}}.note{{white-space:pre-wrap;margin-bottom:4px}}
-@media (prefers-color-scheme: dark){{body{{background:#121212;color:#ddd}}th{{background:#222}}th,td{{border-color:#333}}pre{{background:#1e1e1e}}}}</style>
-</head><body><h1>OpenDisco</h1><p>{when} &middot; {len(res.devices)} device(s) &middot; {res.elapsed:.0f}s</p>
-<div class="wrap"><table><tr>{head}</tr>{''.join(rows)}</table></div>
-{f'<h2>{escape(res.wire_title())}</h2><pre>{escape(wire)}</pre>' if wire else ''}
-{f'<h2>Notes</h2><ul>{notes}</ul>' if notes else ''}</body></html>
-"""
+def export_html(res: ScanResult, site: str = "", demo: bool = False) -> str:
+    """The Site Report (records.site_report): one page that opens on any phone or computer and
+    prints cleanly."""
+    from opendisco import records
+    return records.site_report(res, site, demo)
 
 
-def export_text(res: ScanResult, ext: str) -> str:
-    """A report in the format of this file extension (.json, .csv, otherwise HTML)."""
+def export_text(res: ScanResult, ext: str, site: str = "", demo: bool = False) -> str:
+    """A report in the format of this file extension: .json and .csv the scan's data, otherwise the
+    Site Report (HTML) for this site name, stamped as the demo network's with demo."""
     return (json.dumps(result_to_dict(res), indent=2, default=str) if ext == ".json"
-            else export_csv(res) if ext == ".csv" else export_html(res))
+            else export_csv(res) if ext == ".csv" else export_html(res, site, demo))
 
 
-def write_export(res: ScanResult, path: str) -> None:
+def write_export(res: ScanResult, path: str, site: str = "", demo: bool = False) -> None:
     """Write a report; the format follows the file extension (.json, .csv, otherwise HTML)."""
     ext = os.path.splitext(path)[1].lower()
-    text = export_text(res, ext)
+    text = export_text(res, ext, site, demo)
     # A byte order mark, or Excel reads the CSV in the PC's legacy code page and garbles ✓ and ✗.
     with open(path, "w", encoding="utf-8-sig" if ext == ".csv" else "utf-8", newline="") as f:
         f.write(text)
@@ -5664,7 +5635,7 @@ def main(argv=None) -> int:
             find_ports(res, d, "all", log, port_progress)
             port_progress(None, None, None)
     for path in opts.export:
-        write_export(res, path)
+        write_export(res, path, opts.site)
         log(f"Saved {path}")
     devs, notes, trunks, inv = res.devices, res.notes, res.trunks, res.inv
 

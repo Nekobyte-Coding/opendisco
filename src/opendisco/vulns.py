@@ -183,18 +183,24 @@ def _family_of(name):
     return None
 
 
+def device_family(d):
+    """(family, model) by the platform or model a device reports, or None when it's none the
+    list knows."""
+    info = d.info
+    for name in (info.get("platform"), info.get("model"), info.get("product_name"), d.fw_platform):
+        hit = _family_of(name)
+        if hit:
+            return hit
+    return None
+
+
 def targets(d) -> list:
     """What of a device the list can check: [(family, model, version)]. Empty when its family or
     firmware version isn't certain. A console adds its UniFi Network version."""
     info = d.info
     version = firmware_version(info.get("firmware") or "")
-    if not version:
-        return []
-    for name in (info.get("platform"), info.get("model"), info.get("product_name"), d.fw_platform):
-        hit = _family_of(name)
-        if hit:
-            break
-    else:
+    hit = device_family(d) if version else None
+    if not hit:
         return []
     family, model = hit
     found = [(family, model, version)]

@@ -13,14 +13,12 @@ from pathlib import Path
 import toga
 from toga.style import Pack
 
-from opendisco import phone
-
 # SF Symbols for the device page's tabs, in place of Toga's star on every one
 TAB_SYMBOLS = {"Details": "info.circle", "Packets": "doc.text.magnifyingglass", "Tools": "wrench.and.screwdriver",
                "Notes": "text.bubble", "Log": "list.bullet.rectangle"}
 # and for Export's reports (phone.export_choices)
-EXPORT_SYMBOLS = {"scan": "doc.richtext", "security": "exclamationmark.shield", "backups": "archivebox",
-                  "notes": "note.text", "log": "list.bullet.rectangle"}
+EXPORT_SYMBOLS = {"scan": "doc.richtext", "data": "tablecells", "security": "exclamationmark.shield",
+                  "backups": "archivebox", "notes": "note.text", "log": "list.bullet.rectangle"}
 
 
 def _objc(name):
@@ -403,9 +401,10 @@ def search_field(app, widget):
 
 
 def export_menu(app, choices, pick):
-    """Export opens a menu of the reports, listed afresh each time it opens: the scan report,
-    then the security report, config backups, notes and the Log, each saying what's in it (and
-    dimmed while there's nothing). Choosing one saves it and offers it to the share sheet."""
+    """Export opens a menu of the reports, listed afresh each time it opens: the Site Report, the
+    scan's data, then the security report, config backups, notes and the Log, each saying what's
+    in it (and dimmed while there's nothing). Choosing one saves it and offers it to the share
+    sheet (the Site Report asks for the site's name first)."""
     def items():
         return [(title, enabled, lambda kind=kind: pick(kind), detail, EXPORT_SYMBOLS.get(kind, "doc"))
                 for kind, title, detail, enabled in choices()]
@@ -417,7 +416,7 @@ def export_menu(app, choices, pick):
         app.export_button.menu = True
         app.export_button.enabled = True
     except Exception:
-        pass  # Export saves the scan report, as before
+        pass  # Export saves the Site Report, as before
 
 
 def _deferred_menu(app, owner, items):
@@ -703,11 +702,6 @@ def present(app, content):
 
     app._ios_dismissed = Block(dismissed, None)
     return lambda: controller.dismissViewControllerAnimated(True, completion=app._ios_dismissed)
-
-
-def export(app, name: str):
-    """Save the report in the app's own folder and offer it to the share sheet."""
-    share(app, phone.export_file(app, name))
 
 
 def share(app, path: Path):

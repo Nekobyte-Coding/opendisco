@@ -2,7 +2,7 @@
 
 A phone has no menus, no second windows and no room for a twelve-column table, and lets an app
 run no other program. So there the app opens on its device list, under Quick Scan, Full Scan and
-Stop and a search, with Export (the scan report and the other reports), the scan's Notes and Log
+Stop and a search, with Export (the Site Report and the other reports), the scan's Notes and Log
 and Settings in the title bar. Tapping a device opens
 its own page, titled with its name and address, with its tabs along the bottom: Details,
 Packets, Tools, Notes and Log. Tools pings the device (core.ping: the app's own ICMP), opens an
@@ -26,7 +26,6 @@ This module is what both phones share. What each does natively is in phone_<plat
     retitle(button, text)       a button's text, styled or not
     monospaced(widget, size)    the platform's monospaced font for a text view
     copy_text(text)
-    export(app, name)           save the report (export_file) and offer it (iOS: the share sheet)
     keep_selection(app, key)    select the device's row again after the list reloaded
     fit_safe_area(app)          keep the content clear of the screen's edges after a resize
     and, where the platform has its own (hook() falls back to plain ones otherwise):
@@ -46,7 +45,7 @@ This module is what both phones share. What each does natively is in phone_<plat
     search_field(app, widget)   the search above the list, looking like the platform's own
     export_menu(app, choices, pick)   Export offers a choice of reports: choices() lists them as
                                 (kind, title, detail, enabled) when it's tapped; pick(kind) saves one
-                                (without it, Export saves the scan report)
+                                (without it, Export saves the Site Report)
     here(app)                   what the app's text calls the device it runs on ("this phone")
     text_box(widget)            a text view for typing many lines into, drawn so it can be seen
     menu_button(app, title, items)   a button that opens a menu: items() lists (title, enabled,
@@ -61,9 +60,7 @@ app.py makes the widgets every platform shares and calls in here; it all runs on
 import importlib
 import importlib.util
 import re
-import shutil
 import threading
-from pathlib import Path
 
 import toga
 from toga.style import Pack
@@ -295,22 +292,22 @@ def fit_panel(app, box):
 
 
 def export_choices(app) -> list:
-    """What Export offers on a phone: the scan report, then the other reports (records.SITE_EXPORTS),
-    as (kind, title, detail, enabled)."""
+    """What Export offers on a phone: the Site Report, the scan's data, then the other reports
+    (records.SITE_EXPORTS), as (kind, title, detail, enabled)."""
     from opendisco import records
     backups = records.all_backups()
     notes = len(app.device_notes.items)
-    details = {"scan": "Every device, with diagnostics: HTML",
+    details = {"scan": "Devices, firmware, CVEs and every issue, to print: HTML",
+               "data": "Every device, for a spreadsheet: CSV",
                "security": "Known CVEs and outdated firmware: HTML",
                "backups": f"{sum(len(p) for _, p in backups)} file(s) from {len(backups)} device(s): .zip"
                           if backups else "None saved yet",
                "notes": f"{notes} note(s): HTML" if notes else "None written yet",
                "log": "The Log, as text"}
-    enabled = {"scan": bool(app.result), "security": bool(app.result), "backups": bool(backups), "notes": bool(notes)}
-    choices = [("scan", "Scan report", details["scan"], enabled["scan"])]
-    for kind, button, _text, _types in records.SITE_EXPORTS:
-        choices.append((kind, button.rstrip("…"), details.get(kind, ""), enabled.get(kind, True)))
-    return choices
+    enabled = {"scan": bool(app.result), "data": bool(app.result), "security": bool(app.result),
+               "backups": bool(backups), "notes": bool(notes)}
+    return [(kind, button.rstrip("…"), details.get(kind, ""), enabled.get(kind, True))
+            for kind, button, _text, _types in [records.SCAN_EXPORT, records.DATA_EXPORT, *records.SITE_EXPORTS]]
 
 
 # -- the device page ------------------------------------------------------------------
@@ -762,15 +759,3 @@ async def scan_from(app):
         say(app, "\n".join(lines[1:]))
     if not beside(app):  # (a tablet shows the list already)
         app.page.close()  # back to the list
-
-
-# -- export -----------------------------------------------------------------------------
-def export_file(app, name: str) -> Path:
-    """Write the report into the app's own folder, in place of the last one (shared already, or
-    not wanted)."""
-    folder = Path(app.paths.cache) / "exports"
-    shutil.rmtree(folder, ignore_errors=True)
-    folder.mkdir(parents=True)
-    path = folder / name
-    core.write_export(app.result, str(path))
-    return path
