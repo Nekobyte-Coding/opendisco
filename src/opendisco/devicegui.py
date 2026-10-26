@@ -206,7 +206,19 @@ async def ask_login(app, d, purpose: str, via: tuple = ()) -> sshrun.Login | Non
             _logins(app).pop(d.mac, None)
             credstore.forget(d.mac)
         app._save_settings()
+        await warn_factory_login(app, d, login)
         return login
+
+
+async def warn_factory_login(app, d, login) -> None:
+    """Keep whether a login that just worked on d is a factory one, and say so the first time: the
+    device keeps its FACTORY-LOGIN issue until it has a new password."""
+    if devicetools.note_login(d, login):
+        app._save_settings()
+        app._rediagnose()
+        if devicetools.is_factory(login):
+            await app.main_window.dialog(toga.InfoDialog(
+                "Factory login", f"{_label(d)}\n\n{core.factory_login_text(login.user, login.password)}"))
 
 
 async def _login_window(app, d, purpose, user, password, port, remembered, problem):
@@ -895,6 +907,9 @@ async def login_flow(app, d):
             credstore.save(d.mac, new_user, new_password)
             _logins(app)[d.mac] = {"user": new_user, "port": login.port}
             app._save_settings()
+        devicetools.forget_factory_login(d)
+        app._save_settings()
+        app._rediagnose()
         progress.finish(f"Done: {d.ip} takes the new login ({new_user}), applied and saved to flash.")
         app.status.text = f"{d.ip}: the login is now {new_user}."
     finally:
@@ -1377,6 +1392,7 @@ async def scan_address(app):
                             "under.")
     app._save_settings()
     _report_scan(app, finder, sightings, seen, new)
+    await warn_factory_login(app, finder, login)
 
 
 def _empty_result():

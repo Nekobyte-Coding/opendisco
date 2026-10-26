@@ -13,7 +13,8 @@ here runs in a worker thread.
   to flash, or saved and applied in place the way the web UI's Apply does.
 - A new login goes into the same file, its password hashed the way the device hashes the one
   it has now (airOS uses MD5-crypt), and only after that hash is checked against the current
-  password.
+  password. A factory password (FACTORY_LOGINS) isn't taken, and a device the User logs in to
+  with a factory login is flagged (note_login).
 - Config backups (every family but UniFi, whose controller keeps its config): the device's
   config file, kept in the app's data folder by MAC with the time it was taken, and uploaded
   again (Restore) only to the same model. airMAX, airFiber and LTU keep theirs in
@@ -1443,6 +1444,42 @@ def merge_scan(res, finder, sightings: list, local: set = frozenset()) -> tuple:
 # Logins
 # ---------------------------------------------------------------------------
 
+# Ubiquiti's factory logins: ubnt/ubnt (airMAX, airFiber, LTU, EdgeRouters, EdgeSwitches, UISP gear and
+# older UniFi devices), ui/ui (newer UniFi devices until adopted), root with ubnt or ui (UniFi gateways
+# until adopted). Anyone who can reach a device that still takes one can log in to it.
+FACTORY_LOGINS = {("ubnt", "ubnt"), ("ui", "ui"), ("root", "ubnt"), ("root", "ui")}
+FACTORY_PASSWORDS = {password for _user, password in FACTORY_LOGINS}
+
+
+def is_factory(login) -> bool:
+    return (login.user, login.password) in FACTORY_LOGINS
+
+
+def note_login(d, login) -> bool:
+    """Keep whether a login that just worked on d is a factory one, by its MAC in
+    core.FACTORY_LOGINS_FOUND, which core.diagnose flags (FACTORY-LOGIN). Another user's login
+    says nothing about the factory one; the same user's with another password means it was
+    changed. True when that changed what's known (or d has no MAC to keep it by, and the login
+    is a factory one): the time to save it, and with a factory login to say so."""
+    if not d.mac:
+        return is_factory(login)
+    mac, found = core.norm_mac(d.mac), core.FACTORY_LOGINS_FOUND
+    known = found.get(mac)
+    if is_factory(login):
+        found[mac] = [login.user, login.password]
+        return known != found[mac]
+    if known and known[0] == login.user:
+        del found[mac]
+        return True
+    return False
+
+
+def forget_factory_login(d) -> None:
+    """d was given a new login (Change login), which replaced a factory one it took."""
+    if d.mac:
+        core.FACTORY_LOGINS_FOUND.pop(core.norm_mac(d.mac), None)
+
+
 def change_login(text: str, user: str, password: str, new_user: str, new_password: str) -> tuple:
     """The config with the login `user` renamed to new_user and its password replaced, hashed
     the way the device hashed the current one. The current hash is checked against `password`
@@ -1452,6 +1489,8 @@ def change_login(text: str, user: str, password: str, new_user: str, new_passwor
                         "letter or digit.")
     if not new_password or any(ord(c) < 32 for c in new_password):
         raise ToolError("The new password can't be empty or hold control characters.")
+    if new_password in FACTORY_PASSWORDS:
+        raise ToolError(f"{new_password} is a factory password, the first one anyone tries: choose another.")
     lines = text.replace("\r", "").split("\n")
     names = {m.group(1): (n, line.split("=", 1)[1]) for n, line in enumerate(lines)
              if (m := re.match(r"users\.(\d+)\.name=", line))}

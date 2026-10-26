@@ -70,8 +70,8 @@ SETTINGS = {"check_app_updates": "Check for OpenDisco updates when opening",
 # What settings.json keeps; "update" remembers an update while the app restarts into it,
 # "deep_checks" is iOS's Deep checks switch (in Settings there) and "sweep_subnets" Settings' list
 # of subnets every scan also sweeps (records.SWEEP_KEY).
-SAVED_SETTINGS = ("hidden", "ssh_user", "skip_port_warning", "device_logins", *SETTINGS, "update", "deep_checks",
-                  records.SWEEP_KEY)
+SAVED_SETTINGS = ("hidden", "ssh_user", "skip_port_warning", "device_logins", "factory_logins", *SETTINGS, "update",
+                  "deep_checks", records.SWEEP_KEY)
 # Where earlier versions kept their data, by the parts of the data folder's path that changed:
 # folder name now -> patterns for its earlier names. macOS names the folder after the app ID
 # (earlier IDs ended .opendisco or .ubnt-discover); Windows after the publisher (until 1.4.1,
@@ -207,6 +207,7 @@ class OpenDiscoApp(toga.App):
             pass
         self.settings = self._load_settings()
         self.hidden = self.settings.setdefault("hidden", {})  # device key (its MAC) -> what it was
+        core.FACTORY_LOGINS_FOUND = self.settings.setdefault("factory_logins", {})  # kept with the settings
         self.device_notes = records.Notes(self.paths.data)  # a note per device, by MAC (notes.json)
         if not self.caps["mobile"]:
             core.SUDO_ASKPASS = self._ask_password  # no terminal here, so the GUI asks
@@ -2259,11 +2260,13 @@ class OpenDiscoApp(toga.App):
         def work():
             updated = vulns.refresh(self.paths.data, lambda m: self._from_worker(self._append_log, m, False))
             if updated:
-                self._from_worker(self._recheck_cves)
+                self._from_worker(self._rediagnose)
 
         threading.Thread(target=work, daemon=True).start()
 
-    def _recheck_cves(self):
+    def _rediagnose(self):
+        """Diagnose the devices on screen again and show what changed: newer CVE data, or a device
+        tool that found a factory login."""
         res = self.result
         if res is None or self.running or not res.diag_args:
             return

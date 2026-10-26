@@ -70,6 +70,10 @@ IS_APPLE = sys.platform in ("darwin", "ios")  # macOS and iOS: the same BSD sock
 
 STOP = threading.Event()  # a GUI's Stop button: ends the scan early, the way Ctrl+C does
 SUDO_ASKPASS = None  # a GUI sets this to fn(reason) -> password or None; the CLI lets sudo prompt
+# Factory logins the device tools found working, by MAC: {mac: [user, password]}, which diagnose flags
+# (FACTORY-LOGIN). devicetools.note_login keeps it; a GUI makes it one of its settings, so it outlives
+# rescans and restarts.
+FACTORY_LOGINS_FOUND = {}
 
 
 def platform_name() -> str:
@@ -4246,6 +4250,13 @@ def damage_summary(d: Device, found: dict) -> list:
     return bad + [f"#{n} {msg.split(': ', 1)[1]}" for n, msg in found["uptime"] if "rebooted" not in msg]
 
 
+def factory_login_text(user: str, password: str) -> str:
+    """The FACTORY-LOGIN issue, which the device tools also show when the login works."""
+    return (f"Takes its factory login ({user}/{password}): anyone who can reach it can log in and change its "
+            "settings. Give it a new password: Change login does that on airMAX gear, its web UI on the rest, "
+            "and adopting a UniFi device gives it its own.")
+
+
 def diagnose(inv: Inventory, all_ifaces, scan_nets, opts, alias_used=(), skipped=(), probed_links=()) -> None:
     """alias_used: (iface, ip) aliases taken. probed_links: interfaces that had their own
     address during the normal scan, so silence there means the device ignored us."""
@@ -4263,8 +4274,8 @@ def diagnose(inv: Inventory, all_ifaces, scan_nets, opts, alias_used=(), skipped
         if info.get("is_default"):
             msg = "Factory default / not adopted - ready for adoption."
             if not d.console:
-                msg += (f" Adopt it in the UniFi Network app, or SSH to {d.ip or 'it'} (factory login is "
-                        "usually ubnt/ubnt) and run: set-inform http://<controller-ip>:8080/inform")
+                msg += (f" Adopt it in the UniFi Network app, or SSH to {d.ip or 'it'} (factory login "
+                        "ubnt/ubnt, or ui/ui on newer models) and run: set-inform http://<controller-ip>:8080/inform")
             issues.append(("note", "DEFAULT", msg))
         if d.system.get("isSetup") is False:
             issues.append(("note", "NOT-SET-UP", "UniFi OS console hasn't been set up yet."))
@@ -4401,6 +4412,9 @@ def diagnose(inv: Inventory, all_ifaces, scan_nets, opts, alias_used=(), skipped
                            f"{sent - answered} went unanswered. On this computer's own subnet that's packet loss: "
                            "Wi-Fi interference, a bad cable or port, a busy link, or a busy device."))
         issues += health.issues(d)
+        factory = FACTORY_LOGINS_FOUND.get(norm_mac(d.mac)) if d.mac else None
+        if factory:
+            issues.append(("warn", "FACTORY-LOGIN", factory_login_text(*factory)))
         d.cves = vulns.check(d)
         if d.cves:
             level, msg = vulns.issue(d.cves)
@@ -4485,7 +4499,7 @@ STATUS_LABELS = {
     "NO-PORTS": "No ports open", "OFF-SUBNET": "Wrong subnet", "REBOOTED": "Rebooted recently",
     "WAN-DOWN": "WAN down", "HTTPS-PORT": "HTTPS port problem", "SSH-PORT": "SSH port problem",
     "CVE": "CVE risk", "TFTP-RECOVERY": "TFTP recovery mode",
-    "HIGH-LATENCY": "High latency", "PING-LOSS": "Packet loss",
+    "HIGH-LATENCY": "High latency", "PING-LOSS": "Packet loss", "FACTORY-LOGIN": "Factory login",
 }
 LEVEL_ORDER = ("ok", "note", "warn", "error")
 NVD_URL = "https://nvd.nist.gov/vuln/detail/{}"

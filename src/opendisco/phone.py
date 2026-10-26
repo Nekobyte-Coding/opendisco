@@ -581,6 +581,19 @@ async def ask_route(app, d, purpose: str):
     return await ask_login(app, d, purpose, via)
 
 
+async def warn_factory_login(app, d, login) -> None:
+    """Keep whether a login that just worked on d is a factory one, and say so the first time: the
+    device keeps its FACTORY-LOGIN issue until it has a new password."""
+    from opendisco import devicetools  # it imports phonessh, which phone.py loads first
+    if devicetools.note_login(d, login):
+        app._save_settings()
+        app._rediagnose()
+        if devicetools.is_factory(login):
+            label = f"{d.ip}  {d.name or d.model or d.mac or ''}".strip()
+            await app.main_window.dialog(toga.InfoDialog(
+                "Factory login", f"{label}\n\n{core.factory_login_text(login.user, login.password)}"))
+
+
 async def ask_login(app, d, purpose: str, via: tuple = ()):
     """A page asking for the username, password and port; it logs in once to check them and
     closes when that works. None when cancelled. The username and port are kept for the device;
@@ -623,6 +636,7 @@ async def ask_login(app, d, purpose: str, via: tuple = ()):
         app.settings["ssh_user"] = login.user
         app._save_settings()
         close()
+        await warn_factory_login(app, d, login)
         finish(login)
 
     def forget_key(*args, **kwargs):

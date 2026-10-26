@@ -406,9 +406,11 @@ async def change_login(app):
                   "defaults gets it back.")
         return
     app.phone_passwords[d.key] = new_password
+    devicetools.forget_factory_login(d)
     if d.mac:
         app.settings.setdefault("device_logins", {})[d.mac] = {"user": new_user, "port": login.port}
-        app._save_settings()
+    app._save_settings()
+    app._rediagnose()
     _say(app, f"Done: {d.ip} takes the new login ({new_user}), applied and saved to flash.")
 
 
@@ -826,6 +828,7 @@ async def scan_address(app):
         lines.append(f"  {dev.ip or '-':15} {dev.name or dev.model or dev.mac or ''}{'  (new)' if dev in new else ''}")
     app._append_log("\n".join(lines), status=False)
     app.status.text = lines[0]
+    await phone.warn_factory_login(app, finder, login)
 
 
 async def _address_page(app):

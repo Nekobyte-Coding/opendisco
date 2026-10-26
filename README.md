@@ -453,7 +453,13 @@ Right-click a device in the table (or select it and use the **Device** menu):
   as the boot config, once EdgeOS has checked that it loads); **Apply** saves it and applies
   it now, as the web UI's Apply does (EdgeOS: load, commit, save). The config before the edit
   is kept as a backup.
-- **Change login…** (airMAX) sets a new username and password.
+- **Change login…** (airMAX) sets a new username and password. It won't set a factory
+  password (`ubnt` or `ui`).
+- Whenever a device tool logs in with a factory login (`ubnt`/`ubnt`, `ui`/`ui`, or `root`
+  with `ubnt` or `ui`), the app says so once and flags the device `FACTORY-LOGIN` (Status:
+  Factory login) until it logs in to it with the same username and another password, or
+  Change login replaces it. The flag is kept by MAC address with the app's settings, so it
+  outlives rescans and restarts.
 - **Back up config** (airMAX, airFiber, LTU, GigaBeam, EdgeOS) reads the device's config and
   keeps a copy in the app's data folder, filed under its MAC address with the date, its
   address, model and firmware. **Config backups…** lists them, with **Restore…**, **Save a
@@ -921,6 +927,7 @@ opened.
 | `LOSS` | Missed 10% or more of the rounds of probes (at least 2) while in view | Wi-Fi interference, a bad cable or port, a busy link or device |
 | `PING-LOSS` | 20% or more of its pings went unanswered, with some replies | On a wired link: a bad cable, connector or switch port, or a speed/duplex mismatch. On a wireless hop: interference, a weak signal or a busy channel. Or the device is too busy to answer |
 | `HIGH-LATENCY` | Pings take 100 ms or more on average | A congested link on the way, interference or a weak signal on a wireless hop, or a device short of CPU |
+| `FACTORY-LOGIN` | A device tool logged in to it with a factory login (`ubnt`/`ubnt`, `ui`/`ui`, `root`/`ubnt` or `root`/`ui`) | Give it a new password: **Change login…** on airMAX, its web UI on other gear; adopting a UniFi device gives it its own |
 | `CVE` | Its firmware has known vulnerabilities; Status starts with a red ❗ | Upgrade to the version the message names. See [Known vulnerabilities](#known-vulnerabilities-cves) |
 
 **Notes** at the bottom cover the scan itself: UDP 10001 already in use, broadcasts blocked,
