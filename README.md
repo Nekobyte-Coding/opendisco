@@ -154,9 +154,14 @@ Installers are on the [Releases](https://github.com/Nekobyte-Coding/opendisco/re
   - **Ubuntu 24.04 LTS, Linux Mint 22, Pop!_OS 24.04:**
     `sudo apt install ./OpenDisco-1.6.2-ubuntu-24.04-amd64.deb`
   - **Fedora 44:** `sudo dnf install ./OpenDisco-1.6.2-fedora-44-x86_64.rpm`
-  - **Any other distribution** (Debian 13, Arch, newer Ubuntu or Fedora...): the portable
-    `OpenDisco-1.6.2-linux.tar.gz`. Extract it and run `./opendisco`; its `README-LINUX.md`
-    lists the packages to install first.
+  - **Any other distribution** (Debian 13, Arch, newer Ubuntu or Fedora...):
+    - **The AppImage** (x86-64, from 1.6.2): `OpenDisco-1.6.2-linux-x86_64.AppImage`. Make it
+      executable (`chmod +x`) and run it. It brings its own Python and Toga and uses the
+      system's GTK 3 and WebKitGTK 4.1, which most desktops have; if they're missing, it says
+      what to install. Given options, it's the command-line tool. It runs on Ubuntu 24.04,
+      Debian 13, Fedora 40, Linux Mint 22 and later.
+    - **The portable** `OpenDisco-1.6.2-linux.tar.gz`: extract it and run `./opendisco`; its
+      `README-LINUX.md` lists the packages to install first.
 
   The `.deb` and `.rpm` install the app's own copy of Toga and PyGObject, built for that
   release, and pull in GTK, WebKitGTK, tcpdump, ip, iw and the ssh client. The app is in the
@@ -1093,14 +1098,24 @@ python3 -m venv .venv && .venv/bin/pip install briefcase toga
 
   NSIS then turns them into `dist/OpenDisco-<version>-windows-x64-setup.exe`. On a Windows PC,
   `briefcase package windows` makes an `.msi` instead.
-- **Linux (.deb, .rpm, .tar.gz), on a Mac or a Linux PC:**
-  `.venv/bin/python packaging/linux/build_packages.py` (`--arch arm64` for ARM PCs). It runs
-  Briefcase inside Ubuntu 24.04 and Fedora 44 containers, so it needs Docker; one build at a
-  time, since every run uses the same container names. Building natively on a Linux x86-64
-  machine is the reliable way: on a Mac, x86-64 builds run emulated (`brew install colima
-  docker docker-buildx`, then `colima start --vz-rosetta=false`), Rosetta crashes Ubuntu's
-  Python, and emulated compilers occasionally crash ("internal compiler error": run it
-  again). The portable `.tar.gz` needs no Docker (`--only tar.gz`).
+- **Linux (.deb, .rpm, .tar.gz, AppImage), on a Mac or a Linux PC:**
+  `.venv/bin/python packaging/linux/build_packages.py` (`--arch arm64` for ARM PCs).
+  - **How it builds:** it runs Briefcase inside Ubuntu 24.04 and Fedora 44 containers, so it
+    needs Docker, and one build at a time, since every run uses the same container names.
+  - **Where to build:** natively on a Linux x86-64 machine is the reliable way. On a Mac, x86-64
+    builds run emulated (`brew install colima docker docker-buildx`, then
+    `colima start --vz-rosetta=false`). Rosetta crashes Ubuntu's Python, and emulated compilers
+    occasionally crash ("internal compiler error": run it again).
+  - **The portable `.tar.gz`** needs no Docker (`--only tar.gz`).
+  - **The AppImage** (`--only appimage`, x86-64 only) is built by
+    `packaging/linux/appimage/build-appimage.sh` in an Ubuntu 24.04 container, not by
+    Briefcase. Briefcase's AppImages build on manylinux, whose GLib is too old for current
+    PyGObject.
+    - It carries python-build-standalone's Python, PyGObject and pycairo compiled there, Toga,
+      and AppImage's static runtime, and uses the system's GTK and WebKitGTK.
+    - It also fetches the source package of the one system library it carries
+      (girepository-2.0), for the release.
+    - `packaging/linux/appimage/check_appimage.sh` checks it in a container.
 - **Android (.apk):** `.venv/bin/python packaging/android/build_apk.py` (works on a Mac). The
   first run downloads Java and Google's Android SDK and asks for Google's SDK license to be
   accepted. It puts `dist/OpenDisco-<version>-android.apk` there, signed with the release

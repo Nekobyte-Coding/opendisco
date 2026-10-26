@@ -11,6 +11,10 @@ and known issues.
 - Linux: the .deb and the .rpm name the project's homepage,
   https://github.com/Nekobyte-Coding/opendisco, where `apt show` and `dnf info` gave "None".
   Nothing else changes; the terms of use are asked for again, as after every upgrade.
+- Linux: an AppImage (`OpenDisco-1.6.2-linux-x86_64.AppImage`), added to the release afterwards
+  and built from 1.6.2's source. It brings its own Python and Toga and uses the system's GTK 3
+  and WebKitGTK 4.1, saying what to install where they're missing. It runs on Ubuntu 24.04,
+  Debian 13, Fedora 40, Linux Mint 22 and later.
 
 ## 1.6.1 (2026-10-25)
 
