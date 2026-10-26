@@ -21,8 +21,9 @@ and `iw` names the access point a Wi-Fi interface is joined to.
 
 The app needs Python 3.11 or newer, GTK 3 and WebKitGTK 4.1 (for the Terminal tab). The first
 time it opens, it sets up its own Python environment in `~/.local/share/opendisco` with Toga,
-the toolkit it's written in. That compiles PyGObject (GTK's Python bindings), so it needs a
-compiler and a few development packages once. Install these first:
+the toolkit it's written in, and asyncssh, an SSH client in Python. That compiles PyGObject
+(GTK's Python bindings), so it needs a compiler and a few development packages once. Install
+these first:
 
 **Debian 13, Ubuntu 24.04 or newer, Linux Mint 22**
 
@@ -42,6 +43,10 @@ compiler and a few development packages once. Install these first:
 Then run `./opendisco`. Setting up takes a minute or two the first time; after that it opens
 straight away. If it stops with "Couldn't set up Toga", a package above is missing: install
 it and run `./opendisco` again.
+
+Open SSH… and the device tools use the system's `ssh` and `scp` (the openssh package above).
+Without them, they use asyncssh from that environment instead. If asyncssh couldn't be
+installed (no connection to PyPI the first time), `./opendisco` tries again the next time.
 
 Debian 12 and Ubuntu 22.04 are too old for the app (their GLib can't build current PyGObject).
 The command-line tool works on them.

@@ -10,15 +10,15 @@ This list covers OpenDisco 1.6.2 for macOS (the .dmg), Windows (the setup .exe),
 
 Not included in OpenDisco's own files:
 - The Linux .deb and .rpm use the system's Python, GTK, WebKitGTK, OpenSSH, tcpdump, ip and iw, which the distribution's package manager installs from the distribution.
-- The Linux AppImage uses the system's GTK, WebKitGTK, GLib and cairo, with their introspection data, and the system's OpenSSH, tcpdump, ip and iw. It carries Ubuntu 24.04's girepository-2.0 only for systems that don't have one.
-- The portable Linux .tar.gz holds only OpenDisco's own code and xterm.js. The first time the app opens, its launcher downloads Toga and the packages it needs from PyPI into a Python environment on the user's computer.
+- The Linux AppImage uses the system's GTK, WebKitGTK, GLib and cairo, with their introspection data, and the system's OpenSSH (where it has one), tcpdump, ip and iw. It carries Ubuntu 24.04's girepository-2.0 only for systems that don't have one.
+- The portable Linux .tar.gz holds only OpenDisco's own code and xterm.js. The first time the app opens, its launcher downloads Toga, asyncssh and the packages they need from PyPI into a Python environment on the user's computer.
 - On Windows, Npcap is not included. The installer downloads Npcap's own installer from npcap.com, which shows Npcap's license.
-- The SSH client on macOS, Windows and Linux is the operating system's own.
+- The SSH client on macOS, Windows and Linux is the operating system's own. Where a Linux system has none, the AppImage and the portable version use asyncssh instead (the AppImage's own copy, listed below).
 
 ## Source code
 
 Some of these licenses require the source code to be available to anyone who receives the program:
-- asyncssh (Android, iPhone and iPad): OpenDisco distributes asyncssh under the Eclipse Public License 2.0, and its source code is available under that license. The exact source distribution, asyncssh-2.23.1.tar.gz, is attached to each OpenDisco release at github.com/Nekobyte-Coding/opendisco/releases, and is also at pypi.org/project/asyncssh/2.23.1.
+- asyncssh (Android, iPhone and iPad, Linux AppImage): OpenDisco distributes asyncssh under the Eclipse Public License 2.0, and its source code is available under that license. The exact source distribution, asyncssh-2.23.1.tar.gz, is attached to each OpenDisco release at github.com/Nekobyte-Coding/opendisco/releases, and is also at pypi.org/project/asyncssh/2.23.1.
 - PyGObject and pycairo (Linux .deb, .rpm and AppImage): both are used under the GNU Lesser General Public License 2.1. Their complete source distributions, pygobject-3.58.1.tar.gz and pycairo-1.29.2.tar.gz, are attached to each OpenDisco release, and are also at pypi.org/project/PyGObject/3.58.1 and pypi.org/project/pycairo/1.29.2. They are separate files, in /usr/lib/opendisco/app_packages (the .deb), /usr/lib64/opendisco/app_packages (the .rpm) or usr/python/lib/python3.13/site-packages inside the AppImage (which its --appimage-extract option unpacks), so they can be replaced with modified versions. Modifying them for one's own use, and reverse engineering OpenDisco to debug such modifications, are permitted.
 - certifi (iPhone and iPad) and Mozilla's CA certificate bundle (Android): both are under the Mozilla Public License 2.0. certifi's Source Code Form is in certifi-2026.10.23.tar.gz, attached to each OpenDisco release and also at pypi.org/project/certifi/2026.10.23. Android's bundle is Chaquopy's own copy, assets/chaquopy/cacert.pem in the APK: a text file, which is itself its Source Code Form.
 - NSIS (the Windows installer): the setup .exe is built with NSIS 3.13, whose LZMA decompression module is under the Common Public License 1.0. NSIS's source code, nsis-3.13-src.tar.bz2, is attached to each OpenDisco release, and is also at nsis.sourceforge.io/Download.
@@ -36,8 +36,8 @@ Some of these licenses require the source code to be available to anyone who rec
 - python-build-standalone's own build scripts, under the Mozilla Public License 2.0, are not part of the AppImage.
 
 ### OpenSSL
-- Versions: 3.5.7 (macOS), 3.5.9 (Windows, Linux AppImage, Android, iPhone and iPad).
-- In: macOS, Windows, Linux AppImage, Android, iPhone and iPad, as part of Python.
+- Versions: 3.5.7 (macOS), 3.5.9 (Windows, Linux AppImage, Android, iPhone and iPad), 4.0.0 (Linux AppImage, in cryptography).
+- In: macOS, Windows, Linux AppImage, Android, iPhone and iPad, as part of Python; the Linux AppImage's cryptography has its own, linked into its compiled module.
 - License: Apache License 2.0.
 - Copyright: the OpenSSL Project Authors.
 
@@ -47,11 +47,11 @@ Some of these licenses require the source code to be available to anyone who rec
 - License: public domain (see "SQLite" below).
 
 ### libffi
-- Versions: 3.4.7 (iPhone and iPad), 3.8.0 (Linux AppImage, as part of Python), the version built with Python 3.13.17 (Windows), 3.3 (Android, Chaquopy's chaquopy-libffi, used by cffi). macOS uses the system's own.
+- Versions: 3.4.7 (iPhone and iPad), 3.8.0 (Linux AppImage, as part of Python), 3.4.6 (Linux AppImage, linked into cffi's compiled module), the version built with Python 3.13.17 (Windows), 3.3 (Android, Chaquopy's chaquopy-libffi, used by cffi). macOS uses the system's own.
 - In: Windows, Linux AppImage, Android, iPhone and iPad.
 - License: MIT License.
 - libffi - Copyright (c) 1996-2026 Anthony Green, Red Hat, Inc and others. (3.8.0)
-- libffi - Copyright (c) 1996-2024 Anthony Green, Red Hat, Inc and others. (3.4.7)
+- libffi - Copyright (c) 1996-2024 Anthony Green, Red Hat, Inc and others. (3.4.6 and 3.4.7)
 - libffi - Copyright (c) 1996-2022 Anthony Green, Red Hat, Inc and others. (Windows)
 - libffi - Copyright (c) 1996-2019 Anthony Green, Red Hat, Inc and others. (Android)
 
@@ -185,13 +185,13 @@ Some of these licenses require the source code to be available to anyone who rec
 - This software is based in part on the work of the Independent JPEG Group.
 
 ### cffi
-- Versions: 2.1.1 (Windows, iPhone and iPad), 1.17.1 (Android).
-- In: Windows, Android, iPhone and iPad.
+- Versions: 2.1.1 (Windows, Linux AppImage, iPhone and iPad), 1.17.1 (Android).
+- In: Windows, Linux AppImage, Android, iPhone and iPad.
 - License: MIT No Attribution License (2.1.1) and MIT License (1.17.1) (see "MIT No Attribution" and "MIT License" below).
 
 ### pycparser
 - Version: 3.12.
-- In: Windows, Android, iPhone and iPad.
+- In: Windows, Linux AppImage, Android, iPhone and iPad.
 - License: BSD 3-Clause License (see "pycparser" below).
 - Copyright (c) 2008-2027, Eli Bendersky. All rights reserved.
 
@@ -215,20 +215,27 @@ Some of these licenses require the source code to be available to anyone who rec
 
 ### typing_extensions
 - Version: 4.16.0.
-- In: Android, iPhone and iPad.
+- In: Linux AppImage, Android, iPhone and iPad.
 - License: Python Software Foundation License Version 2 (see "Python Software Foundation License" below).
 - Copyright (c) 2001-2023 Python Software Foundation. All rights reserved.
 
 ### asyncssh
 - Version: 2.23.1.
-- In: Android, iPhone and iPad.
+- In: Linux AppImage, Android, iPhone and iPad.
 - License: Eclipse Public License 2.0. asyncssh is also offered under the GNU General Public License 2.0 or later as a Secondary License; OpenDisco distributes it under the Eclipse Public License 2.0 only. See "Source code" above.
 - Copyright (c) 2013-2024 by Ron Frederick and others.
 
 ### cryptography
-- Versions: 47.0.0 (iPhone and iPad), 42.0.8 (Android).
-- In: Android, iPhone and iPad.
+- Versions: 47.0.0 (Linux AppImage, iPhone and iPad), 42.0.8 (Android).
+- In: Linux AppImage, Android, iPhone and iPad. The AppImage's copy links OpenSSL 4.0.0 into its compiled module (see OpenSSL).
 - License: offered under either the Apache License 2.0 or the BSD 3-Clause License; OpenDisco uses it under the Apache License 2.0. Its compiled Rust module includes Rust libraries under the MIT License and the Apache License 2.0, listed in cryptography's source distribution.
+- In 47.0.0, those Rust libraries are:
+  - pyo3 and pyo3-ffi 0.28.3, portable-atomic 1.13.1, libc 0.2.186, once_cell 1.21.4, cfg-if 1.0.4, bitflags 2.11.1, foreign-types 0.3.2, foreign-types-shared 0.1.1, base64 0.22.1 and itoa 1.0.18: each offered under either the MIT License or the Apache License 2.0; OpenDisco uses them under the Apache License 2.0.
+  - self_cell 1.2.2: offered under either the Apache License 2.0 or the GNU General Public License 2.0; OpenDisco uses it under the Apache License 2.0.
+  - openssl 0.10.78: the Apache License 2.0. Copyright 2011-2017 Google Inc., 2013 Jack Lloyd, 2013-2014 Steven Fackler.
+  - openssl-sys 0.9.114 and pem 3.0.6: the MIT License (see "MIT License" below).
+  - asn1 0.24.1 (rust-asn1): the BSD 3-Clause License (see "rust-asn1" below).
+  - cryptography's own Rust libraries, under its own license.
 - Copyright (c) Individual contributors.
 
 ### certifi and Mozilla's CA certificate bundle
@@ -334,7 +341,7 @@ Each license's full text appears once, with the components it covers.
 
 ### Apache License 2.0
 
-Covers: OpenSSL, cryptography, packaging, the AndroidX libraries, Material Components for Android, the Kotlin standard library, kotlinx.coroutines and Material Symbols. OpenDisco itself is also under this license.
+Covers: OpenSSL, cryptography and the Rust libraries in it that are used under this license, packaging, the AndroidX libraries, Material Components for Android, the Kotlin standard library, kotlinx.coroutines and Material Symbols. OpenDisco itself is also under this license.
 
                                      Apache License
                                Version 2.0, January 2004
@@ -3007,6 +3014,38 @@ Covers: pycparser.
     LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT
     OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
+### rust-asn1
+
+Covers: asn1 0.24.1, in cryptography 47.0.0.
+
+    Copyright (c) Alex Gaynor and individual contributors.
+    All rights reserved.
+
+    Redistribution and use in source and binary forms, with or without modification,
+    are permitted provided that the following conditions are met:
+
+        1. Redistributions of source code must retain the above copyright notice,
+           this list of conditions and the following disclaimer.
+
+        2. Redistributions in binary form must reproduce the above copyright
+           notice, this list of conditions and the following disclaimer in the
+           documentation and/or other materials provided with the distribution.
+
+        3. Neither the name of rust-asn1 nor the names of its contributors may be used
+           to endorse or promote products derived from this software without
+           specific prior written permission.
+
+    THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS" AND
+    ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE IMPLIED
+    WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE
+    DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT OWNER OR CONTRIBUTORS BE LIABLE FOR
+    ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES
+    (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES;
+    LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON
+    ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
+    (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS
+    SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+
 ### Microsoft Edge WebView2 SDK
 
 Covers: the WebView2 SDK files in the Windows app.
@@ -3179,7 +3218,7 @@ Covers: squashfuse 0.5.2, in the Linux AppImage's runtime.
 ### MIT License
 
 Covers, with these copyright notices:
-- libffi: "libffi - Copyright (c) 1996-2026 Anthony Green, Red Hat, Inc and others." (3.8.0), "libffi - Copyright (c) 1996-2024 Anthony Green, Red Hat, Inc and others." (3.4.7), "libffi - Copyright (c) 1996-2022 Anthony Green, Red Hat, Inc and others." (Windows) and "libffi - Copyright (c) 1996-2019 Anthony Green, Red Hat, Inc and others." (Android)
+- libffi: "libffi - Copyright (c) 1996-2026 Anthony Green, Red Hat, Inc and others." (3.8.0), "libffi - Copyright (c) 1996-2024 Anthony Green, Red Hat, Inc and others." (3.4.6 and 3.4.7), "libffi - Copyright (c) 1996-2022 Anthony Green, Red Hat, Inc and others." (Windows) and "libffi - Copyright (c) 1996-2019 Anthony Green, Red Hat, Inc and others." (Android)
 - Briefcase app templates: "Copyright (c) 2014 Russell Keith-Magee." (macOS app, Linux system package) and "Copyright (c) 2019 Russell Keith-Magee." (Android Gradle, iOS Xcode)
 - Python.NET: "Copyright (c) 2006-2021 the contributors of the Python.NET project"
 - clr_loader: "Copyright (c) 2019-2026 Benedikt Reinartz"
@@ -3187,6 +3226,8 @@ Covers, with these copyright notices:
 - winpty: "Copyright (c) 2011-2016 Ryan Prichard"
 - platformdirs: "Copyright (c) 2010-202x The platformdirs developers"
 - fontTools: "Copyright (c) 2017 Just van Rossum"
+- openssl-sys 0.9.114, in cryptography 47.0.0: "Copyright (c) 2014 Alex Crichton"
+- pem 3.0.6, in cryptography 47.0.0: "Copyright (c) 2016 Jonathan Creekmore"
 - Chaquopy: "Copyright (c) 2017-2025 Chaquo Ltd and contributors"
 - cffi 1.17.1, whose copyright notices are in its source files
 - HACL*: "Copyright (c) 2016-2022 INRIA, CMU and Microsoft Corporation" and "Copyright (c) 2022-2023 HACL* Contributors"

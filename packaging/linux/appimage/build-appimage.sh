@@ -5,7 +5,8 @@
 # Linux Mint 22 and later.
 #
 # The AppImage carries a relocatable Python (python-build-standalone), PyGObject and pycairo
-# compiled here, Toga and the app; it uses the system's GTK 3 and WebKitGTK 4.1, as GTK apps do
+# compiled here, Toga, asyncssh (with cryptography's and cffi's own wheels) and the app; it uses
+# the system's GTK 3 and WebKitGTK 4.1, as GTK apps do
 # where bundling GTK breaks themes and input methods. Writes /out/<the AppImage> and the source
 # package of the one system library it carries, girepository-2.0 (LGPL), for the release.
 set -euo pipefail
@@ -17,9 +18,11 @@ PYTHON_URL="https://github.com/astral-sh/python-build-standalone/releases/downlo
 PYTHON_SHA256=f829adc9d888e76c8801b4799ed444188d35239fcae3a9808a99ec5cb0d8d92c
 RUNTIME_URL="https://github.com/AppImage/type2-runtime/releases/download/continuous/runtime-x86_64"
 RUNTIME_SHA256=617aa77314d57c8b8e4fae9c3f0b35af7b30d5529cb69e98f64f92510ed98a46
-# The same versions as the .deb and .rpm bundle (THIRD-PARTY-NOTICES.md).
+# The same versions as the .deb and .rpm bundle (THIRD-PARTY-NOTICES.md), then asyncssh and what it
+# needs, as the iPhone app has them: the app's own SSH client (phonessh), for a system without ssh.
 REQUIREMENTS="pygobject==3.58.1 pycairo==1.29.2 toga-core==0.5.7 toga-gtk==0.5.7 travertino==0.5.7
-              platformdirs==4.13.5 packaging==26.3"
+              platformdirs==4.13.5 packaging==26.3
+              asyncssh==2.23.1 cryptography==47.0.0 cffi==2.1.1 pycparser==3.12 typing_extensions==4.16.0"
 
 HERE=/src/packaging/linux/appimage
 APPDIR=/build/OpenDisco.AppDir
@@ -45,9 +48,11 @@ tar -xzf /build/python.tar.gz -C "$APPDIR/usr"  # usr/python
 PY="$APPDIR/usr/python/bin/python3"
 SITE=$("$PY" -c 'import sysconfig; print(sysconfig.get_path("purelib"))')
 
-echo "--- PyGObject, pycairo and Toga"
-# PyGObject and pycairo compile here, against Ubuntu 24.04's GLib, girepository-2.0 and cairo.
-"$PY" -m pip install --quiet --no-cache-dir --disable-pip-version-check --no-warn-script-location $REQUIREMENTS
+echo "--- PyGObject, pycairo, Toga and asyncssh"
+# PyGObject and pycairo compile here, against Ubuntu 24.04's GLib, girepository-2.0 and cairo;
+# cryptography and cffi come as their manylinux wheels (cryptography's links OpenSSL in).
+"$PY" -m pip install --quiet --no-cache-dir --disable-pip-version-check --no-warn-script-location \
+    --only-binary cryptography,cffi $REQUIREMENTS
 "$PY" -m pip uninstall --quiet --yes pip
 rm -rf "$APPDIR"/usr/python/bin/pip* "$APPDIR"/usr/python/bin/idle* "$APPDIR"/usr/python/bin/pydoc*
 

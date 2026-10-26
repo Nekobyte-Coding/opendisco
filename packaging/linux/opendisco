@@ -5,7 +5,8 @@
 #
 # The command-line tool needs only Python 3.8 or newer. The app needs Toga for GTK, which this
 # sets up in its own Python environment the first time it opens: see README-LINUX.md for the
-# system packages that needs.
+# system packages that needs. It adds asyncssh there too, the app's own SSH client for the device
+# tools where the system has no ssh and scp; without it, they need the system's.
 set -e
 HERE="$(cd "$(dirname "$(readlink -f "$0")")" && pwd)"
 export PYTHONPATH="$HERE/src${PYTHONPATH:+:$PYTHONPATH}"
@@ -16,6 +17,8 @@ if [ "$#" -gt 0 ]; then
 fi
 
 TOGA="toga-gtk==0.5.7"
+SSH="asyncssh==2.23.1"
+CRYPTOGRAPHY="cryptography==47.0.0"  # asyncssh's, the version the AppImage and the iPhone app have
 ENV="${XDG_DATA_HOME:-$HOME/.local/share}/opendisco/python"
 if [ ! -f "$ENV/.ready-$TOGA" ]; then
     if ! "$PYTHON" -c 'import sys; sys.exit(sys.version_info < (3, 11))'; then
@@ -35,5 +38,13 @@ if [ ! -f "$ENV/.ready-$TOGA" ]; then
         exit 1
     fi
     touch "$ENV/.ready-$TOGA"
+fi
+if [ ! -f "$ENV/.ready-$SSH" ]; then  # (also into an environment an earlier version set up)
+    if "$ENV/bin/python" -m pip install --quiet --disable-pip-version-check --retries 1 --only-binary cryptography \
+            "$SSH" "$CRYPTOGRAPHY"; then
+        touch "$ENV/.ready-$SSH"
+    elif ! command -v ssh >/dev/null || ! command -v scp >/dev/null; then
+        echo "Couldn't install asyncssh: without it, the device tools need ssh and scp (openssh-client)." >&2
+    fi
 fi
 exec "$ENV/bin/python" -m opendisco

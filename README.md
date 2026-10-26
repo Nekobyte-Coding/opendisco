@@ -159,9 +159,11 @@ Installers are on the [Releases](https://github.com/Nekobyte-Coding/opendisco/re
       executable (`chmod +x`) and run it. It brings its own Python and Toga and uses the
       system's GTK 3 and WebKitGTK 4.1, which most desktops have; if they're missing, it says
       what to install. Given options, it's the command-line tool. It runs on Ubuntu 24.04,
-      Debian 13, Fedora 40, Linux Mint 22 and later.
+      Debian 13, Fedora 40, Linux Mint 22 and later. Where the system has no `ssh` and `scp`,
+      Open SSH… and the device tools use the app's own SSH client (asyncssh, which it brings).
     - **The portable** `OpenDisco-1.6.2-linux.tar.gz`: extract it and run `./opendisco`; its
-      `README-LINUX.md` lists the packages to install first.
+      `README-LINUX.md` lists the packages to install first. The environment it sets up has the
+      app's own SSH client too, for a system without `ssh` and `scp`.
 
   The `.deb` and `.rpm` install the app's own copy of Toga and PyGObject, built for that
   release, and pull in GTK, WebKitGTK, tcpdump, ip, iw and the ssh client. The app is in the
