@@ -19,7 +19,8 @@ import json
 import re
 import time
 
-from opendisco import core
+from opendisco import core, i18n
+from opendisco.i18n import _, N_, tr
 
 # The reading of each radio read this run, by MAC: {mac: reading}. diagnose puts it back on the
 # device after a new scan (apply). Not kept past the run: a link's numbers are of the moment.
@@ -299,16 +300,29 @@ def reading_of(d) -> dict | None:
 # ---------------------------------------------------------------------------
 
 def _who(p: dict) -> str:
-    return p.get("name") or p.get("ip") or p.get("mac") or "a station"
+    return p.get("name") or p.get("ip") or p.get("mac") or _("a station")
 
 
 def _ends(reading: dict) -> tuple:
     """What this radio and the other end are called: ("the AP", "the station") or the other way."""
-    return ("the AP", "the station") if reading["ap"] else ("this station", "the AP")
+    return (_("the AP"), _("the station")) if reading["ap"] else (_("this station"), _("the AP"))
 
 
 def _dbm(value) -> str:
     return f"{value} dBm"
+
+
+def _at(value, end: str) -> str:
+    """A reading at one end of the link: "-52 dBm at the AP"."""
+    return tr("{value} at {end}", value=value, end=end)
+
+
+def _and(phrases) -> str:
+    """Phrases joined with "and": "a and b and c"."""
+    text = phrases[0]
+    for phrase in phrases[1:]:
+        text = tr("{first} and {second}", first=text, second=phrase)
+    return text
 
 
 def _chain_text(chains) -> str:
@@ -333,58 +347,64 @@ def _findings(reading: dict) -> list:
     for p in reading.get("stations") or []:
         ends = [(p.get("signal_dbm"), here, p.get("chains_dbm") or []),
                 (p.get("remote_signal_dbm"), there, p.get("remote_chains_dbm") or [])]
-        weak = [f"{_dbm(s)} at {end}" for s, end, _ in ends if s is not None and s < WEAK_SIGNAL_DBM]
+        weak = [_at(_dbm(s), end) for s, end, _ in ends if s is not None and s < WEAK_SIGNAL_DBM]
         if weak:
-            found.append(("WEAK-SIGNAL", "note", p, " and ".join(weak)))
-        hot = [f"{_dbm(s)} at {end}" for s, end, _ in ends if s is not None and s >= HOT_SIGNAL_DBM]
+            found.append(("WEAK-SIGNAL", "note", p, _and(weak)))
+        hot = [_at(_dbm(s), end) for s, end, _ in ends if s is not None and s >= HOT_SIGNAL_DBM]
         if hot:
-            found.append(("HOT-SIGNAL", "note", p, " and ".join(hot)))
-        apart = [f"{_apart(c)} dB apart at {end} ({_chain_text(c)} dBm)" for _, end, c in ends
-                 if _apart(c) >= CHAINS_APART_DB]
+            found.append(("HOT-SIGNAL", "note", p, _and(hot)))
+        apart = [tr("{difference} dB apart at {end} ({chains} dBm)", difference=_apart(c), end=end,
+                    chains=_chain_text(c)) for _, end, c in ends if _apart(c) >= CHAINS_APART_DB]
         if apart:
-            found.append(("CHAIN-IMBALANCE", "note", p, " and ".join(apart)))
-        low = [f"{kind} {db} dB at {end}" for (db, kind), end in ((_ratio(p), here), (_ratio(p, True), there))
+            found.append(("CHAIN-IMBALANCE", "note", p, _and(apart)))
+        low = [_at(f"{kind} {db} dB", end) for (db, kind), end in ((_ratio(p), here), (_ratio(p, True), there))
                if db is not None and db < LOW_SNR_DB]
         if low:
-            found.append(("LOW-SNR", "warn", p, " and ".join(low)))
+            found.append(("LOW-SNR", "warn", p, _and(low)))
         short = []
-        for way, word in (("dl", "down"), ("ul", "up")):
+        for way in ("dl", "ul"):
             got, expected = p.get(f"{way}_capacity_mbps"), p.get(f"{way}_expected_mbps")
             if got and expected and got < LOW_CAPACITY_SHARE * expected:
-                short.append(f"{got:.0f} of the {expected:.0f} Mbps expected {word}")
+                short.append(tr("{got:.0f} of the {expected:.0f} Mbps expected down", got=got, expected=expected)
+                             if way == "dl" else
+                             tr("{got:.0f} of the {expected:.0f} Mbps expected up", got=got, expected=expected))
         if p.get("capacity_pct") is not None and p["capacity_pct"] < LOW_AMC_PCT:
-            short.append(f"airMAX Capacity {p['capacity_pct']}%")
+            short.append(tr("airMAX Capacity {percent}%", percent=p["capacity_pct"]))
         if short:
-            found.append(("LOW-CAPACITY", "warn", p, " and ".join(short)))
+            found.append(("LOW-CAPACITY", "warn", p, _and(short)))
         if p.get("quality_pct") is not None and p["quality_pct"] < LOW_AMQ_PCT:
-            found.append(("LOW-QUALITY", "warn", p, f"airMAX Quality {p['quality_pct']}%"))
+            found.append(("LOW-QUALITY", "warn", p, tr("airMAX Quality {percent}%", percent=p["quality_pct"])))
     return found
 
 
-# What each finding means and what to check, after the links it was found on.
+# What each finding means and what to check, after the links it was found on: templates filled with
+# ADVICE_LIMITS.
 ADVICE = {
-    "WEAK-SIGNAL": f"Ubiquiti recommends {-45} to {WEAK_SIGNAL_DBM} dBm. A weak signal needs a quiet channel to "
-                   "keep its SNR: check the alignment and the line of sight (60% of the first Fresnel zone clear), "
-                   "or use higher-gain antennas.",
-    "HOT-SIGNAL": f"At {HOT_SIGNAL_DBM} dBm or stronger, Ubiquiti says, the signal raises EVM and lowers throughput: "
-                  "turn the output power down.",
-    "CHAIN-IMBALANCE": f"Ubiquiti says the chains should be less than {CHAINS_APART_DB} dB apart: more points to the "
-                       "alignment, or an obstruction or reflection (multipath) on one chain.",
-    "LOW-SNR": f"Ubiquiti recommends an SNR (or CINR) of at least {LOW_SNR_DB} dB, better 30: the signal is too "
-               "close to the noise and interference, so the link drops to slower modulation. Find a clear channel "
-               "with airView from both ends, narrow the channel width, or raise the signal.",
-    "LOW-CAPACITY": "A link this far under what it could carry takes more of the AP's airtime for the same data, "
-                    "which slows every station on it: check its signal, SNR and alignment.",
-    "LOW-QUALITY": f"Ubiquiti says airMAX Quality above {LOW_AMQ_PCT}% needs no changes; lower means retries, "
-                   "likely interference: try another channel.",
+    "WEAK-SIGNAL": N_("Ubiquiti recommends {best} to {weak} dBm. A weak signal needs a quiet channel to keep its SNR: "
+                      "check the alignment and the line of sight (60% of the first Fresnel zone clear), or use "
+                      "higher-gain antennas."),
+    "HOT-SIGNAL": N_("At {hot} dBm or stronger, Ubiquiti says, the signal raises EVM and lowers throughput: turn the "
+                     "output power down."),
+    "CHAIN-IMBALANCE": N_("Ubiquiti says the chains should be less than {apart} dB apart: more points to the "
+                          "alignment, or an obstruction or reflection (multipath) on one chain."),
+    "LOW-SNR": N_("Ubiquiti recommends an SNR (or CINR) of at least {snr} dB, better 30: the signal is too close to "
+                  "the noise and interference, so the link drops to slower modulation. Find a clear channel with "
+                  "airView from both ends, narrow the channel width, or raise the signal."),
+    "LOW-CAPACITY": N_("A link this far under what it could carry takes more of the AP's airtime for the same data, "
+                       "which slows every station on it: check its signal, SNR and alignment."),
+    "LOW-QUALITY": N_("Ubiquiti says airMAX Quality above {quality}% needs no changes; lower means retries, likely "
+                      "interference: try another channel."),
 }
-WHAT = {"WEAK-SIGNAL": "Weak signal", "HOT-SIGNAL": "Signal too strong", "CHAIN-IMBALANCE": "Uneven chains",
-        "LOW-SNR": "Low SNR", "LOW-CAPACITY": "Low capacity", "LOW-QUALITY": "Low airMAX Quality"}
+ADVICE_LIMITS = {"best": -45, "weak": WEAK_SIGNAL_DBM, "hot": HOT_SIGNAL_DBM, "apart": CHAINS_APART_DB,
+                 "snr": LOW_SNR_DB, "quality": LOW_AMQ_PCT}
+WHAT = {"WEAK-SIGNAL": N_("Weak signal"), "HOT-SIGNAL": N_("Signal too strong"), "CHAIN-IMBALANCE": N_("Uneven chains"),
+        "LOW-SNR": N_("Low SNR"), "LOW-CAPACITY": N_("Low capacity"), "LOW-QUALITY": N_("Low airMAX Quality")}
 
 
-def issues(d) -> list:
+def issues(d, advice: bool = True) -> list:
     """Diagnostics from its link reading (core.diagnose adds them), one per kind of finding: on an
-    AP naming the stations it's found on, on a station its link to its AP."""
+    AP naming the stations it's found on, on a station its link to its AP. Each message ends with
+    ADVICE, unless advice is False."""
     reading = reading_of(d)
     if not reading:
         return []
@@ -396,14 +416,14 @@ def issues(d) -> list:
         if reading["ap"]:
             of = len(reading.get("stations") or [])
             named = "; ".join(f"{_who(p)}, {text}" for p, text in found[:NAMED])
-            more = f"; and {len(found) - NAMED} more" if len(found) > NAMED else ""
-            which = "its station" if of == 1 else f"{len(found)} of its {of} stations"
-            head = f"{WHAT[tag]} on {which}: {named}{more}."
+            more = "; " + tr("and {count} more", count=len(found) - NAMED) if len(found) > NAMED else ""
+            which = _("its station") if of == 1 else tr("{count} of its {total} stations", count=len(found), total=of)
+            head = tr("{what} on {which}: {stations}.", what=_(WHAT[tag]), which=which, stations=named + more)
         else:
             p, text = found[0]
             named = f" ({p['name']})" if p.get("name") else ""
-            head = f"{WHAT[tag]} on its link to its AP{named}: {text}."
-        out.append((level, tag, f"{head} {ADVICE[tag]}"))
+            head = tr("{what} on its link to its AP{name}: {finding}.", what=_(WHAT[tag]), name=named, finding=text)
+        out.append((level, tag, i18n.sentences(head, core.shown(ADVICE[tag], **ADVICE_LIMITS)) if advice else head))
     return out
 
 
@@ -420,7 +440,9 @@ def _mbps(value) -> str:
 
 
 def _signal_text(signal, chains, end: str) -> str:
-    return f"{_dbm(signal)} at {end}" + (f" (chains {_chain_text(chains)})" if len(chains) > 1 else "")
+    if len(chains) > 1:
+        return tr("{value} at {end} (chains {chains})", value=_dbm(signal), end=end, chains=_chain_text(chains))
+    return _at(_dbm(signal), end)
 
 
 def peer_lines(reading: dict, p: dict) -> list:
@@ -430,12 +452,12 @@ def peer_lines(reading: dict, p: dict) -> list:
     signals = [_signal_text(s, c, end) for s, c, end in ((p.get("signal_dbm"), p.get("chains_dbm") or [], here),
                (p.get("remote_signal_dbm"), p.get("remote_chains_dbm") or [], there)) if s is not None]
     if signals:
-        lines.append("Signal " + ", ".join(signals))
-    noise = [f"{_dbm(n)} at {end}" for n, end in ((p.get("noise_dbm"), here), (p.get("remote_noise_dbm"), there))
+        lines.append(tr("Signal {readings}", readings=", ".join(signals)))
+    noise = [_at(_dbm(n), end) for n, end in ((p.get("noise_dbm"), here), (p.get("remote_noise_dbm"), there))
              if n is not None]
     if noise:
-        lines.append("Noise floor " + ", ".join(noise))
-    ratios = [f"{kind} {', '.join(f'{v} dB at {end}' for v, end in pair)}" for kind, pair in (
+        lines.append(tr("Noise floor {readings}", readings=", ".join(noise)))
+    ratios = [f"{kind} {', '.join(_at(f'{v} dB', end) for v, end in pair)}" for kind, pair in (
         ("SNR", [(v, end) for v, end in ((p.get("snr_db"), here), (p.get("remote_snr_db"), there)) if v is not None]),
         ("CINR", [(v, end) for v, end in ((p.get("cinr_db"), here), (p.get("remote_cinr_db"), there))
                   if v is not None])) if pair]
@@ -443,27 +465,35 @@ def peer_lines(reading: dict, p: dict) -> list:
         lines.append("; ".join(ratios))
     carry = []
     if p.get("dl_capacity_mbps") or p.get("ul_capacity_mbps"):
-        expect = (f" (expected {_mbps(p['dl_expected_mbps'])} and {_mbps(p['ul_expected_mbps'])})"
+        expect = (" " + tr("(expected {down} and {up})", down=_mbps(p["dl_expected_mbps"]),
+                           up=_mbps(p["ul_expected_mbps"]))
                   if p.get("dl_expected_mbps") and p.get("ul_expected_mbps") else "")
-        carry.append("Capacity " + " and ".join(f"{_mbps(v)} Mbps {word}" for v, word in (
-            (p.get("dl_capacity_mbps"), "down"), (p.get("ul_capacity_mbps"), "up")) if v) + expect)
+        down, up = p.get("dl_capacity_mbps"), p.get("ul_capacity_mbps")
+        carry.append(tr("Capacity {capacities}", capacities=_and(
+            ([tr("{rate} Mbps down", rate=_mbps(down))] if down else [])
+            + ([tr("{rate} Mbps up", rate=_mbps(up))] if up else []))) + expect)
     if p.get("tx_rate_mbps") or p.get("rx_rate_mbps"):
-        carry.append("Rate " + " and ".join(f"{_mbps(v)} Mbps {word}" for v, word in (
-            (p.get("tx_rate_mbps"), f"from {here}"), (p.get("rx_rate_mbps"), f"to {here}")) if v))
-    amq = [f"airMAX {word} {p[key]}%" for key, word in (("quality_pct", "Quality"), ("capacity_pct", "Capacity"))
-           if p.get(key) is not None]
+        tx, rx = p.get("tx_rate_mbps"), p.get("rx_rate_mbps")
+        carry.append(tr("Rate {rates}", rates=_and(
+            ([tr("{rate} Mbps from {end}", rate=_mbps(tx), end=here)] if tx else [])
+            + ([tr("{rate} Mbps to {end}", rate=_mbps(rx), end=here)] if rx else []))))
+    amq = []
+    if p.get("quality_pct") is not None:
+        amq.append(tr("airMAX Quality {percent}%", percent=p["quality_pct"]))
+    if p.get("capacity_pct") is not None:
+        amq.append(tr("airMAX Capacity {percent}%", percent=p["capacity_pct"]))
     if p.get("ccq_pct") is not None:
         amq.append(f"CCQ {p['ccq_pct']}%")
     if carry or amq:
         lines.append("; ".join(carry + amq))
     rest = []
     if p.get("airtime_tx_pct") is not None or p.get("airtime_rx_pct") is not None:
-        rest.append(f"Airtime at {here} {p.get('airtime_tx_pct') or 0:.1f}% sending, "
-                    f"{p.get('airtime_rx_pct') or 0:.1f}% receiving")
+        rest.append(tr("Airtime at {end} {sending:.1f}% sending, {receiving:.1f}% receiving", end=here,
+                       sending=p.get("airtime_tx_pct") or 0, receiving=p.get("airtime_rx_pct") or 0))
     if p.get("distance_m"):
-        rest.append(f"distance {_distance(p['distance_m'])}")
+        rest.append(tr("distance {distance}", distance=_distance(p["distance_m"])))
     if p.get("latency_ms") is not None:
-        rest.append(f"latency {p['latency_ms']} ms")
+        rest.append(tr("latency {latency} ms", latency=p["latency_ms"]))
     if rest:
         text = "; ".join(rest)
         lines.append(text[0].upper() + text[1:])
@@ -474,21 +504,21 @@ def _summary(reading: dict) -> list:
     """The radio's own, in two lines: its mode, SSID and when it was read; its channel, noise
     floor, output power and stations."""
     mode = reading.get("mode") or "?"
-    first = f"access point ({mode})" if reading["ap"] else f"station ({mode})"
+    first = tr("access point ({mode})", mode=mode) if reading["ap"] else tr("station ({mode})", mode=mode)
     if reading.get("essid"):
         first += f", SSID {reading['essid']}"
-    first += f", read {time.strftime('%H:%M:%S', time.localtime(reading['at']))}"
+    first += ", " + tr("read {time}", time=time.strftime("%H:%M:%S", time.localtime(reading["at"])))
     bits = []
     if reading.get("frequency_mhz"):
-        bits.append(f"{reading['frequency_mhz']} MHz" + (f", {reading['width_mhz']} MHz wide"
+        bits.append(f"{reading['frequency_mhz']} MHz" + (", " + tr("{width} MHz wide", width=reading["width_mhz"])
                                                          if reading.get("width_mhz") else ""))
     if reading.get("noise_dbm") is not None:
-        bits.append(f"noise floor {_dbm(reading['noise_dbm'])}")
+        bits.append(tr("noise floor {value}", value=_dbm(reading["noise_dbm"])))
     if reading.get("tx_power_dbm") is not None:
-        bits.append(f"output {reading['tx_power_dbm']} dBm")
+        bits.append(tr("output {power} dBm", power=reading["tx_power_dbm"]))
     if reading["ap"]:
         n = len(reading.get("stations") or [])
-        bits.append(f"{n} station{'' if n == 1 else 's'}")
+        bits.append(tr("{count} station", count=n) if n == 1 else tr("{count} stations", count=n))
     if not bits:
         return [first]
     text = ", ".join(bits)
@@ -497,21 +527,21 @@ def _summary(reading: dict) -> list:
 
 def _peer_title(p: dict) -> str:
     model = p.get("model") if p.get("model") != p.get("name") else ""
-    return ", ".join(x for x in (p.get("name"), p.get("ip"), p.get("mac"), model) if x) or "unnamed"
+    return ", ".join(x for x in (p.get("name"), p.get("ip"), p.get("mac"), model) if x) or _("unnamed")
 
 
 def detail_rows(d) -> list:
-    """[(label, text)] for Details' Link section: the radio's own, then each link."""
+    """[(label, text)] for Details' Link section, in the app's language: the radio's own, then each link."""
     reading = reading_of(d)
     if not reading:
         return []
     own = _summary(reading)
-    rows = [("Link", own[0])] + [("", line) for line in own[1:]]
+    rows = [(_("Link"), own[0])] + [("", line) for line in own[1:]]
     peers = reading.get("stations") or []
     if not peers:
-        rows.append(("", "no stations associated" if reading["ap"] else "not associated with an AP"))
+        rows.append(("", _("no stations associated") if reading["ap"] else _("not associated with an AP")))
     for n, p in enumerate(peers, 1):
-        label = f"Station {n}" if reading["ap"] else "Its AP"
+        label = tr("Station {number}", number=n) if reading["ap"] else _("Its AP")
         rows.append((label, _peer_title(p)))
         rows += [("", line) for line in peer_lines(reading, p)]
     return rows
@@ -540,13 +570,15 @@ def summary(d) -> str:
     """A reading in a line, for the Log and status bar."""
     reading = reading_of(d)
     if not reading:
-        return f"Link health of {d.ip}: not read."
+        return tr("Link health of {ip}: not read.", ip=d.ip)
     flagged = [core.status_label(tag) for _, tag, _ in issues(d)]
     peers = reading.get("stations") or []
     if reading["ap"]:
-        what = f"{len(peers)} station{'' if len(peers) == 1 else 's'}"
+        what = tr("{count} station", count=len(peers)) if len(peers) == 1 else tr("{count} stations", count=len(peers))
     else:
         p = peers[0] if peers else {}
-        what = (f"its AP at {_dbm(p['signal_dbm'])}" if p.get("signal_dbm") is not None
-                else "not associated" if not peers else "its AP")
-    return f"Link health of {d.ip}: {what}" + (f"; {', '.join(flagged)}." if flagged else ", nothing flagged.")
+        what = (tr("its AP at {signal}", signal=_dbm(p["signal_dbm"])) if p.get("signal_dbm") is not None
+                else _("not associated") if not peers else _("its AP"))
+    if flagged:
+        return tr("Link health of {ip}: {state}; {findings}.", ip=d.ip, state=what, findings=", ".join(flagged))
+    return tr("Link health of {ip}: {state}, nothing flagged.", ip=d.ip, state=what)

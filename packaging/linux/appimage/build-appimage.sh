@@ -114,7 +114,7 @@ releases = re.findall(r"^## (\d+(?:\.\d+)+) \((\d{4}-\d{2}-\d{2})\)", changelog,
 lines = "\n".join(f'    <release version="{v}" date="{d}"/>' for v, d in releases)
 print(template.replace("@RELEASES@", lines), end="")
 METAINFO
-cp /src/LICENSE /src/NOTICE /src/TERMS.md "$APPDIR/usr/share/doc/opendisco/"
+cp /src/LICENSE /src/NOTICE /src/TERMS*.md "$APPDIR/usr/share/doc/opendisco/"  # TERMS.md and its translations
 
 echo "--- AppImage"
 mksquashfs "$APPDIR" /build/app.squashfs -root-owned -noappend -quiet -no-progress -comp zstd \

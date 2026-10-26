@@ -12,6 +12,8 @@ import shutil
 import subprocess
 import sys
 
+from opendisco.i18n import _
+
 SERVICE = "com.michaelfroehlke.opendisco.device-login"
 LABEL = "OpenDisco device login"
 _NO_WINDOW = getattr(subprocess, "CREATE_NO_WINDOW", 0)
@@ -19,12 +21,12 @@ _available = None
 
 
 def store_name() -> str:
-    """What the store is called, for the Remember checkbox."""
+    """What the store is called, for the Remember checkbox (in the app's language)."""
     if sys.platform == "darwin":
-        return "the macOS Keychain"
+        return _("the macOS Keychain")
     if sys.platform == "win32":
-        return "Windows Credential Manager"
-    return "the desktop keyring"  # GNOME Keyring or KWallet, through the Secret Service
+        return _("Windows Credential Manager")
+    return _("the desktop keyring")  # GNOME Keyring or KWallet, through the Secret Service
 
 
 def available() -> bool:

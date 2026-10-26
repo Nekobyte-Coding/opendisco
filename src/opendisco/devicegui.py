@@ -15,7 +15,6 @@ import shutil
 import socket
 import subprocess
 import sys
-import textwrap
 import threading
 import time
 import traceback
@@ -24,11 +23,13 @@ import webbrowser
 from pathlib import Path
 
 import toga
+from toga.sources import AccessorColumn
 from toga.style import Pack
 from toga.style.pack import COLUMN, ROW
 
-from opendisco import core, credstore, devicetools, linkhealth, terminal, terms
+from opendisco import core, credstore, devicetools, i18n, linkhealth, terminal, terms
 from opendisco.devicetools import sshrun  # the system's ssh and scp, or without them the app's own (phonessh)
+from opendisco.i18n import N_, _, tr
 
 ACTIONS = ("scan_from", "fw_check", "fw_update", "config", "login", "backup", "backups", "upload", "reboot", "locate",
            "forget_login", "link")
@@ -64,8 +65,8 @@ def menu_state(app, d, titles: dict) -> dict:
     """{action: (title, enabled)} for the device tools, and for a device behind others, the
     app's own actions that reach it through them."""
     state = {}
-    hops = route(app, d)
-    via = f"  (via {' → '.join(h.ip or h.mac for h in hops)})" if hops else ""
+    hops = route(app, d)  # (the parentheses stay outside the translations: app.py looks for "(")
+    via = f"  ({tr('via {route}', route=' → '.join(h.ip or h.mac for h in hops))})" if hops else ""
     tools = not app.caps["mobile"] and sshrun.available()
     busy = _busy.get(d.key)
     ubiquiti = bool(d.info.get("firmware") or d.info.get("platform"))
@@ -74,18 +75,18 @@ def menu_state(app, d, titles: dict) -> dict:
                          ("backup", "backup"), ("upload", "upload"), ("reboot", "reboot"), ("locate", "locate"),
                          ("link", "link")):
         offered, why = devicetools.offers(d, action)
-        title = "Stop locating (LED)" if name == "locate" and d.key in _locating else titles[name]
+        title = _("Stop locating (LED)") if name == "locate" and d.key in _locating else titles[name]
         if busy:
-            title += f"  ({busy})"
+            title += f"  ({_(busy)})"
         elif not offered:
             title += f"  ({why})"
         elif not tools:
-            title += "  (needs ssh and scp)"
+            title += f"  ({_('needs ssh and scp')})"
         if offered and not busy:
             title += via
         state[name] = (title, bool(d.ip) and offered and tools and not busy)
     if not hops and not ssh_here() and not (app.term and app.term.find(d.key, "ssh")):
-        state["ssh"] = (titles["ssh"] + "  (needs ssh)", False)
+        state["ssh"] = (titles["ssh"] + f"  ({_('needs ssh')})", False)
     idle = bool(app.result) and not (app.running or app.rescanning or app.finding)
     if hops:
         reach = bool(d.ip) and tools and all(h.ip for h in hops)
@@ -93,12 +94,12 @@ def menu_state(app, d, titles: dict) -> dict:
             state[name] = (titles[name] + via, reach)
         for name in ("find_http", "find_https", "find_ssh", "all_ports"):
             state[name] = (titles[name] + via, reach and idle)
-        state["rescan"] = (titles["rescan"] + "  (discovery can't travel over SSH)", False)
+        state["rescan"] = (titles["rescan"] + "  (" + _("discovery can't travel over SSH") + ")", False)
     if state["scan_from"][1] and not idle:  # it adds to the scan's results
         state["scan_from"] = (titles["scan_from"], False)
     state["forget_login"] = (titles["forget_login"], bool(d.mac and _remembered(app, d)))
     kept = len(devicetools.list_backups(d.mac)) if d.mac else 0
-    state["backups"] = (titles["backups"] + (f"  ({kept} kept)" if kept else ""),
+    state["backups"] = (titles["backups"] + (f"  ({tr('{count} kept', count=kept)})" if kept else ""),
                         bool(d.mac and (kept or state["backup"][1])))  # filed by MAC: none without one
     return state
 
@@ -127,7 +128,7 @@ async def _guarded(app, d, flow):
         await flow(app, d)
     except Exception as e:  # a bug, not the device: say so rather than fail silently
         app._append_log(traceback.format_exc())
-        await app.main_window.dialog(toga.ErrorDialog("Something went wrong", f"{type(e).__name__}: {e}"))
+        await app.main_window.dialog(toga.ErrorDialog(_("Something went wrong"), f"{type(e).__name__}: {e}"))
 
 
 async def _work(fn, *args):
@@ -141,7 +142,7 @@ def _label(d) -> str:
 def _fill(text: str, width: int) -> str:
     """Labels don't wrap by themselves (Windows' and macOS's alike): each paragraph broken to
     `width` characters, so it stays inside its window."""
-    return "\n".join(textwrap.fill(part, width) if part.strip() else "" for part in str(text).split("\n"))
+    return "\n".join(i18n.fill(part, width) if part.strip() else "" for part in str(text).split("\n"))
 
 
 # ---------------------------------------------------------------------------
@@ -169,14 +170,16 @@ async def ask_route(app, d, purpose: str, hops_only: bool = False):
         hops = []  # reachable from here after all
     via = ()
     for n, hop in enumerate(hops, 1):
-        login = await ask_login(app, hop, f"Device {n} of {len(hops)} on the way to {d.ip}. {purpose}", via)
+        login = await ask_login(app, hop, i18n.sentences(tr("Device {number} of {total} on the way to {ip}.", number=n,
+                                                            total=len(hops), ip=d.ip), purpose), via)
         if not login:
             return None
         via += (login,)
     if hops_only:
         return via
     if hops:
-        purpose += f" Through {' → '.join(h.ip for h in hops)}: each device on the way adds latency."
+        purpose = i18n.sentences(purpose, tr("Through {route}: each device on the way adds latency.",
+                                             route=" → ".join(h.ip for h in hops)))
     return await ask_login(app, d, purpose, via)
 
 
@@ -184,8 +187,9 @@ def forget_login(app, d) -> None:
     _logins(app).pop(d.mac, None)
     app._save_settings()
     gone = credstore.forget(d.mac)
-    app.status.text = (f"Forgot the saved login for {d.ip or d.mac}." if gone
-                       else f"Forgot the saved username for {d.ip or d.mac}; {credstore.store_name()} had no password for it.")
+    app.status.text = (tr("Forgot the saved login for {device}.", device=d.ip or d.mac) if gone
+                       else tr("Forgot the saved username for {device}; {store} had no password for it.",
+                               device=d.ip or d.mac, store=credstore.store_name()))
 
 
 async def ask_login(app, d, purpose: str, via: tuple = ()) -> sshrun.Login | None:
@@ -202,19 +206,19 @@ async def ask_login(app, d, purpose: str, via: tuple = ()) -> sshrun.Login | Non
             return None
         user, password, port, remember = answer
         login = _login(app, d, user, password, port, via)
-        app.status.text = f"Logging in to {login.where}…"
+        app.status.text = tr("Logging in to {where}…", where=login.where)
         try:
             await _work(sshrun.check_login, login)
         except sshrun.SSHError as e:
             app.status.text = str(e)
             problem = str(e)
             continue
-        app.status.text = f"Logged in to {d.ip} as {user}."
+        app.status.text = tr("Logged in to {ip} as {user}.", ip=d.ip, user=user)
         if remember and d.mac and credstore.available():
             if credstore.save(d.mac, user, password):
                 _logins(app)[d.mac] = {"user": user, "port": port}
             else:
-                app.status.text = f"Logged in, but {credstore.store_name()} didn't take the password."
+                app.status.text = tr("Logged in, but {store} didn't take the password.", store=credstore.store_name())
         elif saved and not remember:
             _logins(app).pop(d.mac, None)
             credstore.forget(d.mac)
@@ -231,18 +235,18 @@ async def warn_factory_login(app, d, login) -> None:
         app._rediagnose()
         if devicetools.is_factory(login):
             await app.main_window.dialog(toga.InfoDialog(
-                "Factory login", f"{_label(d)}\n\n{core.factory_login_text(login.user, login.password)}"))
+                _("Factory login"), f"{_label(d)}\n\n{core.factory_login_text(login.user, login.password)}"))
 
 
 async def _login_window(app, d, purpose, user, password, port, remembered, problem):
     answer = app.loop.create_future()
-    user_box = toga.TextInput(value=user, placeholder="e.g. ubnt or admin", style=Pack(flex=1))
+    user_box = toga.TextInput(value=user, placeholder=_("e.g. ubnt or admin"), style=Pack(flex=1))
     password_box = toga.PasswordInput(value=password, style=Pack(flex=1))
     port_box = toga.TextInput(value=str(port), style=Pack(width=80))
     trouble = toga.Label(_fill(problem, 46), style=Pack(flex=1))
     can_remember = bool(d.mac) and credstore.available()
-    remember = toga.Switch(f"Remember for this device (in {credstore.store_name()})", value=remembered and can_remember,
-                           enabled=can_remember)
+    remember = toga.Switch(tr("Remember for this device (in {store})", store=credstore.store_name()),
+                           value=remembered and can_remember, enabled=can_remember)
 
     def finish(ok):
         if answer.done():
@@ -250,10 +254,10 @@ async def _login_window(app, d, purpose, user, password, port, remembered, probl
         if ok:
             text = port_box.value.strip()
             if not user_box.value.strip():
-                trouble.text = "The device tools need a username."
+                trouble.text = _("The device tools need a username.")
                 return
             if not text.isdigit() or not 0 < int(text) < 65536:
-                trouble.text = _fill("The port is a number from 1 to 65535.", 46)
+                trouble.text = _fill(_("The port is a number from 1 to 65535."), 46)
                 return
             answer.set_result((user_box.value.strip(), password_box.value, int(text), remember.value))
         else:
@@ -269,24 +273,26 @@ async def _login_window(app, d, purpose, user, password, port, remembered, probl
     user_box.on_confirm = lambda widget: password_box.focus()
     label = Pack(width=80)
     row = Pack(direction=ROW, align_items="center", gap=8)
-    note = (f"The password goes only to {'the device' if devicetools.OWN_SSH else 'ssh and scp'}. " +
-            (f"Remembered logins are kept in {credstore.store_name()}, never in a file." if can_remember
-             else "This computer has no credential store the app can use, so it isn't remembered."))
+    note = i18n.sentences(
+        _("The password goes only to the device.") if devicetools.OWN_SSH
+        else _("The password goes only to ssh and scp."),
+        tr("Remembered logins are kept in {store}, never in a file.", store=credstore.store_name()) if can_remember
+        else _("This computer has no credential store the app can use, so it isn't remembered."))
     size = (560, 300)
-    window = toga.Window(title=f"Log in to {d.ip}", size=size, resizable=False, on_close=closing,
+    window = toga.Window(title=tr("Log in to {ip}", ip=d.ip), size=size, resizable=False, on_close=closing,
                          position=app._over_main(size))
     window.content = toga.Box(style=Pack(direction=COLUMN, margin=14, gap=8), children=[
         toga.Label(_label(d)),
         toga.Label(_fill(purpose, 72)),
-        toga.Box(style=row, children=[toga.Label("Username", style=label), user_box]),
-        toga.Box(style=row, children=[toga.Label("Password", style=label), password_box]),
-        toga.Box(style=row, children=[toga.Label("Port", style=label), port_box, trouble]),
+        toga.Box(style=row, children=[toga.Label(_("Username"), style=label), user_box]),
+        toga.Box(style=row, children=[toga.Label(_("Password"), style=label), password_box]),
+        toga.Box(style=row, children=[toga.Label(_("Port"), style=label), port_box, trouble]),
         remember,
         toga.Label(_fill(note, 72)),
         toga.Box(style=Pack(direction=ROW, gap=8), children=[
             toga.Box(style=Pack(flex=1)),
-            toga.Button("Cancel", on_press=lambda w: finish(False)),
-            toga.Button("Log in", on_press=lambda w: finish(True))])])
+            toga.Button(_("Cancel"), on_press=lambda w: finish(False)),
+            toga.Button(_("Log in"), on_press=lambda w: finish(True))])])
     app._show_over_main(window)
     (password_box if user_box.value else user_box).focus()
     app.cancel_ssh_login = lambda: finish(False)  # quitting must not leave it waiting
@@ -312,7 +318,7 @@ class Progress:
         self.step = toga.Label("", style=Pack(flex=1))
         self.bar = toga.ProgressBar(max=100, value=0, style=Pack(flex=1))
         self.log = toga.MultilineTextInput(readonly=True, style=Pack(flex=1, font_family="monospace", font_size=11))
-        self.button = toga.Button("Cancel", on_press=self._pressed)
+        self.button = toga.Button(_("Cancel"), on_press=self._pressed)
         size = (640, 360)
         self.window = toga.Window(title=title, size=size, closable=False, position=app._over_main(size))
         self.window.content = toga.Box(style=Pack(direction=COLUMN, margin=14, gap=8), children=[
@@ -321,10 +327,10 @@ class Progress:
         app._show_over_main(self.window)
 
     def _pressed(self, widget, **kwargs):
-        if self.button.text == "Cancel":
+        if self.button.text == _("Cancel"):
             self.stop.set()
             self.button.enabled = False
-            self.show("Cancelling…")
+            self.show(_("Cancelling…"))
         else:
             self.closed = True
             self.window.close()
@@ -347,7 +353,7 @@ class Progress:
 
     def finish(self, text: str) -> None:
         self._show(text, None)
-        self.button.text, self.button.enabled = "Close", True
+        self.button.text, self.button.enabled = _("Close"), True
 
 
 # ---------------------------------------------------------------------------
@@ -361,13 +367,14 @@ async def scan_flow(app, d):
     if not result or _busy.get(d.key):
         return
     fam = devicetools.family(d)
-    tools = "its ARP table and LLDP neighbours" + (" and the stations associated with it" if fam == "airos" else "")
-    login = await ask_route(app, d, f"Log in to read what it sees: {tools}.")
+    login = await ask_route(app, d, _("Log in to read what it sees: its ARP table and LLDP neighbours and the stations "
+                                      "associated with it.") if fam == "airos"
+                            else _("Log in to read what it sees: its ARP table and LLDP neighbours."))
     if not login:
         return
-    _busy[d.key] = "scanning"
+    _busy[d.key] = N_("scanning")  # (shown translated; devicetools compares them in English)
     app.spinner.start()
-    app.status.text = f"Reading what {d.ip} sees…"
+    app.status.text = tr("Reading what {ip} sees…", ip=d.ip)
     try:
         def work():
             return devicetools.parse_scan(devicetools.read_scan(login, fam)), core.local_macs()
@@ -375,13 +382,13 @@ async def scan_flow(app, d):
         try:
             sightings, local = await _work(work)
         except sshrun.SSHError as e:
-            app.status.text = f"Scan from {d.ip}: {e}"
+            app.status.text = tr("Scan from {ip}: {error}", ip=d.ip, error=e)
             return
     finally:
         _busy.pop(d.key, None)
         app.spinner.stop()
     if result is not app.result:  # a new scan started meanwhile
-        app.status.text = f"Scan from {d.ip} finished after a new scan started: start it again."
+        app.status.text = tr("Scan from {ip} finished after a new scan started: start it again.", ip=d.ip)
         return
     seen, new = devicetools.merge_scan(result, d, sightings, local)
     app._show_devices(result.devices)
@@ -390,15 +397,15 @@ async def scan_flow(app, d):
 
 def _report_scan(app, d, sightings, seen, new):
     """What a scan from a device found, in the log and the status line."""
-    counts = ", ".join(f"{devicetools.SCAN_HOW[how]} {n}" for how in devicetools.SCAN_HOW
+    counts = ", ".join(f"{_(devicetools.SCAN_HOW[how])} {n}" for how in devicetools.SCAN_HOW
                        if (n := sum(1 for s in sightings if s.how == how)))
-    lines = [f"Scan from {d.ip} ({d.name or d.model or d.mac}): {counts or 'nothing listed'}; "
-             f"{len(seen)} device(s), {len(new)} new."]
+    lines = [tr("Scan from {ip} ({name}): {counts}; {count} device(s), {new} new.", ip=d.ip,
+                name=d.name or d.model or d.mac, counts=counts or _("nothing listed"), count=len(seen), new=len(new))]
     for dev in seen:
-        how = sorted({devicetools.SCAN_HOW[s.how] for s in sightings
+        how = sorted({_(devicetools.SCAN_HOW[s.how]) for s in sightings
                       if (s.mac and dev.mac == core.norm_mac(s.mac)) or (s.ip and s.ip in dev.ips)})
         lines.append(f"  {dev.ip or '-':15} {dev.mac or '-':17} {dev.name or dev.model or dev.vendor or '':24} "
-                     f"{', '.join(how)}{'  (new)' if dev in new else ''}")
+                     f"{', '.join(how)}{'  ' + _('(new)') if dev in new else ''}")
     app._append_log("\n".join(lines))
     app.status.text = lines[0]
     selected = app._selected_device()
@@ -415,18 +422,18 @@ async def link_flow(app, d):
     point, into Details' Link section, with weak links flagged and said in the Log."""
     if _busy.get(d.key):
         return
-    login = await ask_route(app, d, "Log in to read its link health: signal, noise floor, SNR, capacity, airtime "
-                                    "and distance, its own and, on an access point, each station's.")
+    login = await ask_route(app, d, _("Log in to read its link health: signal, noise floor, SNR, capacity, airtime "
+                                      "and distance, its own and, on an access point, each station's."))
     if not login:
         return
-    _busy[d.key] = "reading its link"
+    _busy[d.key] = N_("reading its link")
     app.spinner.start()
-    app.status.text = f"Reading the link health of {d.ip}…"
+    app.status.text = tr("Reading the link health of {ip}…", ip=d.ip)
     try:
         try:
             reading = await _work(devicetools.read_link, login)
         except (sshrun.SSHError, devicetools.ToolError) as e:
-            app.status.text = f"Link health of {d.ip}: {e}"
+            app.status.text = tr("Link health of {ip}: {error}", ip=d.ip, error=e)
             return
     finally:
         _busy.pop(d.key, None)
@@ -435,7 +442,7 @@ async def link_flow(app, d):
     app._rediagnose()  # its issues, in the list and Details (at the end of a scan that's running)
     if app._selected_device() is d:
         app.details.value = core.render_details(d)
-        app.tabs.current_tab = "Details"
+        app.tabs.current_tab = _("Details")  # the tab's title, as app.py names it
     found = [f"  [{tag}] {msg}" for _, tag, msg in linkhealth.issues(d)]
     app._append_log("\n".join([linkhealth.summary(d)] + found), status=False)
     app.status.text = linkhealth.summary(d)
@@ -454,12 +461,14 @@ async def routed_ssh(app, d):
     if session:
         app._show_terminal(session)
         return
-    login = await ask_route(app, d, "Log in for an SSH session.")
+    login = await ask_route(app, d, _("Log in for an SSH session."))
     if not login:
         return
-    title = f"{d.ip}  SSH {login.user}@ via {sshrun.route_text(login) or 'direct'}  {d.name or d.model or ''}".rstrip()
+    title = tr("{ip}  SSH {user}@ via {route}  {name}", ip=d.ip, user=login.user,
+               route=sshrun.route_text(login) or _("direct"), name=d.name or d.model or "").rstrip()
     if not login.via:
-        title = f"{d.ip}  SSH {login.user}@port {login.port}  {d.name or d.model or ''}".rstrip()
+        title = tr("{ip}  SSH {user}@port {port}  {name}", ip=d.ip, user=login.user, port=login.port,
+                   name=d.name or d.model or "").rstrip()
     if devicetools.OWN_SSH:  # (it goes through the last hop's own client by itself where it must)
         app._show_terminal(app.term.open_own(d.key, "ssh", title, login))
         return
@@ -477,14 +486,14 @@ async def routed_ping(app, d):
             session.type(b"\r")
         app._show_terminal(session)
         return
-    hops = await ask_route(app, d, f"Log in to ping {d.ip} from the device before it.", hops_only=True)
+    hops = await ask_route(app, d, tr("Log in to ping {ip} from the device before it.", ip=d.ip), hops_only=True)
     if hops is None:
         return
     if not hops:  # reachable from here
         app._open_ping(d)
         return
     last = _chain(hops)
-    title = f"{d.ip}  ping from {last.ip}  {d.name or d.model or ''}".rstrip()
+    title = tr("{ip}  ping from {via}  {name}", ip=d.ip, via=last.ip, name=d.name or d.model or "").rstrip()
     if devicetools.OWN_SSH:
         app._show_terminal(app.term.open_own(d.key, "ping", title, last, command=f"ping {d.ip}"))
         return
@@ -512,15 +521,15 @@ async def routed_web(app, d):
     session = app.term.find(d.key, "web")
     if session and session.alive:
         webbrowser.open(session.url)
-        app.status.text = f"Opened {session.url} (forwarded to {d.ip}:{port})."
+        app.status.text = tr("Opened {url} (forwarded to {ip}:{port}).", url=session.url, ip=d.ip, port=port)
         return
-    hops = await ask_route(app, d, f"Log in to forward {d.ip}'s web UI to this computer.",
+    hops = await ask_route(app, d, tr("Log in to forward {ip}'s web UI to this computer.", ip=d.ip),
                            hops_only=True)
     if hops is None:
         return
     if not hops:
         webbrowser.open(url.geturl())
-        app.status.text = f"Opened {url.geturl()}"
+        app.status.text = tr("Opened {url}", url=url.geturl())
         return
     last, local = _chain(hops), _free_port()
     if not any(kind in ("https", "http") for kind in d.services.values()):
@@ -530,27 +539,30 @@ async def routed_web(app, d):
             out = (await _work(lambda: sshrun.run(last, "for p in " + " ".join(map(str, candidates)) +
                                                   f"; do nc -z -w1 {d.ip} $p 2>/dev/null && echo $p && break; done"))).out
         except sshrun.SSHError as e:
-            app.status.text = f"Web UI of {d.ip}: {e}"
+            app.status.text = tr("Web UI of {ip}: {error}", ip=d.ip, error=e)
             return
         found = next((int(p) for p in out.split() if p.isdigit()), None)
         if found and found != port:
             port, url = found, urllib.parse.urlsplit(f"{'http' if found in (80, 8080) else 'https'}://{d.ip}:{found}/")
     target = f"{url.scheme}://127.0.0.1:{local}/"
-    title = f"{d.ip}  web UI via {_through(hops)}  {target}"
+    title = tr("{ip}  web UI via {route}  {url}", ip=d.ip, route=_through(hops), url=target)
     if devicetools.OWN_SSH:
         session = app.term.open_own(d.key, "web", title, last, forward=(local, d.ip, port))
     else:
         argv = sshrun.ssh_command(last, None, "-N", "-L", f"127.0.0.1:{local}:{d.ip}:{port}")
         session = app.term.open(d.key, "web", title, argv, last.passwords)
     session.url = target
-    app.status.text = f"Forwarding {target} to {d.ip}:{port} through {_through(hops)}…"
+    app.status.text = tr("Forwarding {url} to {ip}:{port} through {route}…", url=target, ip=d.ip, port=port,
+                         route=_through(hops))
     if await _work(_wait_local, local, 30):
         webbrowser.open(target)
-        app.status.text = (f"Opened {target}: forwarded to {d.ip}:{port} through {_through(hops)} for as long as its "
-                           "session stays open in the Terminal tab. Each device on the way adds latency.")
+        app.status.text = tr("Opened {url}: forwarded to {ip}:{port} through {route} for as long as its session stays "
+                             "open in the Terminal tab. Each device on the way adds latency.", url=target, ip=d.ip,
+                             port=port, route=_through(hops))
     else:
         app._show_terminal(session)
-        app.status.text = f"The forward to {d.ip}:{port} didn't start: its session in the Terminal tab says why."
+        app.status.text = tr("The forward to {ip}:{port} didn't start: its session in the Terminal tab says why.",
+                             ip=d.ip, port=port)
 
 
 def _wait_local(port: int, within: float) -> bool:
@@ -567,14 +579,15 @@ async def routed_find(app, d, kind: str):
     an SSH forward is a channel of its own, far too slow for 65,535 ports from here."""
     if not (app.settings.get("skip_port_warning") or app.port_warning_accepted or await app._port_warning(d)):
         return
-    hops = await ask_route(app, d, f"Log in to search {d.ip}'s ports from the device before it.", hops_only=True)
+    hops = await ask_route(app, d, tr("Log in to search {ip}'s ports from the device before it.", ip=d.ip),
+                           hops_only=True)
     if hops is None:
         return
     if not hops:
         app._find(d, kind)
         return
     last, result = _chain(hops), app.result
-    name = core.SERVICE_NAMES[kind]
+    name = _(core.SERVICE_NAMES[kind])  # ("services"; protocol names stay)
     ports = core.search_order(kind, result.devices if result else ())
     app.finding = True
     app.start_button.enabled, app.stop_button.enabled = False, True
@@ -583,8 +596,8 @@ async def routed_find(app, d, kind: str):
 
     def work():
         if sshrun.run(last, f"nc -z -w1 127.0.0.1 {last.port}").code:
-            raise devicetools.ToolError(f"{last.ip} has no nc that can check ports (nc -z), so {d.ip}'s ports "
-                                        "can't be searched from it.")
+            raise devicetools.ToolError(tr("{via} has no nc that can check ports (nc -z), so {ip}'s ports can't be "
+                                           "searched from it.", via=last.ip, ip=d.ip))
         found = {}
         for start in range(0, len(ports), 600):
             if core.STOP.is_set():
@@ -599,8 +612,9 @@ async def routed_find(app, d, kind: str):
                                else kind if kind != "all" and port in core.SEARCH_FIRST.get(kind, ()) else "open")
             done = min(start + 600, len(ports))
             app._from_worker(setattr, app.status, "text",
-                             f"{d.ip} (from {last.ip}): checked {done:,} of {len(ports):,} TCP ports for {name}, "
-                             f"{len(found)} open…")
+                             tr("{ip} (from {via}): checked {done:,} of {total:,} TCP ports for {service}, {open} "
+                                "open…", ip=d.ip, via=last.ip, done=done, total=len(ports), service=name,
+                                open=len(found)))
             if kind != "all" and any(k == kind for k in found.values()):
                 break
         return found
@@ -615,7 +629,7 @@ async def routed_find(app, d, kind: str):
         app.spinner.stop()
         app.start_button.enabled, app.stop_button.enabled = True, False
     if error:
-        app.status.text = f"Port search on {d.ip}: {error}"
+        app.status.text = tr("Port search on {ip}: {error}", ip=d.ip, error=error)
         return
     d.ports = sorted(set(d.ports or []) | set(found))
     for port, what in found.items():
@@ -624,8 +638,8 @@ async def routed_find(app, d, kind: str):
         app._show_devices(result.devices)
         if app._selected_device() is d:
             app.details.value = core.render_details(d)
-    listed = ", ".join(f"{p} {k}" for p, k in sorted(found.items())) or "none"
-    app.status.text = f"{d.ip}, checked from {last.ip}: open TCP ports {listed}."
+    listed = ", ".join(f"{p} {k}" for p, k in sorted(found.items())) or _("none")
+    app.status.text = tr("{ip}, checked from {via}: open TCP ports {ports}.", ip=d.ip, via=last.ip, ports=listed)
 
 
 # ---------------------------------------------------------------------------
@@ -633,12 +647,12 @@ async def routed_find(app, d, kind: str):
 # ---------------------------------------------------------------------------
 
 async def _check(app, d) -> devicetools.Check | None:
-    app.status.text = f"Asking Ubiquiti's firmware server about {d.ip or d.mac}…"
+    app.status.text = tr("Asking Ubiquiti's firmware server about {device}…", device=d.ip or d.mac)
     try:
         check = await _work(devicetools.check_firmware, d)
     except devicetools.ToolError as e:
         app.status.text = str(e)
-        await app.main_window.dialog(toga.ErrorDialog("Firmware check", str(e)))
+        await app.main_window.dialog(toga.ErrorDialog(_("Firmware check"), str(e)))
         return None
     app.status.text = devicetools.summary(d, check).split("\n")[0]
     return check
@@ -649,10 +663,10 @@ async def check_flow(app, d):
     if check is None:
         return
     text = devicetools.summary(d, check)
-    title = f"Firmware of {_label(d)}"
+    title = tr("Firmware of {device}", device=_label(d))
     can = (check.newer and devicetools.offers(d, "update")[0] and not devicetools.fits(d, check.release)
            and bool(d.ip) and sshrun.available() and not _busy.get(d.key))
-    if can and await app.main_window.dialog(toga.QuestionDialog(title, text + "\n\nUpdate it now?")):
+    if can and await app.main_window.dialog(toga.QuestionDialog(title, text + "\n\n" + _("Update it now?"))):
         await update_flow(app, d, check)
     elif not can:
         await app.main_window.dialog(toga.InfoDialog(title, text))
@@ -665,40 +679,43 @@ async def update_flow(app, d, check=None):
     if check is None:
         return
     if not check.newer:
-        await app.main_window.dialog(toga.InfoDialog(f"Firmware of {_label(d)}", devicetools.summary(d, check)))
+        await app.main_window.dialog(toga.InfoDialog(tr("Firmware of {device}", device=_label(d)),
+                                                     devicetools.summary(d, check)))
         return
     why = devicetools.fits(d, check.release)
     if why:
-        await app.main_window.dialog(toga.ErrorDialog("Firmware update", why))
+        await app.main_window.dialog(toga.ErrorDialog(_("Firmware update"), why))
         return
-    _busy[d.key] = "updating"
+    _busy[d.key] = N_("updating")
     try:
-        login = await ask_route(app, d, f"Log in to install firmware {check.latest}.")
+        login = await ask_route(app, d, tr("Log in to install firmware {version}.", version=check.latest))
         if not login:
             return
         family = devicetools.FAMILY_NAMES[devicetools.family(d)]
-        message = (f"Install {family} firmware {check.latest} on {_label(d)}? It runs {check.current} now.\n\n"
-                   f"The app downloads it from Ubiquiti ({devicetools.fmt_size(check.size)}), checks it, copies it to "
-                   "the device and starts the installation. The device restarts to install it and is offline for "
-                   "a few minutes: don't unplug it or turn it off until it's back.")
+        message = tr("Install {family} firmware {version} on {device}? It runs {current} now.\n\nThe app downloads it "
+                     "from Ubiquiti ({size}), checks it, copies it to the device and starts the installation. The "
+                     "device restarts to install it and is offline for a few minutes: don't unplug it or turn it off "
+                     "until it's back.", family=family, version=check.latest, device=_label(d), current=check.current,
+                     size=devicetools.fmt_size(check.size))
         if devicetools.family(d) == "edgeos":
-            app.status.text = f"Reading the firmware images of {d.ip}…"
+            app.status.text = tr("Reading the firmware images of {ip}…", ip=d.ip)
             try:
                 note = await _work(devicetools.edgeos_update_note, login, check.latest)
             except (devicetools.ToolError, sshrun.SSHError) as e:
-                app.status.text = f"Firmware update of {d.ip}: {e}"
-                await app.main_window.dialog(toga.ErrorDialog("Firmware update", str(e)))
+                app.status.text = tr("Firmware update of {ip}: {error}", ip=d.ip, error=e)
+                await app.main_window.dialog(toga.ErrorDialog(_("Firmware update"), str(e)))
                 return
-            message = (f"Install EdgeOS firmware {check.latest} on {_label(d)}? It runs {check.current} now.\n\n"
-                       f"The app downloads it from Ubiquiti ({devicetools.fmt_size(check.size)}), checks it, copies it "
-                       "to the router and adds it with EdgeOS's add system image. Once EdgeOS lists it as the image it "
-                       "boots, the app restarts the router, which is offline for a few minutes: don't unplug it or "
-                       f"turn it off until it's back.\n\n{note}")
+            message = tr("Install EdgeOS firmware {version} on {device}? It runs {current} now.\n\nThe app downloads "
+                         "it from Ubiquiti ({size}), checks it, copies it to the router and adds it with EdgeOS's add "
+                         "system image. Once EdgeOS lists it as the image it boots, the app restarts the router, which "
+                         "is offline for a few minutes: don't unplug it or turn it off until it's back.",
+                         version=check.latest, device=_label(d), current=check.current,
+                         size=devicetools.fmt_size(check.size)) + f"\n\n{note}"
         if devicetools.family(d) in ("unifi", "unifi-os"):
-            message += ("\n\nUbiquiti's help center describes updating over SSH as a last resort, for when the UniFi "
-                        "app can't update the device.")
+            message += "\n\n" + _("Ubiquiti's help center describes updating over SSH as a last resort, for when the "
+                                  "UniFi app can't update the device.")
         message += "\n\n" + terms.risk("firmware")
-        if not await app.main_window.dialog(toga.QuestionDialog("Install firmware?", message)):
+        if not await app.main_window.dialog(toga.QuestionDialog(_("Install firmware?"), message)):
             return
         await _install(app, d, check, login)
     finally:
@@ -706,22 +723,23 @@ async def update_flow(app, d, check=None):
 
 
 async def _install(app, d, check, login):
-    progress = Progress(app, f"Firmware update: {d.ip}", f"{_label(d)}: {check.current} → {check.latest}")
+    progress = Progress(app, tr("Firmware update: {ip}", ip=d.ip), f"{_label(d)}: {check.current} → {check.latest}")
     folder = Path(app.paths.cache) / "firmware"
     outcome = {}
 
     def work():
         path = None
         try:
-            progress.show(f"Downloading firmware {check.latest} from Ubiquiti…", 0)
+            progress.show(tr("Downloading firmware {version} from Ubiquiti…", version=check.latest), 0)
             path = devicetools.download_release(
                 check.release, folder, stop=progress.stop,
                 progress=lambda done, total: progress.show(None, 100 * done / total if total else None))
             _in_use[path] = _in_use.get(path, 0) + 1
-            progress.show(f"Downloaded and checked (SHA-256 {check.release['sha256_checksum'][:16]}…).", 100)
+            progress.show(tr("Downloaded and checked (SHA-256 {checksum}…).",
+                             checksum=check.release["sha256_checksum"][:16]), 100)
 
             def report(text, percent):
-                if text and text.startswith("Starting the installation"):
+                if text and (text in map(_, devicetools.INSTALL_STARTS)):
                     progress.no_cancel()
                 progress.show(text, percent)
 
@@ -742,20 +760,21 @@ async def _install(app, d, check, login):
     await _work(work)
     if "error" in outcome:
         text = outcome["error"]
-        if progress.stop.is_set() and "Cancelled" in text:
-            text = "Cancelled. Nothing was installed."
+        if progress.stop.is_set() and ("Cancelled" in text or _("Cancelled.") in text):  # (ToolError's, translated)
+            text = _("Cancelled. Nothing was installed.")
         progress.finish(text)
-        app.status.text = f"Firmware update of {d.ip}: {text}"
+        app.status.text = tr("Firmware update of {ip}: {error}", ip=d.ip, error=text)
         return
-    text = f"Back after {outcome['offline']:.0f} s."
-    progress.finish(text + " Reading its firmware again…")
+    text = tr("Back after {seconds:.0f} s.", seconds=outcome["offline"])
+    progress.finish(i18n.sentences(text, _("Reading its firmware again…")))
     now = await _reread(app, d)
     if now is None:
-        text += " Rescan it to see the version it runs."
+        text = i18n.sentences(text, _("Rescan it to see the version it runs."))
     elif devicetools.version_key(now) == devicetools.version_key(check.latest):
-        text = f"Updated: it runs {now}. " + text
+        text = i18n.sentences(tr("Updated: it runs {version}.", version=now), text)
     else:
-        text = f"It's back, but reports firmware {now or 'unknown'}, not {check.latest}. " + text
+        text = i18n.sentences(tr("It's back, but reports firmware {version}, not {latest}.",
+                                 version=now or _("unknown"), latest=check.latest), text)
     progress.finish(text)
     app.status.text = f"{d.ip}: {text}"
 
@@ -783,31 +802,35 @@ async def _reread(app, d) -> str | None:
 
 async def config_flow(app, d):
     kind = devicetools.config_kind(d)
-    login = await ask_route(app, d, f"Log in to read its configuration ({devicetools.CONFIG_FILES[kind]}).")
+    login = await ask_route(app, d, tr("Log in to read its configuration ({file}).",
+                                       file=devicetools.CONFIG_FILES[kind]))
     if not login:
         return
-    app.status.text = f"Reading the config of {d.ip}…"
+    app.status.text = tr("Reading the config of {ip}…", ip=d.ip)
     try:
         text, pending = await _work(devicetools.read_device_config, login, kind)
         tools = await _work(devicetools.config_tools, login, kind)
     except (sshrun.SSHError, devicetools.ToolError) as e:
         app.status.text = str(e)
-        await app.main_window.dialog(toga.ErrorDialog("Config", str(e)))
+        await app.main_window.dialog(toga.ErrorDialog(_("Config"), str(e)))
         return
-    app.status.text = f"Read the config of {d.ip}."
+    app.status.text = tr("Read the config of {ip}.", ip=d.ip)
     ConfigEditor(app, d, login, text, pending, kind, tools)
 
 
+# Each kind of config's note, filled in with its file and the device's address (translated where it's shown)
 ABOUT_CONFIG = {
-    "airos": "{file} on {ip}: airOS's whole configuration, one setting per line.\nSave writes it to flash: it takes "
-             "effect at the next reboot. Apply saves it and applies it now, the way the web UI's Apply does: the "
-             "device restarts only what the changes affect, and the connection to it can drop for a moment.",
-    "edgeos": "{file} on {ip}: EdgeOS's boot config (what it loads when it starts; changes committed since without "
-              "saving aren't in it).\nSave checks that EdgeOS reads it and makes it the boot config: it takes effect "
-              "at the next reboot. Apply loads it, commits and saves it, as configure; load; commit; save do: "
-              "EdgeOS restarts what the changes affect, and the connection can drop for a moment.",
+    "airos": N_("{file} on {ip}: airOS's whole configuration, one setting per line.\nSave writes it to flash: it "
+                "takes effect at the next reboot. Apply saves it and applies it now, the way the web UI's Apply does: "
+                "the device restarts only what the changes affect, and the connection to it can drop for a moment."),
+    "isp": N_("{file} on {ip}: its whole configuration, one setting per line.\nSave writes it to flash: it takes "
+              "effect at the next reboot. Apply saves it and applies it now, the way the web UI's Apply does: the "
+              "device restarts only what the changes affect, and the connection to it can drop for a moment."),
+    "edgeos": N_("{file} on {ip}: EdgeOS's boot config (what it loads when it starts; changes committed since "
+                 "without saving aren't in it).\nSave checks that EdgeOS reads it and makes it the boot config: it "
+                 "takes effect at the next reboot. Apply loads it, commits and saves it, as configure; load; commit; "
+                 "save do: EdgeOS restarts what the changes affect, and the connection can drop for a moment."),
 }
-ABOUT_CONFIG["isp"] = ABOUT_CONFIG["airos"].replace("airOS's whole", "its whole")
 
 
 class ConfigEditor:
@@ -817,26 +840,27 @@ class ConfigEditor:
         self.saved = text  # as the device has it
         self.box = toga.MultilineTextInput(value=text, style=Pack(flex=1, font_family="monospace", font_size=11))
         self.state = toga.Label("", style=Pack(flex=1))
-        self.save_button = toga.Button("Save", on_press=self.save)
-        self.apply_button = toga.Button("Apply", on_press=self.apply)
-        self.buttons = [toga.Button("Reload", on_press=self.reload), self.save_button, self.apply_button]
-        about = ABOUT_CONFIG[kind].format(file=devicetools.CONFIG_FILES[kind], ip=d.ip)
+        self.save_button = toga.Button(_("Save"), on_press=self.save)
+        self.apply_button = toga.Button(_("Apply"), on_press=self.apply)
+        self.buttons = [toga.Button(_("Reload"), on_press=self.reload), self.save_button, self.apply_button]
+        about = _(ABOUT_CONFIG[kind]).format(file=devicetools.CONFIG_FILES[kind], ip=d.ip)
         if d.mac:
-            about += " Before writing, the app keeps the config it read as a backup (Config backups…)."
+            about = i18n.sentences(about, _("Before writing, the app keeps the config it read as a backup (Config "
+                                            "backups…)."))
         size = (900, 680)
-        self.window = toga.Window(title=f"Config: {_label(d)}", size=size, on_close=self.closing,
+        self.window = toga.Window(title=tr("Config: {device}", device=_label(d)), size=size, on_close=self.closing,
                                   position=app._over_main(size))
         self.window.content = toga.Box(style=Pack(direction=COLUMN, margin=12, gap=8), children=[
             toga.Label(_fill(about, 118)), self.box,
             toga.Box(style=Pack(direction=ROW, align_items="center", gap=8), children=[
-                self.state, *self.buttons, toga.Button("Close", on_press=lambda w: self.window.close())])])
+                self.state, *self.buttons, toga.Button(_("Close"), on_press=lambda w: self.window.close())])])
         self._pending(pending)
         self._enable(True)
         app._show_over_main(self.window)
 
     def _pending(self, pending):
-        self.state.text = _fill("It has changes that aren't applied yet (made in its web UI, or saved without "
-                                "applying)." if pending else self.tools["why"], 64)
+        self.state.text = _fill(_("It has changes that aren't applied yet (made in its web UI, or saved without "
+                                  "applying).") if pending else self.tools["why"], 64)
 
     def _enable(self, on: bool):
         for button in self.buttons:
@@ -851,13 +875,13 @@ class ConfigEditor:
         return False
 
     async def _close_unsaved(self):
-        if await self.window.dialog(toga.QuestionDialog("Discard the changes?",
-                                                        "The edits haven't been saved to the device.")):
+        if await self.window.dialog(toga.QuestionDialog(_("Discard the changes?"),
+                                                        _("The edits haven't been saved to the device."))):
             self.window.close()
 
     async def reload(self, widget, **kwargs):
         self._enable(False)
-        self.state.text = "Reading…"
+        self.state.text = _("Reading…")
         try:
             text, pending = await _work(devicetools.read_device_config, self.login, self.kind)
         except (sshrun.SSHError, devicetools.ToolError) as e:
@@ -877,25 +901,29 @@ class ConfigEditor:
         text = self.box.value
         problems = devicetools.config_problems(text, self.kind)
         if problems:
-            heading = ("EdgeOS wouldn't read it:\n" if self.kind == "edgeos"
-                       else "airOS reads only key=value lines. These aren't:\n")
-            await self.window.dialog(toga.ErrorDialog("Not a config", heading + "\n".join(problems[:10])))
+            heading = (_("EdgeOS wouldn't read it:") if self.kind == "edgeos"
+                       else _("airOS reads only key=value lines. These aren't:")) + "\n"
+            await self.window.dialog(toga.ErrorDialog(_("Not a config"), heading + "\n".join(problems[:10])))
             return
         changed = devicetools.lines_changed(self.saved, text)
-        boot = "its boot config" if self.kind == "edgeos" else "flash"
-        what = ("Apply the config on" if apply else f"Save the config to {boot} on") + f" {_label(self.d)}?"
-        detail = (f"{changed} line(s) changed. " if changed else "Nothing changed in the editor. ") + (
-            f"It's applied now and saved to {boot}; the device restarts what the changes affect." if apply
-            else "It takes effect at the next reboot.") + "\n\n" + terms.risk("apply" if apply else "save")
+        edgeos, device = self.kind == "edgeos", _label(self.d)
+        what = (tr("Apply the config on {device}?", device=device) if apply
+                else tr("Save the config to its boot config on {device}?", device=device) if edgeos
+                else tr("Save the config to flash on {device}?", device=device))
+        detail = i18n.sentences(
+            tr("{count} line(s) changed.", count=changed) if changed else _("Nothing changed in the editor."),
+            (_("It's applied now and saved to its boot config; the device restarts what the changes affect.") if edgeos
+             else _("It's applied now and saved to flash; the device restarts what the changes affect.")) if apply
+            else _("It takes effect at the next reboot.")) + "\n\n" + terms.risk("apply" if apply else "save")
         if not await self.window.dialog(toga.QuestionDialog(what, detail)):
             return
         self._enable(False)
-        self.state.text = "Applying…" if apply else "Saving…"
+        self.state.text = _("Applying…") if apply else _("Saving…")
         say = lambda m: self.app._from_worker(setattr, self.state, "text", _fill(m, 64))  # noqa: E731
 
         def work():
             if self.d.mac:  # what it had, kept before it's replaced
-                devicetools.save_backup(self.d, self.saved, self.kind, "before edit")
+                devicetools.save_backup(self.d, self.saved, self.kind, N_("before edit"))  # (shown translated)
                 self.app._from_worker(_refresh_backups, self.d)
             return devicetools.push_config(self.login, self.kind, text, apply, report=say)
 
@@ -904,7 +932,7 @@ class ConfigEditor:
         except devicetools.LostConnection as e:  # what it means for the device, as far as it's known
             self.state.text = _fill(e, 64)
             self.app.status.text = f"{self.d.ip}: {e}"
-            await self.window.dialog(toga.ErrorDialog("Connection lost", str(e)))
+            await self.window.dialog(toga.ErrorDialog(_("Connection lost"), str(e)))
         except (devicetools.ToolError, sshrun.SSHError, OSError) as e:
             self.state.text = _fill(e, 64)
         else:
@@ -921,18 +949,18 @@ class ConfigEditor:
 async def login_flow(app, d):
     if _busy.get(d.key):
         return
-    login = await ask_route(app, d, "Log in with its current username and password first.")
+    login = await ask_route(app, d, _("Log in with its current username and password first."))
     if not login:
         return
     kind = devicetools.config_kind(d)  # "airos" or "edgeos"
     if not login.password and kind == "airos":
         await app.main_window.dialog(toga.ErrorDialog(
-            "Change login", "Changing the login needs the current password (an SSH key isn't enough): the app "
-                            "checks it against the device's stored hash before writing a new one."))
+            _("Change login"), _("Changing the login needs the current password (an SSH key isn't enough): the app "
+                                 "checks it against the device's stored hash before writing a new one.")))
         return
-    _busy[d.key] = "changing login"
+    _busy[d.key] = N_("changing login")
     try:
-        app.status.text = f"Reading the config of {d.ip}…"
+        app.status.text = tr("Reading the config of {ip}…", ip=d.ip)
         try:
             if kind == "edgeos":
                 text, _pending = await _work(devicetools.read_device_config, login, kind)
@@ -940,59 +968,65 @@ async def login_flow(app, d):
             else:
                 text, pending = await _work(devicetools.read_config, login)
         except (sshrun.SSHError, devicetools.ToolError) as e:
-            await app.main_window.dialog(toga.ErrorDialog("Change login", str(e)))
+            await app.main_window.dialog(toga.ErrorDialog(_("Change login"), str(e)))
             return
         answer = await _new_login_window(app, d, login, text)
         if not answer:
             return
         new_text, new_user, new_password, scheme = answer
-        what = (f"the password of {login.user} on {_label(d)}" if new_user == login.user
-                else f"the login of {_label(d)} from {login.user} to {new_user} with the new password")
+        same, names = new_user == login.user, {"device": _label(d), "user": login.user, "new_user": new_user}
         if kind == "edgeos":
-            message = (f"Change {what}? EdgeOS commits it right away and saves it to its boot config; the old "
-                       f"{'password' if new_user == login.user else 'login'} stops working.")
+            message = (tr("Change the password of {user} on {device}? EdgeOS commits it right away and saves it to "
+                          "its boot config; the old password stops working.", **names) if same
+                       else tr("Change the login of {device} from {user} to {new_user} with the new password? EdgeOS "
+                               "commits it right away and saves it to its boot config; the old login stops working.",
+                               **names))
             if new_user != login.user:
-                message += (f"\n\nAs Ubiquiti's help center does it, {new_user} is made first, with {login.user}'s "
-                            f"level and settings, and the app logs in with it; only then is {login.user} deleted, "
-                            f"logged in as {new_user}.")
-            message += "\n\nEdgeOS hashes the password itself and stores it so, never as plain text."
+                message += "\n\n" + tr("As Ubiquiti's help center does it, {new_user} is made first, with {user}'s "
+                                       "level and settings, and the app logs in with it; only then is {user} deleted, "
+                                       "logged in as {new_user}.", **names)
+            message += "\n\n" + _("EdgeOS hashes the password itself and stores it so, never as plain text.")
             if pending:
-                message += ("\n\nIts config also has changes that are committed but not saved (in its CLI): saving "
-                            "the new login saves them too.")
+                message += "\n\n" + _("Its config also has changes that are committed but not saved (in its CLI): "
+                                      "saving the new login saves them too.")
         else:
-            message = (f"Change {what}? It's applied right away and saved to flash; the old login stops working.\n\n"
-                       f"The password is stored on the device as an {scheme} hash, the format it uses now.")
+            message = (tr("Change the password of {user} on {device}? It's applied right away and saved to flash; the "
+                          "old login stops working.", **names) if same
+                       else tr("Change the login of {device} from {user} to {new_user} with the new password? It's "
+                               "applied right away and saved to flash; the old login stops working.", **names))
+            message += "\n\n" + tr("The password is stored on the device as an {scheme} hash, the format it uses now.",
+                                   scheme=scheme)
             if pending:
-                message += ("\n\nIts config also has changes that aren't applied yet (made in its web UI, or saved "
-                            "without applying): they're applied with it.")
+                message += "\n\n" + _("Its config also has changes that aren't applied yet (made in its web UI, or "
+                                      "saved without applying): they're applied with it.")
         message += "\n\n" + terms.risk("login")
-        if not await app.main_window.dialog(toga.QuestionDialog("Change login?", message)):
+        if not await app.main_window.dialog(toga.QuestionDialog(_("Change login?"), message)):
             return
         new = sshrun.Login(login.ip, login.port, new_user, new_password, login.alias, login.known_hosts,
                            login.via, login.nested)
-        progress = Progress(app, f"Changing login: {d.ip}", f"{_label(d)}: {login.user} → {new_user}")
+        progress = Progress(app, tr("Changing login: {ip}", ip=d.ip), f"{_label(d)}: {login.user} → {new_user}")
         progress.no_cancel()
         outcome = {}
 
         def work():
             try:
                 if d.mac:  # what it had, kept before it's replaced
-                    devicetools.save_backup(d, text, kind, "before login change")
+                    devicetools.save_backup(d, text, kind, N_("before login change"))
                     app._from_worker(_refresh_backups, d)
                 if kind == "edgeos":  # new_text: the steps; it logs in with the new login itself
                     outcome["said"] = devicetools.change_edgeos_login(login, new, new_text, report=progress.show)
                     return
                 outcome["said"] = devicetools.write_config(login, new_text, True, report=progress.show,
                                                            new_login=new)
-                progress.show("Logging in with the new login…")
+                progress.show(_("Logging in with the new login…"))
                 sshrun.check_login(new)
             except (devicetools.ToolError, sshrun.SSHError, OSError) as e:
                 outcome["error"] = str(e)
 
         await _work(work)
         if "error" in outcome:
-            progress.finish(f"{outcome['error']}\nIf the device no longer takes either login, its web UI or a "
-                            "reset to factory defaults gets it back.")
+            progress.finish(outcome["error"] + "\n" + _("If the device no longer takes either login, its web UI or a "
+                                                        "reset to factory defaults gets it back."))
             return
         if _remembered(app, d):
             credstore.save(d.mac, new_user, new_password)
@@ -1001,9 +1035,11 @@ async def login_flow(app, d):
         devicetools.forget_factory_login(d)
         app._save_settings()
         app._rediagnose()
-        progress.finish(f"Done: {d.ip} takes the new login ({new_user}). {outcome['said']}" if kind == "edgeos"
-                        else f"Done: {d.ip} takes the new login ({new_user}), applied and saved to flash.")
-        app.status.text = f"{d.ip}: the login is now {new_user}."
+        progress.finish(i18n.sentences(tr("Done: {ip} takes the new login ({user}).", ip=d.ip, user=new_user),
+                                       outcome["said"]) if kind == "edgeos"
+                        else tr("Done: {ip} takes the new login ({user}), applied and saved to flash.", ip=d.ip,
+                                user=new_user))
+        app.status.text = tr("{ip}: the login is now {user}.", ip=d.ip, user=new_user)
     finally:
         _busy.pop(d.key, None)
 
@@ -1020,7 +1056,7 @@ async def _new_login_window(app, d, login, text):
             return
         if ok:
             if first.value != second.value:
-                trouble.text = "The two passwords differ."
+                trouble.text = _("The two passwords differ.")
                 return
             try:
                 new_text, scheme = devicetools.new_login(d, login, text, user_box.value.strip(), first.value)
@@ -1042,19 +1078,19 @@ async def _new_login_window(app, d, login, text):
     label = Pack(width=120)
     row = Pack(direction=ROW, align_items="center", gap=8)
     size = (600, 300)
-    window = toga.Window(title=f"New login: {d.ip}", size=size, resizable=False, on_close=closing,
+    window = toga.Window(title=tr("New login: {ip}", ip=d.ip), size=size, resizable=False, on_close=closing,
                          position=app._over_main(size))
     window.content = toga.Box(style=Pack(direction=COLUMN, margin=14, gap=8), children=[
         toga.Label(_label(d)),
         toga.Label(_fill(devicetools.new_login_note(d), 76)),
-        toga.Box(style=row, children=[toga.Label("Username", style=label), user_box]),
-        toga.Box(style=row, children=[toga.Label("New password", style=label), first]),
-        toga.Box(style=row, children=[toga.Label("Again", style=label), second]),
+        toga.Box(style=row, children=[toga.Label(_("Username"), style=label), user_box]),
+        toga.Box(style=row, children=[toga.Label(_("New password"), style=label), first]),
+        toga.Box(style=row, children=[toga.Label(_("Again"), style=label), second]),
         trouble,
         toga.Box(style=Pack(direction=ROW, gap=8), children=[
             toga.Box(style=Pack(flex=1)),
-            toga.Button("Cancel", on_press=lambda w: finish(False)),
-            toga.Button("Change", on_press=lambda w: finish(True))])])
+            toga.Button(_("Cancel"), on_press=lambda w: finish(False)),
+            toga.Button(_("Change"), on_press=lambda w: finish(True))])])
     app._show_over_main(window)
     first.focus()
     app.cancel_ssh_login = lambda: finish(False)
@@ -1073,30 +1109,30 @@ async def backup_flow(app, d):
     if _busy.get(d.key):
         return
     kind = devicetools.config_kind(d)
-    login = await ask_route(app, d, f"Log in to back up its config ({devicetools.CONFIG_FILES[kind]}).")
+    login = await ask_route(app, d, tr("Log in to back up its config ({file}).", file=devicetools.CONFIG_FILES[kind]))
     if not login:
         return
-    _busy[d.key] = "backing up"
+    _busy[d.key] = N_("backing up")
     app.spinner.start()
-    app.status.text = f"Reading the config of {d.ip}…"
+    app.status.text = tr("Reading the config of {ip}…", ip=d.ip)
     try:
         def work():
             text, _pending = devicetools.read_device_config(login, kind)
-            return devicetools.save_backup(d, text, kind, "backup")
+            return devicetools.save_backup(d, text, kind, N_("backup"))
 
         try:
             backup = await _work(work)
         except (sshrun.SSHError, devicetools.ToolError, OSError) as e:
-            app.status.text = f"Backup of {d.ip}: {e}"
-            await app.main_window.dialog(toga.ErrorDialog("Config backup", str(e)))
+            app.status.text = tr("Backup of {ip}: {error}", ip=d.ip, error=e)
+            await app.main_window.dialog(toga.ErrorDialog(_("Config backup"), str(e)))
             return
     finally:
         _busy.pop(d.key, None)
         app.spinner.stop()
     kept = len(devicetools.list_backups(d.mac))
-    app._append_log(f"Config backup of {_label(d)}: {backup.path}")
-    app.status.text = (f"Backed up the config of {d.ip} ({backup.date}); {kept} kept for it. Config backups… lists "
-                       "them.")
+    app._append_log(tr("Config backup of {device}: {detail}", device=_label(d), detail=backup.path))
+    app.status.text = tr("Backed up the config of {ip} ({date}); {count} kept for it. Config backups… lists them.",
+                         ip=d.ip, date=backup.date, count=kept)
     _refresh_backups(d)
 
 
@@ -1107,53 +1143,62 @@ async def compare_flow(app, d, backup, other=None):
     try:
         old, new = backup.text(), other.text() if other is not None else None
     except OSError as e:
-        await app.main_window.dialog(toga.ErrorDialog("Compare", str(e)))
+        await app.main_window.dialog(toga.ErrorDialog(_("Compare"), str(e)))
         return
+    # The diff's own labels (in its --- and +++ lines) stay as they are
     names = (f"backup {backup.date}", f"backup {other.date}" if other is not None else "on the device now")
     if other is None:
         if _busy.get(d.key):
-            app.status.text = f"{d.ip} is {_busy[d.key]}: compare once that's done."
+            app.status.text = tr("{ip} is {doing}: compare once that's done.", ip=d.ip, doing=_(_busy[d.key]))
             return
-        login = await ask_route(app, d, f"Log in to read its config ({devicetools.CONFIG_FILES[kind]}) and compare it "
-                                        f"with the backup taken {backup.date}.")
+        login = await ask_route(app, d, tr("Log in to read its config ({file}) and compare it with the backup taken "
+                                           "{date}.", file=devicetools.CONFIG_FILES[kind], date=backup.date))
         if not login:
             return
-        _busy[d.key] = "reading its config"
+        _busy[d.key] = N_("reading its config")
         app.spinner.start()
-        app.status.text = f"Reading the config of {d.ip} to compare…"
+        app.status.text = tr("Reading the config of {ip} to compare…", ip=d.ip)
         try:
             new = await _work(devicetools.read_current, login, kind)
         except (sshrun.SSHError, devicetools.ToolError) as e:
             app.status.text = f"{d.ip}: {e}"
-            await app.main_window.dialog(toga.ErrorDialog("Compare", str(e)))
+            await app.main_window.dialog(toga.ErrorDialog(_("Compare"), str(e)))
             return
         finally:
             _busy.pop(d.key, None)
             app.spinner.stop()
         app.status.text = ""
     diff, changed = devicetools.config_diff(old, new, *names)
-    heading = (f"{_label(d)}: {changed} line(s) differ between the {names[0]} and the "
-               f"{'config ' + names[1] if other is None else names[1]}." if changed else
-               f"{_label(d)}: no differences between the {names[0]} and the "
-               f"{'config ' + names[1] if other is None else names[1]}.")
-    note = (f"Lines marked - are only in the first ({names[0]}), lines marked + only in the second ({names[1]}); "
-            "the ones around them are in both, for context.")
-    buttons = [("Close", None, True)]
+    dates = {"device": _label(d), "count": changed, "date": backup.date,
+             "other": other.date if other is not None else ""}
+    if other is None:
+        heading = (tr("{device}: {count} line(s) differ between the backup {date} and the config on the device now.",
+                      **dates) if changed else
+                   tr("{device}: no differences between the backup {date} and the config on the device now.", **dates))
+        note = tr("Lines marked - are only in the first (backup {date}), lines marked + only in the second (on the "
+                  "device now); the ones around them are in both, for context.", **dates)
+    else:
+        heading = (tr("{device}: {count} line(s) differ between the backup {date} and the backup {other}.", **dates)
+                   if changed else
+                   tr("{device}: no differences between the backup {date} and the backup {other}.", **dates))
+        note = tr("Lines marked - are only in the first (backup {date}), lines marked + only in the second (backup "
+                  "{other}); the ones around them are in both, for context.", **dates)
+    buttons = [(_("Close"), None, True)]
     if other is None:  # the config now can be kept, unless the last backup has it already
         latest = devicetools.list_backups(d.mac)
         try:
             same = bool(latest) and latest[0].path.read_bytes() == new.encode("utf-8")
         except OSError:
             same = False
-        buttons.insert(0, ("Same as its last backup" if same else "Keep it as a backup", "keep", not same))
-    if await _diff_view(app, f"Compare configs: {d.ip}", heading, diff, note, buttons) != "keep":
+        buttons.insert(0, (_("Same as its last backup") if same else _("Keep it as a backup"), "keep", not same))
+    if await _diff_view(app, tr("Compare configs: {ip}", ip=d.ip), heading, diff, note, buttons) != "keep":
         return
     try:
-        kept = devicetools.save_backup(d, new, kind, "backup")
+        kept = devicetools.save_backup(d, new, kind, N_("backup"))
     except (OSError, devicetools.ToolError) as e:
-        await app.main_window.dialog(toga.ErrorDialog("Config backup", str(e)))
+        await app.main_window.dialog(toga.ErrorDialog(_("Config backup"), str(e)))
         return
-    app._append_log(f"Config backup of {_label(d)}: {kept.path}")
+    app._append_log(tr("Config backup of {device}: {detail}", device=_label(d), detail=kept.path))
     _refresh_backups(d)
 
 
@@ -1190,31 +1235,35 @@ class BackupsWindow:
     def __init__(self, app, d):
         self.app, self.d = app, d
         self.backups = []
-        self.table = toga.Table(columns=["Taken", "Why", "Address", "Firmware", "Size"], on_select=self.selected,
-                                multiple_select=True, style=Pack(flex=1))
+        # (headings translated; each column's accessor stays as the rows name it)
+        self.table = toga.Table(columns=[AccessorColumn(_("Taken"), "taken"), AccessorColumn(_("Why"), "why"),
+                                         AccessorColumn(_("Address"), "address"),
+                                         AccessorColumn(_("Firmware"), "firmware"), AccessorColumn(_("Size"), "size")],
+                                on_select=self.selected, multiple_select=True, style=Pack(flex=1))
         self.text = toga.MultilineTextInput(readonly=True, style=Pack(flex=2, font_family="monospace", font_size=11))
         self.state = toga.Label("", style=Pack(flex=1))
         offered = devicetools.offers(d, "backup")[0] and bool(d.ip) and sshrun.available()
-        self.compare_button = toga.Button("Compare…", on_press=self.compare, enabled=False)
-        self.restore_button = toga.Button("Restore…", on_press=self.restore, enabled=False)
-        self.copy_button = toga.Button("Save a copy…", on_press=self.save_copy, enabled=False)
-        self.delete_button = toga.Button("Delete…", on_press=self.delete, enabled=False)
+        self.compare_button = toga.Button(_("Compare…"), on_press=self.compare, enabled=False)
+        self.restore_button = toga.Button(_("Restore…"), on_press=self.restore, enabled=False)
+        self.copy_button = toga.Button(_("Save a copy…"), on_press=self.save_copy, enabled=False)
+        self.delete_button = toga.Button(_("Delete…"), on_press=self.delete, enabled=False)
         kind = devicetools.config_kind(d)
-        about = (f"Copies of {devicetools.CONFIG_FILES.get(kind, 'its config')} kept for {d.mac} in "
-                 f"{devicetools.backup_folder(d.mac)}. Compare shows what differs between two selected, or "
-                 "between one and its config now. Restore uploads one to it again (the same model only), "
-                 "showing what changes first and keeping its current config as a backup.")
+        about = tr("Copies of {file} kept for {mac} in {folder}. Compare shows what differs between two selected, or "
+                   "between one and its config now. Restore uploads one to it again (the same model only), showing "
+                   "what changes first and keeping its current config as a backup.",
+                   file=devicetools.CONFIG_FILES.get(kind, _("its config")), mac=d.mac,
+                   folder=devicetools.backup_folder(d.mac))
         size = (860, 620)
-        self.window = toga.Window(title=f"Config backups: {_label(d)}", size=size, on_close=self.closing,
-                                  position=app._over_main(size))
+        self.window = toga.Window(title=tr("Config backups: {device}", device=_label(d)), size=size,
+                                  on_close=self.closing, position=app._over_main(size))
         self.window.content = toga.Box(style=Pack(direction=COLUMN, margin=12, gap=8), children=[
             toga.Label(_fill(about, 112)), self.table, self.text,
             toga.Box(style=Pack(direction=ROW, align_items="center", gap=8), children=[
                 self.state,
-                toga.Button("Back up now", on_press=self.backup_now, enabled=offered),
+                toga.Button(_("Back up now"), on_press=self.backup_now, enabled=offered),
                 self.compare_button, self.restore_button, self.copy_button, self.delete_button,
-                toga.Button("Show folder", on_press=lambda w: _show_folder(devicetools.backup_folder(d.mac))),
-                toga.Button("Close", on_press=lambda w: self.closing(w) and self.window.close())])])
+                toga.Button(_("Show folder"), on_press=lambda w: _show_folder(devicetools.backup_folder(d.mac))),
+                toga.Button(_("Close"), on_press=lambda w: self.closing(w) and self.window.close())])])
         _backup_windows[d.mac] = self
         self.refresh()
         app._show_over_main(self.window)
@@ -1225,11 +1274,11 @@ class BackupsWindow:
 
     def refresh(self):
         self.backups = devicetools.list_backups(self.d.mac)
-        self.table.data = [{"taken": b.date, "why": b.reason or "backup", "address": b.meta.get("ip", ""),
+        self.table.data = [{"taken": b.date, "why": _(b.reason or "backup"), "address": b.meta.get("ip", ""),
                             "firmware": devicetools.device_version(_FirmwareOf(b.meta)) or b.meta.get("firmware", ""),
                             "size": f"{b.path.stat().st_size:,} B", "backup": b} for b in self.backups]
         self.text.value = ""
-        self.state.text = f"{len(self.backups)} kept." if self.backups else "None kept yet."
+        self.state.text = tr("{count} kept.", count=len(self.backups)) if self.backups else _("None kept yet.")
         self.selected(self.table)
 
     def _chosen(self) -> list:
@@ -1247,16 +1296,16 @@ class BackupsWindow:
         self.restore_button.enabled = backup is not None and can and not _busy.get(self.d.key)
         self.copy_button.enabled = self.delete_button.enabled = backup is not None
         reads = devicetools.offers(self.d, "backup")[0] and bool(self.d.ip) and sshrun.available()
-        self.compare_button.text = ("Compare the two…" if len(chosen) == 2 else "Compare with its config now…"
-                                    if len(chosen) == 1 and reads else "Compare…")
+        self.compare_button.text = (_("Compare the two…") if len(chosen) == 2 else _("Compare with its config now…")
+                                    if len(chosen) == 1 and reads else _("Compare…"))
         self.compare_button.enabled = len(chosen) == 2 or (backup is not None and reads and not _busy.get(self.d.key))
         if backup is not None:
             try:
                 self.text.value = backup.text()
             except OSError as e:
-                self.text.value = f"Can't read {backup.path}: {e}"
+                self.text.value = tr("Can't read {path}: {error}", path=backup.path, error=e)
         else:
-            self.text.value = ("Two backups selected: Compare the two shows what differs between them."
+            self.text.value = (_("Two backups selected: Compare the two shows what differs between them.")
                                if len(chosen) == 2 else "")
 
     async def compare(self, widget, **kwargs):
@@ -1277,24 +1326,25 @@ class BackupsWindow:
         if backup is None:
             return
         name = f"{(self.d.name or self.d.mac or 'device').replace(' ', '_')}_{backup.path.name}"
-        path = await self.window.dialog(toga.SaveFileDialog("Save a copy of the config", suggested_filename=name))
+        path = await self.window.dialog(toga.SaveFileDialog(_("Save a copy of the config"), suggested_filename=name))
         if path:
             try:
                 Path(path).write_bytes(backup.path.read_bytes())
             except OSError as e:
-                await self.window.dialog(toga.ErrorDialog("Save a copy", str(e)))
+                await self.window.dialog(toga.ErrorDialog(_("Save a copy"), str(e)))
                 return
-            self.state.text = f"Saved a copy as {path}."
+            self.state.text = tr("Saved a copy as {path}.", path=path)
 
     async def delete(self, widget, **kwargs):
         backup = self._current()
         if backup is None or not await self.window.dialog(toga.QuestionDialog(
-                "Delete this backup?", f"The config taken {backup.date} is deleted from {backup.path.parent}.")):
+                _("Delete this backup?"), tr("The config taken {date} is deleted from {folder}.", date=backup.date,
+                                             folder=backup.path.parent))):
             return
         try:
             devicetools.delete_backup(backup)
         except OSError as e:
-            await self.window.dialog(toga.ErrorDialog("Delete", str(e)))
+            await self.window.dialog(toga.ErrorDialog(_("Delete"), str(e)))
         self.refresh()
 
 
@@ -1332,15 +1382,16 @@ async def back_up_all(app):
             return
         last.closing(last.window) and last.window.close()
     if not sshrun.available():
-        app.status.text = "Back up all configs needs ssh and scp."
+        app.status.text = _("Back up all configs needs ssh and scp.")
         return
     devices = [d for d in (app._device(getattr(row, "key", None)) for row in app.table.data) if d is not None]
     if not any(devicetools.config_kind(d) for d in devices):
         await app.main_window.dialog(toga.InfoDialog(
-            "Back up all configs", "No device in the table keeps a config the app can back up (airMAX, airFiber, "
-                                   "LTU, GigaBeam, EdgeOS)." if devices else "Scan first: the table is empty."))
+            _("Back up all configs"), _("No device in the table keeps a config the app can back up (airMAX, "
+                                        "airFiber, LTU, GigaBeam, EdgeOS).") if devices
+            else _("Scan first: the table is empty.")))
         return
-    app.status.text = "Looking up the saved logins…"
+    app.status.text = _("Looking up the saved logins…")
     jobs = await _work(devicetools.backup_jobs, devices, lambda d, via: _saved_login(app, d, via),
                        lambda d: route(app, d))
     app.status.text = ""
@@ -1363,21 +1414,29 @@ class BackupAllWindow:
         rows = []
         for job in jobs:
             state = toga.Label(_fill(job.text, 50), style=Pack(flex=1))
-            button = toga.Button("Back up…", style=Pack(visibility="hidden"),
+            button = toga.Button(_("Back up…"), style=Pack(visibility="hidden"),
                                  on_press=lambda w, job=job: asyncio.create_task(_guarded(app, job.d, self._one(job))))
             self.lines[id(job)] = (state, button)
             rows.append(toga.Box(style=Pack(direction=ROW, align_items="center", gap=8), children=[
                 toga.Label(_fill(_label(job.d), 36), style=Pack(width=270)), state, button]))
-        which = "each device in the table" + (" (the ones the search shows)" if searched else "")
-        about = (f"Backs up the config of {which} that keeps one (airMAX, airFiber, LTU, GigaBeam, EdgeOS), with the "
-                 f"login remembered for it, {devicetools.BACKUP_AT_ONCE} at a time; one the same as the device's "
-                 "last backup isn't kept again. Devices without a saved login are skipped and listed at the end, "
-                 "each with a Back up… button that asks for its login.")
+        if searched:
+            about = tr("Backs up the config of each device in the table (the ones the search shows) that keeps one "
+                       "(airMAX, airFiber, LTU, GigaBeam, EdgeOS), with the login remembered for it, {count} at a "
+                       "time; one the same as the device's last backup isn't kept again. Devices without a saved "
+                       "login are skipped and listed at the end, each with a Back up… button that asks for its "
+                       "login.",
+                       count=devicetools.BACKUP_AT_ONCE)
+        else:
+            about = tr("Backs up the config of each device in the table that keeps one (airMAX, airFiber, LTU, "
+                       "GigaBeam, EdgeOS), with the login remembered for it, {count} at a time; one the same as the "
+                       "device's last backup isn't kept again. Devices without a saved login are skipped and listed "
+                       "at the end, each with a Back up… button that asks for its login.",
+                       count=devicetools.BACKUP_AT_ONCE)
         self.bar = toga.ProgressBar(max=100, value=0, style=Pack(flex=1))
         self.summary = toga.Label("", style=Pack(flex=1))
-        self.stop_button = toga.Button("Stop", on_press=self.stopping, enabled=False)
+        self.stop_button = toga.Button(_("Stop"), on_press=self.stopping, enabled=False)
         size = (860, 560)
-        self.window = toga.Window(title="Back up all configs", size=size, on_close=self.closing,
+        self.window = toga.Window(title=_("Back up all configs"), size=size, on_close=self.closing,
                                   position=app._over_main(size))
         self.window.content = toga.Box(style=Pack(direction=COLUMN, margin=12, gap=8), children=[
             toga.Label(_fill(about, 112)),
@@ -1386,8 +1445,8 @@ class BackupAllWindow:
             self.bar,
             toga.Box(style=Pack(direction=ROW, align_items="center", gap=8), children=[
                 self.summary, self.stop_button,
-                toga.Button("Show folder", on_press=lambda w: _show_folder(devicetools.backup_root())),
-                toga.Button("Close", on_press=lambda w: self.closing(w) and self.window.close())])])
+                toga.Button(_("Show folder"), on_press=lambda w: _show_folder(devicetools.backup_root())),
+                toga.Button(_("Close"), on_press=lambda w: self.closing(w) and self.window.close())])])
         _backup_all = self
         app._show_over_main(self.window)
         asyncio.create_task(self.run())
@@ -1403,7 +1462,7 @@ class BackupAllWindow:
     def stopping(self, widget, **kwargs):
         self.stop.set()
         self.stop_button.enabled = False
-        self.summary.text = "Stopping…"
+        self.summary.text = _("Stopping…")
 
     async def run(self):
         app = self.app
@@ -1420,11 +1479,11 @@ class BackupAllWindow:
         for job in self.jobs:
             self.show(job)
         said = devicetools.backup_summary(self.jobs)
-        self.summary.text = f"Done: {said}."
-        app._append_log("Back up all configs:\n" + "".join(f"  {_label(job.d)}: {job.text}\n" for job in self.jobs)
-                        + f"  {said}.", status=False)
-        app.status.text = f"Back up all configs: {said}." + (
-            "" if self.window.visible else " Device > Back up all configs… shows how each went.")
+        self.summary.text = tr("Done: {summary}.", summary=said)
+        app._append_log(_("Back up all configs:") + "\n" + "".join(f"  {_label(job.d)}: {job.text}\n"
+                                                                   for job in self.jobs) + f"  {said}.", status=False)
+        app.status.text = i18n.sentences(tr("Back up all configs: {summary}.", summary=said), "" if self.window.visible
+                                         else _("Device > Back up all configs… shows how each went."))
 
     def show(self, job):
         """How a job went, in its line; with the counts under the lines and in the status line."""
@@ -1439,7 +1498,7 @@ class BackupAllWindow:
             done = sum(j.state not in ("waiting", "backing up") for j in self.jobs)
             self.bar.value = 100 * done / max(1, len(self.jobs))
             self.summary.text = devicetools.backup_summary(self.jobs) + "…"
-            self.app.status.text = f"Back up all configs: {done} of {len(self.jobs)} done…"
+            self.app.status.text = tr("Back up all configs: {done} of {total} done…", done=done, total=len(self.jobs))
         else:
             self.bar.value = 100
 
@@ -1450,15 +1509,16 @@ class BackupAllWindow:
         """A device's own Back up… button: its login asked for, then backed up as the run does."""
         app, d = self.app, job.d
         if _busy.get(d.key):
-            app.status.text = f"{d.ip} is {_busy[d.key]}: back it up once that's done."
+            app.status.text = tr("{ip} is {doing}: back it up once that's done.", ip=d.ip, doing=_(_busy[d.key]))
             return
         _state, button = self.lines[id(job)]
-        login = await ask_route(app, d, f"Log in to back up its config ({devicetools.CONFIG_FILES[job.kind]}).")
+        login = await ask_route(app, d, tr("Log in to back up its config ({file}).",
+                                           file=devicetools.CONFIG_FILES[job.kind]))
         if not login:
             return
         button.enabled = False
-        _busy[d.key] = "backing up"
-        job.state, job.said = "backing up", ""
+        _busy[d.key] = N_("backing up")
+        job.state, job.said = "backing up", ""  # (the job's state: devicetools says it)
         self.show(job)
         try:
             job.state, job.backup = await _work(devicetools.back_up, login, d, job.kind)
@@ -1467,8 +1527,8 @@ class BackupAllWindow:
         finally:
             _busy.pop(d.key, None)
         self.show(job)
-        self.summary.text = f"Done: {devicetools.backup_summary(self.jobs)}."
-        app._append_log(f"Config backup of {_label(d)}: {job.text}")
+        self.summary.text = tr("Done: {summary}.", summary=devicetools.backup_summary(self.jobs))
+        app._append_log(tr("Config backup of {device}: {detail}", device=_label(d), detail=job.text))
 
 
 # ---------------------------------------------------------------------------
@@ -1484,55 +1544,56 @@ async def upload_flow(app, d, backup=None):
     kind = devicetools.config_kind(d)
     if backup is None:
         path = await app.main_window.dialog(toga.OpenFileDialog(
-            f"Upload a config to {d.ip} ({devicetools.CONFIG_NAMES[kind]})"))
+            tr("Upload a config to {ip} ({file})", ip=d.ip, file=devicetools.CONFIG_NAMES[kind])))
         if not path:
             return
         try:
             text, meta = devicetools.read_config_file(path)
         except (OSError, devicetools.ToolError) as e:
-            await app.main_window.dialog(toga.ErrorDialog("Upload config", str(e)))
+            await app.main_window.dialog(toga.ErrorDialog(_("Upload config"), str(e)))
             return
         source = Path(path).name
     else:
         try:
             text, meta = backup.text(), backup.meta
         except OSError as e:
-            await app.main_window.dialog(toga.ErrorDialog("Restore", str(e)))
+            await app.main_window.dialog(toga.ErrorDialog(_("Restore"), str(e)))
             return
-        source = f"the backup taken {backup.date}"
+        source = tr("the backup taken {date}", date=backup.date)
     refuse, warn = devicetools.upload_check(d, kind, text, meta)
     if refuse:
-        await app.main_window.dialog(toga.ErrorDialog("Can't upload this config", refuse))
+        await app.main_window.dialog(toga.ErrorDialog(_("Can't upload this config"), refuse))
         return
-    if warn and not await app.main_window.dialog(toga.QuestionDialog("Upload this config?", warn + "\n\nGo on?")):
+    if warn and not await app.main_window.dialog(toga.QuestionDialog(_("Upload this config?"),
+                                                                     warn + "\n\n" + _("Go on?"))):
         return
-    login = await ask_route(app, d, f"Log in to upload {source}: what changes is shown first.")
+    login = await ask_route(app, d, tr("Log in to upload {source}: what changes is shown first.", source=source))
     if not login:
         return
-    _busy[d.key] = "uploading config"
+    _busy[d.key] = N_("uploading config")
     try:
-        app.status.text = f"Reading the config of {d.ip} to compare…"
+        app.status.text = tr("Reading the config of {ip} to compare…", ip=d.ip)
         try:
             current, _pending = await _work(devicetools.read_device_config, login, kind)
             tools = await _work(devicetools.config_tools, login, kind)
         except (sshrun.SSHError, devicetools.ToolError) as e:
             app.status.text = f"{d.ip}: {e}"
-            await app.main_window.dialog(toga.ErrorDialog("Upload config", str(e)))
+            await app.main_window.dialog(toga.ErrorDialog(_("Upload config"), str(e)))
             return
         app.status.text = ""
         choice = await _diff_window(app, d, kind, current, text, source, tools)
         if not choice:
             return
         apply = choice == "apply"
-        progress = Progress(app, f"Uploading a config: {d.ip}", f"{_label(d)}: {source}")
+        progress = Progress(app, tr("Uploading a config: {ip}", ip=d.ip), f"{_label(d)}: {source}")
         progress.no_cancel()
         outcome = {}
 
         def work():
             try:
-                kept = devicetools.save_backup(d, current, kind, "before upload")
+                kept = devicetools.save_backup(d, current, kind, N_("before upload"))
                 app._from_worker(_refresh_backups, d)
-                progress.show(f"Kept its current config as a backup ({kept.date}).")
+                progress.show(tr("Kept its current config as a backup ({date}).", date=kept.date))
                 outcome["said"] = devicetools.push_config(login, kind, text, apply, report=progress.show)
             except (devicetools.ToolError, sshrun.SSHError, OSError) as e:
                 outcome["error"] = str(e)
@@ -1548,18 +1609,23 @@ async def upload_flow(app, d, backup=None):
 async def _diff_window(app, d, kind, current, text, source, tools):
     """What uploading the config changes on the device; "save", "apply" or None (cancelled)."""
     diff, changed = devicetools.config_diff(current, text)
-    boot = "its boot config" if kind == "edgeos" else "flash"
-    heading = (f"{source} → {_label(d)}: {changed} line(s) change." if changed
-               else f"{source} → {_label(d)}: no differences, the device has this config already.")
-    note = (f"Save writes it to {boot}: it takes effect at the next reboot. Apply now also applies it: the device "
-            "restarts what the changes affect, and the connection to it can drop for a moment. Either way the "
-            "device's current config is kept as a backup first.")
-    note += f"\n{terms.RISKS['upload']} {terms.RISKS['apply' if tools['apply'] else 'save']} {terms.TESTED}"
+    edgeos = kind == "edgeos"
+    heading = (tr("{source} → {device}: {count} line(s) change.", source=source, device=_label(d), count=changed)
+               if changed else tr("{source} → {device}: no differences, the device has this config already.",
+                                  source=source, device=_label(d)))
+    note = (_("Save writes it to its boot config: it takes effect at the next reboot. Apply now also applies it: the "
+              "device restarts what the changes affect, and the connection to it can drop for a moment. Either way "
+              "the device's current config is kept as a backup first.") if edgeos else
+            _("Save writes it to flash: it takes effect at the next reboot. Apply now also applies it: the device "
+              "restarts what the changes affect, and the connection to it can drop for a moment. Either way the "
+              "device's current config is kept as a backup first."))
+    note += "\n" + i18n.sentences(_(terms.RISKS["upload"]), _(terms.RISKS["apply" if tools["apply"] else "save"]),
+                                  _(terms.TESTED))
     if tools["why"]:
         note += f"\n{tools['why']}"
-    return await _diff_view(app, f"Upload config: {d.ip}", heading, diff, note, [
-        ("Cancel", None, True), (f"Save ({'next boot' if kind == 'edgeos' else 'to flash'})", "save", tools["save"]),
-        ("Apply now", "apply", tools["apply"])])
+    return await _diff_view(app, tr("Upload config: {ip}", ip=d.ip), heading, diff, note, [
+        (_("Cancel"), None, True), (_("Save (next boot)") if edgeos else _("Save (to flash)"), "save", tools["save"]),
+        (_("Apply now"), "apply", tools["apply"])])
 
 
 async def _diff_view(app, title, heading, diff, note, buttons):
@@ -1578,7 +1644,7 @@ async def _diff_view(app, title, heading, diff, note, buttons):
             answer.set_result(None)
         return True
 
-    view = toga.MultilineTextInput(readonly=True, value=diff or "(no differences)",
+    view = toga.MultilineTextInput(readonly=True, value=diff or _("(no differences)"),
                                    style=Pack(flex=1, font_family="monospace", font_size=11))
     size = (900, 640)
     window = toga.Window(title=title, size=size, on_close=closing, position=app._over_main(size))
@@ -1604,19 +1670,19 @@ async def reboot_flow(app, d):
     if _busy.get(d.key):
         return
     hops = route(app, d)
-    text = (f"{_label(d)} restarts and is offline for a minute or two, longer for some models: whatever goes "
-            "through it stops meanwhile.")
+    text = tr("{device} restarts and is offline for a minute or two, longer for some models: whatever goes through it "
+              "stops meanwhile.", device=_label(d))
     if hops:
-        text += f" It's reached through {_through(hops)}."
+        text = i18n.sentences(text, tr("It's reached through {route}.", route=_through(hops)))
     text += "\n\n" + terms.risk("reboot")
-    if not await app.main_window.dialog(toga.QuestionDialog(f"Reboot {d.ip}?", text)):
+    if not await app.main_window.dialog(toga.QuestionDialog(tr("Reboot {ip}?", ip=d.ip), text)):
         return
-    login = await ask_route(app, d, "Log in to reboot it.")
+    login = await ask_route(app, d, _("Log in to reboot it."))
     if not login:
         return
-    _busy[d.key] = "rebooting"
+    _busy[d.key] = N_("rebooting")
     try:
-        progress = Progress(app, f"Reboot: {d.ip}", _label(d))
+        progress = Progress(app, tr("Reboot: {ip}", ip=d.ip), _label(d))
         outcome = {}
 
         def work():
@@ -1626,7 +1692,7 @@ async def reboot_flow(app, d):
                 outcome["error"] = str(e)
 
         await _work(work)
-        message = outcome.get("error") or f"Rebooted: back after {outcome['took']:.0f} s."
+        message = outcome.get("error") or tr("Rebooted: back after {seconds:.0f} s.", seconds=outcome["took"])
         progress.finish(message)
         app.status.text = f"{d.ip}: {message}"
     finally:
@@ -1640,27 +1706,27 @@ async def locate_flow(app, d):
         try:
             await _work(devicetools.locate, login, d, False)
         except (devicetools.ToolError, sshrun.SSHError) as e:
-            app.status.text = f"Stop locating {d.ip}: {e}"
+            app.status.text = tr("Stop locating {ip}: {error}", ip=d.ip, error=e)
             return
         _locating.pop(d.key, None)
-        app.status.text = f"{d.ip}: its LED is back to normal."
+        app.status.text = tr("{ip}: its LED is back to normal.", ip=d.ip)
         return
-    login = await ask_route(app, d, "Log in to blink its LED.")
+    login = await ask_route(app, d, _("Log in to blink its LED."))
     if not login:
         return
     try:
         state = await _work(devicetools.locate, login, d, True)
     except (devicetools.ToolError, sshrun.SSHError) as e:
-        app.status.text = f"Locate {d.ip}: {e}"
-        await app.main_window.dialog(toga.ErrorDialog("Locate", str(e)))
+        app.status.text = tr("Locate {ip}: {error}", ip=d.ip, error=e)
+        await app.main_window.dialog(toga.ErrorDialog(_("Locate"), str(e)))
         return
     _locating[d.key] = login
-    said = "" if state else (" It doesn't say it's locating: it may be busy (upgrading)." if state is False
-                             else " It doesn't say whether it took.")
-    app.status.text = f"{d.ip}: its LED is blinking.{said}"
+    said = "" if state else (_("It doesn't say it's locating: it may be busy (upgrading).") if state is False
+                             else _("It doesn't say whether it took."))
+    app.status.text = i18n.sentences(tr("{ip}: its LED is blinking.", ip=d.ip), said)
     if await app.main_window.dialog(toga.QuestionDialog(
-            "Locating", f"{_label(d)}'s LED is blinking.{said}\n\nStop it now? (No keeps it blinking: Stop locating, "
-                        "in its menu, stops it later.)")):
+            _("Locating"), i18n.sentences(tr("{device}'s LED is blinking.", device=_label(d)), said) + "\n\n" +
+            _("Stop it now? (No keeps it blinking: Stop locating, in its menu, stops it later.)"))):
         await locate_flow(app, d)
 
 
@@ -1672,10 +1738,10 @@ async def scan_address(app):
     """Scan from device with none selected: log in to a device by its address (one the scan
     didn't find, over a VPN say), list it, and what it sees under it."""
     if app.running or app.rescanning or app.finding:
-        app.status.text = "Works once the scan has finished."
+        app.status.text = _("Works once the scan has finished.")
         return
     if not sshrun.available():
-        app.status.text = "Scan from device needs ssh and scp."
+        app.status.text = _("Scan from device needs ssh and scp.")
         return
     ip, port = "", 22
     user, password, remember, problem = app.settings.get("ssh_user") or "", "", False, ""
@@ -1687,18 +1753,18 @@ async def scan_address(app):
         known = app.result.inv.find(ip=ip) if app.result else None
         login = sshrun.Login(ip, port, user, password, terminal.host_key_alias(known.mac if known else None, ip),
                              app.known_hosts)
-        app.status.text = f"Logging in to {login.where}…"
+        app.status.text = tr("Logging in to {where}…", where=login.where)
         try:
             await _work(sshrun.check_login, login)
             break
         except sshrun.SSHError as e:
             app.status.text = problem = str(e)
     if app.running or app.rescanning or app.finding:
-        app.status.text = "A scan started meanwhile: Scan from device again once it has finished."
+        app.status.text = _("A scan started meanwhile: Scan from device again once it has finished.")
         return
     result = app.result or _empty_result()
     app.spinner.start()
-    app.status.text = f"Reading what {ip} sees…"
+    app.status.text = tr("Reading what {ip} sees…", ip=ip)
     try:
         def work():
             return devicetools.scan_from_address(result, login, core.local_macs())
@@ -1706,7 +1772,7 @@ async def scan_address(app):
         try:
             finder, sightings, seen, new = await _work(work)
         except (sshrun.SSHError, devicetools.ToolError) as e:
-            app.status.text = f"Scan from {ip}: {e}"
+            app.status.text = tr("Scan from {ip}: {error}", ip=ip, error=e)
             return
     finally:
         app.spinner.stop()
@@ -1714,7 +1780,7 @@ async def scan_address(app):
         app.result = result  # the table's devices from now on, as a scan's would be
         app.export_button.enabled = True
     elif result is not app.result:
-        app.status.text = f"Scan from {ip} finished after a new scan started: start it again."
+        app.status.text = tr("Scan from {ip} finished after a new scan started: start it again.", ip=ip)
         return
     app._show_devices(result.devices)
     if not finder.ubnt_packets:  # what it is: UBNT discovery sent straight to it, as Rescan device does
@@ -1728,8 +1794,8 @@ async def scan_address(app):
         if finder.mac and credstore.save(finder.mac, user, password):
             _logins(app)[finder.mac] = {"user": user, "port": port}
         elif not finder.mac:
-            app._append_log(f"{ip}'s login isn't remembered: the app didn't learn its MAC address, which it's filed "
-                            "under.")
+            app._append_log(tr("{ip}'s login isn't remembered: the app didn't learn its MAC address, which it's filed "
+                               "under.", ip=ip))
     app._save_settings()
     _report_scan(app, finder, sightings, seen, new)
     await warn_factory_login(app, finder, login)
@@ -1742,14 +1808,14 @@ def _empty_result():
 
 async def _address_window(app, ip, port, user, password, remember, problem):
     answer = app.loop.create_future()
-    ip_box = toga.TextInput(value=ip, placeholder="e.g. 10.20.0.1", style=Pack(flex=1))
+    ip_box = toga.TextInput(value=ip, placeholder=_("e.g. 10.20.0.1"), style=Pack(flex=1))
     port_box = toga.TextInput(value=str(port), style=Pack(width=80))
-    user_box = toga.TextInput(value=user, placeholder="e.g. ubnt or admin", style=Pack(flex=1))
+    user_box = toga.TextInput(value=user, placeholder=_("e.g. ubnt or admin"), style=Pack(flex=1))
     password_box = toga.PasswordInput(value=password, style=Pack(flex=1))
     trouble = toga.Label(_fill(problem, 46), style=Pack(flex=1))
     can_remember = credstore.available()
-    keep = toga.Switch(f"Remember for this device (in {credstore.store_name()})", value=remember and can_remember,
-                       enabled=can_remember)
+    keep = toga.Switch(tr("Remember for this device (in {store})", store=credstore.store_name()),
+                       value=remember and can_remember, enabled=can_remember)
 
     def finish(ok):
         if answer.done():
@@ -1757,13 +1823,13 @@ async def _address_window(app, ip, port, user, password, remember, problem):
         if ok:
             address, text = ip_box.value.strip(), port_box.value.strip()
             if not re.fullmatch(r"\d{1,3}(\.\d{1,3}){3}", address) or not core._usable_ip(address):
-                trouble.text = _fill("The address is an IPv4 address, such as 10.20.0.1.", 46)
+                trouble.text = _fill(_("The address is an IPv4 address, such as 10.20.0.1."), 46)
                 return
             if not text.isdigit() or not 0 < int(text) < 65536:
-                trouble.text = _fill("The port is a number from 1 to 65535.", 46)
+                trouble.text = _fill(_("The port is a number from 1 to 65535."), 46)
                 return
             if not user_box.value.strip():
-                trouble.text = "Logging in needs a username."
+                trouble.text = _("Logging in needs a username.")
                 return
             answer.set_result((address, int(text), user_box.value.strip(), password_box.value, keep.value))
         else:
@@ -1781,21 +1847,21 @@ async def _address_window(app, ip, port, user, password, remember, problem):
     label = Pack(width=80)
     row = Pack(direction=ROW, align_items="center", gap=8)
     size = (580, 340)
-    window = toga.Window(title="Scan from a device", size=size, resizable=False, on_close=closing,
+    window = toga.Window(title=_("Scan from a device"), size=size, resizable=False, on_close=closing,
                          position=app._over_main(size))
     window.content = toga.Box(style=Pack(direction=COLUMN, margin=14, gap=8), children=[
-        toga.Label(_fill("Log in to a device by its address, one the scan didn't find (over a VPN, say), to list "
-                         "what it sees: its ARP table, LLDP neighbours and, on airOS, its stations. They're listed "
-                         "under it, and the device tools reach them through it.", 74)),
-        toga.Box(style=row, children=[toga.Label("Address", style=label), ip_box]),
-        toga.Box(style=row, children=[toga.Label("Port", style=label), port_box, trouble]),
-        toga.Box(style=row, children=[toga.Label("Username", style=label), user_box]),
-        toga.Box(style=row, children=[toga.Label("Password", style=label), password_box]),
+        toga.Label(_fill(_("Log in to a device by its address, one the scan didn't find (over a VPN, say), to list "
+                           "what it sees: its ARP table, LLDP neighbours and, on airOS, its stations. They're listed "
+                           "under it, and the device tools reach them through it."), 74)),
+        toga.Box(style=row, children=[toga.Label(_("Address"), style=label), ip_box]),
+        toga.Box(style=row, children=[toga.Label(_("Port"), style=label), port_box, trouble]),
+        toga.Box(style=row, children=[toga.Label(_("Username"), style=label), user_box]),
+        toga.Box(style=row, children=[toga.Label(_("Password"), style=label), password_box]),
         keep,
         toga.Box(style=Pack(direction=ROW, gap=8), children=[
             toga.Box(style=Pack(flex=1)),
-            toga.Button("Cancel", on_press=lambda w: finish(False)),
-            toga.Button("Log in and scan", on_press=lambda w: finish(True))])])
+            toga.Button(_("Cancel"), on_press=lambda w: finish(False)),
+            toga.Button(_("Log in and scan"), on_press=lambda w: finish(True))])])
     app._show_over_main(window)
     ip_box.focus()
     app.cancel_ssh_login = lambda: finish(False)

@@ -43,6 +43,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 from opendisco import core, devicetools
+from opendisco.i18n import _, tr
 
 real = devicetools.sshrun  # the module this one stands in for (it stays devicetools' choice)
 
@@ -72,7 +73,7 @@ def _demo(login) -> bool:
 
 def _network():
     if NETWORK is None:
-        raise real.SSHError("The demo network has ended: its made-up devices are gone.", "other")
+        raise real.SSHError(_("The demo network has ended: its made-up devices are gone."), "other")
     return NETWORK
 
 
@@ -118,7 +119,7 @@ def download(login, path: str, local: Path, stop=None) -> None:
     gear = _network().connect(login, stop)
     data = gear.read(path)
     if data is None:
-        raise real.SSHError(f"Copying failed: scp: {path}: No such file or directory")
+        raise real.SSHError(tr("Copying failed: {reason}", reason=f"scp: {path}: No such file or directory"))
     _wait_copy(len(data), None, stop)
     Path(local).write_bytes(data)
 
@@ -128,7 +129,7 @@ def _wait_copy(size: int, progress, stop) -> None:
     steps = max(1, int(seconds / 0.25))
     for n in range(1, steps + 1):
         if stop is not None and stop.is_set():
-            raise real.SSHError("Cancelled.", "cancelled")
+            raise real.SSHError(_("Cancelled."), "cancelled")
         time.sleep(seconds / steps)
         if progress:
             progress(100 * n // steps)
@@ -197,7 +198,7 @@ def download_release(release_item: dict, folder: Path, progress=None, stop=None)
     total, steps = int(release_item.get("file_size") or len(data)), 20
     for n in range(1, steps + 1):
         if stop is not None and stop.is_set():
-            raise devicetools.ToolError("Cancelled.")
+            raise devicetools.ToolError(_("Cancelled."))
         time.sleep(DELAYS["download"] / steps)
         if progress:
             progress(total * n // steps, total)
@@ -329,20 +330,26 @@ class Network:
         for n, hop in enumerate(route):
             time.sleep(DELAYS["login"] if n == 0 else DELAYS["hop"])
             if stop is not None and stop.is_set():
-                raise real.SSHError("Cancelled.", "cancelled")
+                raise real.SSHError(_("Cancelled."), "cancelled")
             gear = self.find(hop.ip)
-            where = f"{hop.ip}, on the way to {login.ip}," if hop is not login else login.where
+            on_the_way = hop is not login
             if gear is None or not gear.up or (n == 0 and not gear.direct):
                 time.sleep(DELAYS["no answer"])
-                raise real.SSHError(f"No SSH answer from {hop.ip} port {hop.port}"
-                                    + (f", on the way to {login.ip}" if hop is not login else "") + " (timed out).",
+                raise real.SSHError(tr("No SSH answer from {ip} port {port}, on the way to {target} (timed out).",
+                                       ip=hop.ip, port=hop.port, target=login.ip) if on_the_way else
+                                    tr("No SSH answer from {ip} port {port} (timed out).", ip=hop.ip, port=hop.port),
                                     "timeout")
             if hop.port not in gear.ports or gear.ports[hop.port] != "ssh":
-                raise real.SSHError(f"Nothing accepts SSH connections on {hop.ip} port {hop.port}"
-                                    + (f", on the way to {login.ip}." if hop is not login else "."), "refused")
+                raise real.SSHError(tr("Nothing accepts SSH connections on {ip} port {port}, on the way to {target}.",
+                                       ip=hop.ip, port=hop.port, target=login.ip) if on_the_way else
+                                    tr("Nothing accepts SSH connections on {ip} port {port}.", ip=hop.ip,
+                                       port=hop.port), "refused")
             gear.check_host_key(hop)
             if not gear.accepts(hop.user, hop.password):
-                raise real.SSHError(f"{where} didn't accept the username and password.", "auth")
+                raise real.SSHError(tr("{hop}, on the way to {ip}, didn't accept the username and password.",
+                                       hop=hop.ip, ip=login.ip) if on_the_way else
+                                    tr("{device} didn't accept the username and password.", device=login.where),
+                                    "auth")
         return self.find(login.ip)
 
 
@@ -400,7 +407,8 @@ class Gear:
 
     def check_up(self, login) -> None:
         if not self.up:
-            raise real.SSHError(f"The connection to {login.where} dropped: Connection reset by peer", "other")
+            raise real.SSHError(tr("The connection to {device} dropped: {said}", device=login.where,
+                                   said="Connection reset by peer"), "other")
 
     def go_down(self, seconds: float, firmware: str | None = None) -> None:
         """It restarts: offline for that long, then back (with that firmware, when given)."""
@@ -506,9 +514,9 @@ class Gear:
             lines = []
         filed = [" ".join(line.split()[1:3]) for line in lines if line.split()[:1] == [login.alias]]
         if filed and self.host_key not in filed:
-            raise real.SSHError(f"The SSH key of {login.ip} changed since the last connection: it was reset or "
-                                "replaced, or something is in between. If that's expected, forget its saved SSH "
-                                "key, then try again.", "key")
+            raise real.SSHError(tr("The SSH key of {ip} changed since the last connection: it was reset or replaced, "
+                                   "or something is in between. If that's expected, forget its saved SSH key, then try "
+                                   "again.", ip=login.ip), "key")
         if not filed:
             try:
                 login.known_hosts.parent.mkdir(parents=True, exist_ok=True)
@@ -2162,7 +2170,7 @@ def session_factory(real_session):
                 threading.Thread(target=self._ping, args=(ip, emit), daemon=True).start()
                 return
             if getattr(self, "forward", None):  # a web UI's forward: there's none to reach
-                return self._closed("The demo network's devices are made up: they have no web UI to open.")
+                return self._closed(_("The demo network's devices are made up: they have no web UI to open."))
             target = dict(self.own) if getattr(self, "own", None) else parse_ssh(self.argv)
             password = self.password
             if isinstance(password, dict):
@@ -2172,7 +2180,7 @@ def session_factory(real_session):
                 target["user"] = "admin"
             self.program = Program(NETWORK, target, emit, self._closed)
             if NETWORK is None:
-                return self._closed("The demo network has ended: its made-up devices are gone.")
+                return self._closed(_("The demo network has ended: its made-up devices are gone."))
             self.program.start()
 
         def _ping(self, ip, emit) -> None:

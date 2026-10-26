@@ -67,10 +67,12 @@ import toga
 from toga.style import Pack
 from toga.style.pack import COLUMN, ROW
 
-from opendisco import core, phonessh
+from opendisco import core, i18n, phonessh
+from opendisco.i18n import N_, _, tr
 
+# Titles of tabs app.py makes, which show them in the app's language: looked up by _(name)
 DEVICE_TABS = ("Details", "Packets", "Tools")  # hidden while the page shows the scan's Notes and Log
-FIND_KINDS = {"HTTP": "find_http", "HTTPS": "find_https", "SSH": "find_ssh", "All ports": "all_ports"}
+FIND_KINDS = {"HTTP": "find_http", "HTTPS": "find_https", "SSH": "find_ssh", N_("All ports"): "all_ports"}
 CONSOLE_KEEP = 200_000  # characters of console output kept
 SHELL_COLUMNS = 64  # what the console shows in a line on an iPhone
 LIST_WIDTH = 360  # a tablet's device list, beside the device page: room for "· ↑ 8.7.25" after most names
@@ -105,7 +107,7 @@ def _nothing(*args, **kwargs):
 FALLBACKS = {"Picker": _SelectionPicker, "watch_keyboard": _nothing, "plain_entry": _nothing,
              "end_editing": _nothing, "done_bar": _nothing, "wide": lambda app: False,
              "side_by_side": lambda app: False, "clear_selection": _nothing, "search_field": _nothing,
-             "export_menu": _nothing, "here": lambda app: "this phone", "text_box": _nothing,
+             "export_menu": _nothing, "here": lambda app: _("this phone"), "text_box": _nothing,
              "menu_button": _nothing, "bar_button": _nothing, "open_file": None}
 
 
@@ -140,12 +142,12 @@ class Mirror:
 def main_screen(app) -> toga.Box:
     """Quick Scan, Full Scan and Stop across the top, the search and the devices under them, the
     status line at the bottom; on a tablet, the device page (Detail) to their right."""
-    quick = toga.Button("Quick Scan", on_press=lambda w, **kw: _scan(app, "Quick"), style=Pack(flex=1))
-    full = toga.Button("Full Scan", on_press=lambda w, **kw: _scan(app, "Full scan"), style=Pack(flex=1))
+    quick = toga.Button(_("Quick Scan"), on_press=lambda w, **kw: _scan(app, "Quick"), style=Pack(flex=1))
+    full = toga.Button(_("Full Scan"), on_press=lambda w, **kw: _scan(app, "Full scan"), style=Pack(flex=1))
     status_here = app.status
     app.status = Mirror(status_here, app.tool_status)
     app.start_button = Mirror(quick, full)
-    app.search.placeholder = "Search: IP, MAC, model, name, note…"  # (and firmware, status, via)
+    app.search.placeholder = _("Search: IP, MAC, model, name, note…")  # (and firmware, status, via)
     app.search.on_confirm = lambda w, **kw: hook(app, "end_editing")(app)
     app.search_count.style.update(color="#8a8a8e", font_size=13)
     content = toga.Box(style=Pack(direction=COLUMN, margin=10, gap=10), children=[
@@ -155,7 +157,7 @@ def main_screen(app) -> toga.Box:
         toga.Box(style=Pack(direction=ROW, align_items="center", gap=8), children=[app.spinner, status_here]),
     ])
     app.list_box = content
-    app.demo_button = toga.Button("Try the demo network", on_press=lambda w, **kw: app.try_demo())
+    app.demo_button = toga.Button(_("Try the demo network"), on_press=lambda w, **kw: app.try_demo())
     style = native(app).style_button
     style(quick)
     style(full)
@@ -195,7 +197,7 @@ class Detail:
 
 
 def _scan(app, mode: str):
-    app.mode.value = mode
+    app.mode.value = _(mode)  # (the mode list shows MODES' names in the app's language)
     if beside(app):  # the new scan clears the shown device's tabs; its Log shows how it goes
         show_scan(app)
     app.loop.create_task(app.on_start(None))
@@ -220,7 +222,8 @@ def fit(app):
                    *app.ssh_row.children[1:]):
         ui.style_button(button, "gray")
     hook(app, "export_menu")(app, lambda: export_choices(app), lambda kind: app.loop.create_task(app._export(kind)))
-    hook(app, "bar_button")(app, "plus", "Scan from an address", lambda: app.loop.create_task(_tool(app, "scan_address")))
+    hook(app, "bar_button")(app, "plus", _("Scan from an address"),
+                            lambda: app.loop.create_task(_tool(app, "scan_address")))
     hook(app, "watch_keyboard")(app, app.console)
     hook(app, "plain_entry")(app.ssh_input, send=True)
     if app.wide:  # beside the list until a device is tapped
@@ -251,8 +254,35 @@ def middle(app, content):
 
 
 EDITOR_HEIGHT = 170  # a panel's many-line text box (a note, the subnets to sweep)
+# (fit_panel goes by a button's English text: english())
 PRIMARY = ("Save", "Log in", "OK")  # a panel's buttons that go ahead: filled (Done just closes, as Back does)
 DANGER = ("Delete", "Reboot", "Restore", "Upload")  # what changes or loses something on a device: red
+_english = {}  # language -> {translated text: English text}
+
+
+def english(text: str) -> str:
+    """The English text a text shown in the app's language was translated from (itself when it's
+    English or no translation gives it): for code that goes by a widget's or a message's text."""
+    if i18n.language not in _english:
+        _english[i18n.language] = {shown: key for key, shown in i18n.catalog(i18n.language).items()}
+    return _english[i18n.language].get(text, text)
+
+
+def _this_computer(app, text: str):
+    """The text with "this computer" in it naming this device ("this iPhone"); None without it.
+    In another language, it's "this computer" as _() translates it, a wrapped label breaking its
+    line anywhere in it."""
+    computer = _("this computer")
+    if computer == "this computer":
+        if not re.search(r"this\s+computer", text):
+            return None
+        noun = hook(app, "here")(app).split(" ", 1)[-1]  # (a wrapped label may break the line between)
+        return re.sub(r"this(\s+)computer", lambda m: f"this{m.group(1)}{noun}", text)
+    pattern = r"\s*".join(map(re.escape, computer.replace(" ", "")))
+    if not re.search(pattern, text):
+        return None
+    here = hook(app, "here")(app)
+    return re.sub(pattern, lambda m: here, text)
 
 
 def fit_panel(app, box):
@@ -265,7 +295,7 @@ def fit_panel(app, box):
     ui = native(app)
     for widget in box.children:
         if isinstance(widget, toga.Button):
-            text = widget.text or ""  # (one styled already has none: it keeps its looks)
+            text = english(widget.text or "")  # (one styled already has none: it keeps its looks)
             if not text:
                 continue
             if text in PRIMARY:
@@ -285,11 +315,14 @@ def fit_panel(app, box):
                 hook(app, "watch_keyboard")(app, widget, follow=False)
         elif isinstance(widget, toga.TextInput):  # PasswordInput too
             hook(app, "plain_entry")(widget)
-        elif isinstance(widget, toga.Label) and re.search(r"this\s+computer", widget.text):
-            noun = hook(app, "here")(app).split(" ", 1)[-1]  # (a wrapped label may break the line between)
-            widget.text = re.sub(r"this(\s+)computer", lambda m: f"this{m.group(1)}{noun}", widget.text)
+        elif isinstance(widget, toga.Switch):
+            hook(app, "wrap_switch")(widget)
+        elif isinstance(widget, toga.Label) and (named := _this_computer(app, widget.text)) is not None:
+            widget.text = named
         elif isinstance(widget, toga.Box):
             fit_panel(app, widget)
+        elif isinstance(widget, toga.ScrollContainer) and isinstance(widget.content, toga.Box):
+            fit_panel(app, widget.content)
     if box.children and isinstance(box.children[-1], toga.Box) and all(
             isinstance(w, toga.Button) for w in box.children[-1].children):  # a row of buttons: at the right
         box.children[-1].insert(0, toga.Box(style=Pack(flex=1)))
@@ -301,32 +334,33 @@ def export_choices(app) -> list:
     from opendisco import records
     backups = records.all_backups()
     notes = len(app.device_notes.items)
-    details = {"scan": "Devices, firmware, CVEs and every issue, to print: HTML",
-               "data": "Every device, for a spreadsheet: CSV",
-               "security": "Known CVEs and outdated firmware: HTML",
-               "backups": f"{sum(len(p) for _, p in backups)} file(s) from {len(backups)} device(s): .zip"
-                          if backups else "None saved yet",
-               "notes": f"{notes} note(s): HTML" if notes else "None written yet",
-               "log": "The Log, as text"}
+    details = {"scan": _("Devices, firmware, CVEs and every issue, to print: HTML"),
+               "data": _("Every device, for a spreadsheet: CSV"),
+               "security": _("Known CVEs and outdated firmware: HTML"),
+               "backups": tr("{files} file(s) from {devices} device(s): .zip",
+                             files=sum(len(paths) for _mac, paths in backups), devices=len(backups))
+                          if backups else _("None saved yet"),
+               "notes": tr("{count} note(s): HTML", count=notes) if notes else _("None written yet"),
+               "log": _("The Log, as text")}
     enabled = {"scan": bool(app.result), "data": bool(app.result), "security": bool(app.result),
                "backups": bool(backups), "notes": bool(notes)}
-    return [(kind, button.rstrip("…"), details.get(kind, ""), enabled.get(kind, True))
+    return [(kind, _(button).rstrip("…"), details.get(kind, ""), enabled.get(kind, True))
             for kind, button, _text, _types in [records.SCAN_EXPORT, records.DATA_EXPORT, *records.SITE_EXPORTS]]
 
 
 # -- the device page ------------------------------------------------------------------
 def _device_tabs(app, shown: bool):
     """Show or hide Details, Packets and Tools (the scan's Notes and Log need none of them)."""
-    tabs = app.tabs.content
+    tabs, names = app.tabs.content, [_(name) for name in DEVICE_TABS]  # (their titles as shown)
     if shown:
-        for name in DEVICE_TABS:
+        for name in names:
             tabs[name].enabled = True
-        if app.tabs.current_tab.text not in DEVICE_TABS:
-            app.tabs.current_tab = "Details"
+        if app.tabs.current_tab.text not in names:
+            app.tabs.current_tab = _("Details")
     else:
-        if app.tabs.current_tab.text in DEVICE_TABS:
-            app.tabs.current_tab = "Notes"
-        for name in DEVICE_TABS:
+        if app.tabs.current_tab.text in names:
+            app.tabs.current_tab = _("Notes")
+        for name in names:
             tabs[name].enabled = False
 
 
@@ -337,7 +371,7 @@ def show_device(app, d):
     if app.ssh is not None and app.ssh[0] != d.key:
         app.ssh[1].close()
     _device_tabs(app, True)
-    title = d.name or d.model or d.ip or d.mac or "Device"
+    title = d.name or d.model or d.ip or d.mac or _("Device")
     subtitle = " · ".join(x for x in (d.ip, d.model if d.name else "") if x)
     if app.wide:
         app.page.key = d.key
@@ -346,15 +380,16 @@ def show_device(app, d):
 
 
 def _showing_scan(app) -> bool:
-    return not app.tabs.content["Details"].enabled
+    return not app.tabs.content[_("Details")].enabled
 
 
 def _scan_summary(app) -> str:
     if app.running:
-        return f"{app.mode.value}: scanning"
+        return tr("{mode}: scanning", mode=app.mode.value)
     if app.result:
-        return f"{app.mode.value}: {len(app.result.devices)} device(s), {app.result.elapsed:.0f}s"
-    return "No scan yet"
+        return tr("{mode}: {count} device(s), {seconds:.0f}s", mode=app.mode.value, count=len(app.result.devices),
+                  seconds=app.result.elapsed)
+    return _("No scan yet")
 
 
 def show_scan(app):
@@ -365,7 +400,7 @@ def show_scan(app):
         app.page.key = None
     if beside(app):
         hook(app, "clear_selection")(app)
-    app.page.show("Scan", _scan_summary(app))
+    app.page.show(_("Scan"), _scan_summary(app))
 
 
 def keep_selection(app, key):
@@ -392,37 +427,37 @@ def tools(app) -> toga.Box:
         return lambda w, **kw: app.loop.create_task(flow(app))
 
     grow = Pack(flex=1)
-    app.ping_button = toga.Button("Ping", on_press=lambda w, **kw: toggle_ping(app), style=grow)
+    app.ping_button = toga.Button(_("Ping"), on_press=lambda w, **kw: toggle_ping(app), style=grow)
     app.ssh_button = toga.Button("SSH", on_press=later(toggle_ssh), style=grow)
-    app.web_button = toga.Button("Web UI", on_press=action("web"), style=grow)
-    app.rescan_button = toga.Button("Rescan", on_press=action("rescan"), style=grow)
-    app.scan_from_button = toga.Button("Scan from device", on_press=later(scan_from), style=grow)
+    app.web_button = toga.Button(_("Web UI"), on_press=action("web"), style=grow)
+    app.rescan_button = toga.Button(_("Rescan"), on_press=action("rescan"), style=grow)
+    app.scan_from_button = toga.Button(_("Scan from device"), on_press=later(scan_from), style=grow)
 
     def tool(name):
         return lambda w, **kw: app.loop.create_task(_tool(app, name))
 
-    app.firmware_button = toga.Button("Firmware", on_press=tool("firmware"), style=grow)
-    app.config_button = toga.Button("Config", on_press=tool("config"), style=grow)
-    app.login_button = toga.Button("Login", on_press=tool("change_login"), style=grow)
-    app.backups_button = toga.Button("Backups", on_press=tool("backups"), style=grow)
-    app.backup_all_button = toga.Button("Back up all", on_press=tool("back_up_all"), style=grow)
-    app.reboot_button = toga.Button("Reboot", on_press=tool("reboot"), style=grow)
-    app.locate_button = toga.Button("Locate", on_press=tool("locate"), style=grow)
-    app.link_button = toga.Button("Link health", on_press=tool("link"), style=grow)
-    app.port_picker = hook(app, "Picker")(app, list(FIND_KINDS))
-    app.find_button = toga.Button("Find", on_press=lambda w, **kw: find_port(app), style=grow)
-    app.note_button = toga.Button("Note", on_press=action("note"), style=grow)
-    app.export_device_button = toga.Button("Export device", on_press=action("export_device"), style=grow)
-    app.copy_ip_button = toga.Button("Copy IP", on_press=action("copy_ip"), style=grow)
-    app.copy_mac_button = toga.Button("Copy MAC", on_press=action("copy_mac"), style=grow)
-    app.copy_menu = hook(app, "menu_button")(app, "Copy", lambda: _copy_items(app))
+    app.firmware_button = toga.Button(_("Firmware"), on_press=tool("firmware"), style=grow)
+    app.config_button = toga.Button(_("Config"), on_press=tool("config"), style=grow)
+    app.login_button = toga.Button(_("Login"), on_press=tool("change_login"), style=grow)
+    app.backups_button = toga.Button(_("Backups"), on_press=tool("backups"), style=grow)
+    app.backup_all_button = toga.Button(_("Back up all"), on_press=tool("back_up_all"), style=grow)
+    app.reboot_button = toga.Button(_("Reboot"), on_press=tool("reboot"), style=grow)
+    app.locate_button = toga.Button(_("Locate"), on_press=tool("locate"), style=grow)
+    app.link_button = toga.Button(_("Link health"), on_press=tool("link"), style=grow)
+    app.port_picker = hook(app, "Picker")(app, [_(kind) for kind in FIND_KINDS])  # (find_port maps it back)
+    app.find_button = toga.Button(_("Find"), on_press=lambda w, **kw: find_port(app), style=grow)
+    app.note_button = toga.Button(_("Note"), on_press=action("note"), style=grow)
+    app.export_device_button = toga.Button(_("Export device"), on_press=action("export_device"), style=grow)
+    app.copy_ip_button = toga.Button(_("Copy IP"), on_press=action("copy_ip"), style=grow)
+    app.copy_mac_button = toga.Button(_("Copy MAC"), on_press=action("copy_mac"), style=grow)
+    app.copy_menu = hook(app, "menu_button")(app, _("Copy"), lambda: _copy_items(app))
     app.tool_status = toga.Label("", style=Pack(margin_left=2))
-    app.console = toga.MultilineTextInput(readonly=True, placeholder="What the tools find shows here.",
+    app.console = toga.MultilineTextInput(readonly=True, placeholder=_("What the tools find shows here."),
                                           style=Pack(flex=1, font_family="monospace", font_size=10,
                                                      color="#e8e8e8", background_color="#16181d"))
     # A command goes when the keyboard's send key is tapped; Ctrl-C stops the one running.
-    app.ssh_input = toga.TextInput(placeholder="Command (send to run it)", on_confirm=lambda w, **kw: send_ssh(app),
-                                   style=Pack(flex=1))
+    app.ssh_input = toga.TextInput(placeholder=_("Command (send to run it)"),
+                                   on_confirm=lambda w, **kw: send_ssh(app), style=Pack(flex=1))
     app.ssh_row = toga.Box(style=Pack(direction=ROW, align_items="center", gap=8), children=[
         app.ssh_input,
         toga.Button("Ctrl-C", on_press=lambda w, **kw: app.ssh and app.ssh[1].send("\x03"))])
@@ -433,7 +468,7 @@ def tools(app) -> toga.Box:
     app.phone_locating = {}  # device key -> the login its LED was set blinking with (phonetools.locate)
     app.phone_passwords = {}  # device key -> its SSH password, for this run only: phones keep none
     if app.copy_menu is not None:  # three to a row: the short name
-        app.export_device_button.text = "Export"
+        app.export_device_button.text = _("Export")
     row = Pack(direction=ROW, gap=8)
     app.tools_box = toga.Box(style=Pack(direction=COLUMN, margin=12, gap=8), children=[
         toga.Box(style=row, children=[app.ping_button, app.ssh_button, app.web_button]),
@@ -442,7 +477,7 @@ def tools(app) -> toga.Box:
         toga.Box(style=row, children=[app.backups_button, app.backup_all_button]),
         toga.Box(style=row, children=[app.reboot_button, app.locate_button]),
         toga.Box(style=Pack(direction=ROW, align_items="center", gap=8), children=[
-            toga.Label("Find port", style=Pack(font_weight="bold", margin_left=2)), app.port_picker.widget,
+            toga.Label(_("Find port"), style=Pack(font_weight="bold", margin_left=2)), app.port_picker.widget,
             app.find_button]),
         *([toga.Box(style=row, children=[app.note_button, app.export_device_button, app.copy_menu])]
           if app.copy_menu is not None else
@@ -463,9 +498,9 @@ async def _tool(app, name: str):
 def _copy_items(app) -> list:
     """The Copy menu: the open device's IP and MAC address."""
     d = app._selected_device()
-    return [(f"IP address  {d.ip}" if d and d.ip else "IP address", bool(d and d.ip),
+    return [(tr("IP address  {ip}", ip=d.ip) if d and d.ip else _("IP address"), bool(d and d.ip),
              lambda: app._device_action("copy_ip")),
-            (f"MAC address  {d.mac}" if d and d.mac else "MAC address", bool(d and d.mac),
+            (tr("MAC address  {mac}", mac=d.mac) if d and d.mac else _("MAC address"), bool(d and d.mac),
              lambda: app._device_action("copy_mac"))]
 
 
@@ -490,12 +525,12 @@ def toggle_ping(app):
         return
     d = app._selected_device()
     if d is None or not d.ip:
-        app.status.text = "Select a device first."
+        app.status.text = _("Select a device first.")
         return
     stop = threading.Event()
     app.pinging = (d.key, stop)
     retitle = native(app).retitle
-    retitle(app.ping_button, "Stop")
+    retitle(app.ping_button, _("Stop"))
     if app.console.value:
         say(app, "")
 
@@ -508,7 +543,7 @@ def toggle_ping(app):
 
     def stopped():
         app.pinging = None
-        retitle(app.ping_button, "Ping")
+        retitle(app.ping_button, _("Ping"))
 
     threading.Thread(target=work, daemon=True).start()
 
@@ -519,7 +554,7 @@ def find_port(app):
     if app.finding:
         app.on_stop(None)
         return
-    app._device_action(FIND_KINDS[app.port_picker.value])
+    app._device_action({_(kind): action for kind, action in FIND_KINDS.items()}[app.port_picker.value])
 
 
 def update_demo_button(app):
@@ -538,19 +573,19 @@ def update_tools(app):
     d = app._selected_device()
     state = app._menu_state(d)
     if beside(app) and _showing_scan(app):  # a scan started or ended beside it
-        app.page.show("Scan", _scan_summary(app))
+        app.page.show(_("Scan"), _scan_summary(app))
     idle = bool(d and d.ip and app.result) and not (app.running or app.rescanning or app.finding or app.device_job)
-    retitle(app.find_button, "Stop" if app.finding else "Find")
+    retitle(app.find_button, _("Stop") if app.finding else _("Find"))
     app.find_button.enabled = idle or app.finding
     app.ping_button.enabled = bool(d and d.ip) or app.pinging is not None
-    retitle(app.ssh_button, "Disconnect" if app.ssh else "SSH")
+    retitle(app.ssh_button, _("Disconnect") if app.ssh else "SSH")
     app.ssh_button.enabled = app.ssh is not None or (phonessh.available() and bool(d and d.ip))
     app.scan_from_button.enabled = phonessh.available() and idle
     for button, name in ((app.web_button, "web"), (app.rescan_button, "rescan"), (app.copy_ip_button, "copy_ip"),
                          (app.copy_mac_button, "copy_mac"), (app.note_button, "note"),
                          (app.export_device_button, "export_device")):
         button.enabled = state[name][1]
-    retitle(app.note_button, "Edit note" if d and d.note else "Note")
+    retitle(app.note_button, _("Edit note") if d and d.note else _("Note"))
     if app.device_job:
         app.rescan_button.enabled = False
     if phonessh.available():
@@ -588,7 +623,8 @@ async def ask_route(app, d, purpose: str):
         hops = []
     via = ()
     for n, hop in enumerate(hops, 1):
-        login = await ask_login(app, hop, f"Device {n} of {len(hops)} on the way to {d.ip}. {purpose}", via)
+        login = await ask_login(app, hop, tr("Device {number} of {count} on the way to {ip}. {purpose}", number=n,
+                                             count=len(hops), ip=d.ip, purpose=purpose), via)
         if not login:
             return None
         via += (login,)
@@ -605,7 +641,7 @@ async def warn_factory_login(app, d, login) -> None:
         if devicetools.is_factory(login):
             label = f"{d.ip}  {d.name or d.model or d.mac or ''}".strip()
             await app.main_window.dialog(toga.InfoDialog(
-                "Factory login", f"{label}\n\n{core.factory_login_text(login.user, login.password)}"))
+                _("Factory login"), f"{label}\n\n{core.factory_login_text(login.user, login.password)}"))
 
 
 async def ask_login(app, d, purpose: str, via: tuple = ()):
@@ -616,7 +652,7 @@ async def ask_login(app, d, purpose: str, via: tuple = ()):
     saved = logins.get(d.mac) if d.mac else None
     answer = app.loop.create_future()
     user = toga.TextInput(value=(saved or {}).get("user") or app.settings.get("ssh_user") or "",
-                          placeholder="e.g. ubnt or admin", style=Pack(flex=1))
+                          placeholder=_("e.g. ubnt or admin"), style=Pack(flex=1))
     password = toga.PasswordInput(value=app.phone_passwords.get(d.key, ""), style=Pack(flex=1))
     port = toga.TextInput(value=str((saved or {}).get("port") or d.port("ssh")), style=Pack(flex=1))
     trouble = toga.Label("")
@@ -631,11 +667,11 @@ async def ask_login(app, d, purpose: str, via: tuple = ()):
         hook(app, "end_editing")(app)
         text = port.value.strip()
         if not text.isdigit() or not 0 < int(text) < 65536:
-            trouble.text = "The port is a number from 1 to 65535."
+            trouble.text = _("The port is a number from 1 to 65535.")
             return
         login = phonessh.Login(d.ip, int(text), user.value.strip(), password.value, alias, app.known_hosts, via)
         go.enabled = False
-        trouble.text = f"Logging in to {d.ip}…"
+        trouble.text = tr("Logging in to {ip}…", ip=d.ip)
         try:
             await _work(app, phonessh.check_login, login)
         except phonessh.SSHError as e:
@@ -656,26 +692,26 @@ async def ask_login(app, d, purpose: str, via: tuple = ()):
     def forget_key(*args, **kwargs):
         phonessh.forget_host_key(alias, app.known_hosts)
         buttons.remove(forget)
-        trouble.text = app._wrap(f"Forgot {d.ip}'s SSH key: the next login trusts the one it shows.")
+        trouble.text = app._wrap(tr("Forgot {ip}'s SSH key: the next login trusts the one it shows.", ip=d.ip))
 
     def cancel(*args, **kwargs):
         close()
         finish(None)
 
-    go = toga.Button("Log in", on_press=lambda w, **kw: app.loop.create_task(log_in()))
-    forget = toga.Button("Forget SSH key", on_press=forget_key)
+    go = toga.Button(_("Log in"), on_press=lambda w, **kw: app.loop.create_task(log_in()))
+    forget = toga.Button(_("Forget SSH key"), on_press=forget_key)
     password.on_confirm = lambda w, **kw: app.loop.create_task(log_in())
     buttons = toga.Box(style=Pack(direction=ROW, gap=8), children=[
-        toga.Box(style=Pack(flex=1)), toga.Button("Cancel", on_press=cancel), go])
+        toga.Box(style=Pack(flex=1)), toga.Button(_("Cancel"), on_press=cancel), go])
     name = f"{d.ip}  {d.name or d.model or ''}".strip()
     content = toga.Box(style=Pack(direction=COLUMN, margin=14, gap=10), children=[
         toga.Label(app._wrap(f"{name}\n{purpose}")),
         toga.Box(style=Pack(direction=ROW, align_items="center", gap=8),
-                 children=[toga.Label("Username", style=label), user]),
+                 children=[toga.Label(_("Username"), style=label), user]),
         toga.Box(style=Pack(direction=ROW, align_items="center", gap=8),
-                 children=[toga.Label("Password", style=label), password]),
+                 children=[toga.Label(_("Password"), style=label), password]),
         toga.Box(style=Pack(direction=ROW, align_items="center", gap=8),
-                 children=[toga.Label("Port", style=label), port]),
+                 children=[toga.Label(_("Port"), style=label), port]),
         trouble,
         buttons,
     ])
@@ -683,7 +719,7 @@ async def ask_login(app, d, purpose: str, via: tuple = ()):
     ui.style_button(go)
     for entry in (user, password, port):
         hook(app, "plain_entry")(entry)
-    close = push_panel(app, "Log in", content, on_back=lambda: finish(None))
+    close = push_panel(app, _("Log in"), content, on_back=lambda: finish(None))
     (password if user.value else user).focus()
     return await answer
 
@@ -696,19 +732,19 @@ async def toggle_ssh(app):
         return
     d = app._selected_device()
     if d is None or not d.ip:
-        app.status.text = "Select a device first."
+        app.status.text = _("Select a device first.")
         return
-    login = await ask_route(app, d, "Log in for an SSH session.")
+    login = await ask_route(app, d, _("Log in for an SSH session."))
     if not login:
         return
     key = d.key
-    app._tool_said(f"SSH to {login.where} as {login.user}…", begins=True)
+    app._tool_said(tr("SSH to {where} as {user}…", where=login.where, user=login.user), begins=True)
     # It starts in the background; a failure arrives as the reason it closed.
     session = phonessh.Shell(login, lambda text: app._from_worker(_append, app, phonessh.plain(text)),
                              lambda reason: app._from_worker(_ssh_ended, app, key, reason), cols=SHELL_COLUMNS)
     app.ssh = (key, session)
     app.tools_box.insert(len(app.tools_box.children) - 1, app.ssh_row)
-    app.status.text = f"SSH session with {d.ip} as {login.user}: commands go in the line below."
+    app.status.text = tr("SSH session with {ip} as {user}: commands go in the line below.", ip=d.ip, user=login.user)
     update_tools(app)
     app.ssh_input.focus()
 
@@ -726,7 +762,7 @@ def _ssh_ended(app, key, reason: str):
     if app.ssh_row in app.tools_box.children:
         app.tools_box.remove(app.ssh_row)
     say(app, "")
-    app._tool_said("SSH session closed" + (f": {reason}" if reason else "."))
+    app._tool_said(tr("SSH session closed: {reason}", reason=reason) if reason else _("SSH session closed."))
     update_tools(app)
 
 
@@ -740,36 +776,38 @@ async def scan_from(app):
     if d is None or not result:
         return
     fam = devicetools.family(d)
-    tools_used = "its ARP table and LLDP neighbours" + (" and the stations associated with it" if fam == "airos"
-                                                        else "")
-    login = await ask_route(app, d, f"Log in to read what it sees: {tools_used}.")
+    purpose = (_("Log in to read what it sees: its ARP table and LLDP neighbours and the stations associated with it.")
+               if fam == "airos" else _("Log in to read what it sees: its ARP table and LLDP neighbours."))
+    login = await ask_route(app, d, purpose)
     if not login:
         return
     app.rescanning = True  # nothing else on the device meanwhile
     app.spinner.start()
     update_tools(app)
-    app._tool_said(f"Reading what {d.ip} sees…", begins=True)
+    app._tool_said(tr("Reading what {ip} sees…", ip=d.ip), begins=True)
     try:
         sightings = await _work(app, lambda: devicetools.parse_scan(devicetools.read_scan(login, fam)))
     except phonessh.SSHError as e:
-        app._tool_said(f"Scan from {d.ip}: {e}")
+        app._tool_said(tr("Scan from {ip}: {error}", ip=d.ip, error=e))
         return
     finally:
         app.rescanning = False
         app.spinner.stop()
         update_tools(app)
     if result is not app.result:
-        app._tool_said(f"Scan from {d.ip} finished after a new scan started: start it again.")
+        app._tool_said(tr("Scan from {ip} finished after a new scan started: start it again.", ip=d.ip))
         return
     own = {i.ip for i in core.local_interfaces()}  # this phone is in the device's ARP table too
     sightings = [s for s in sightings if s.ip not in own]
     seen, new = devicetools.merge_scan(result, d, sightings, core.local_macs())
     app._show_devices(result.devices)
-    counts = ", ".join(f"{devicetools.SCAN_HOW[how]} {n}" for how in devicetools.SCAN_HOW
+    counts = ", ".join(f"{_(devicetools.SCAN_HOW[how])} {n}" for how in devicetools.SCAN_HOW
                        if (n := sum(1 for s in sightings if s.how == how)))
-    lines = [f"Scan from {d.ip}: {counts or 'nothing listed'}; {len(seen)} device(s), {len(new)} new."]
+    lines = [tr("Scan from {ip}: {counts}; {count} device(s), {new} new.", ip=d.ip,
+                counts=counts or _("nothing listed"), count=len(seen), new=len(new))]
     for dev in seen:
-        lines.append(f"  {dev.ip or '-':15} {dev.name or dev.model or dev.mac or ''}{'  (new)' if dev in new else ''}")
+        lines.append(f"  {dev.ip or '-':15} {dev.name or dev.model or dev.mac or ''}"
+                     f"{'  ' + _('(new)') if dev in new else ''}")
     app._append_log("\n".join(lines), status=False)
     app._tool_said(lines[0])
     if lines[1:]:

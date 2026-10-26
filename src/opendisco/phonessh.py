@@ -32,6 +32,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from opendisco import core
+from opendisco.i18n import _, tr
 
 PASSWORD_PROMPT = re.compile(r"(?i)pass(word|code)[^\r\n]{0,60}:\s*$")
 ANSI = re.compile(r"\x1b\[[0-9;?]*[ -/]*[@-~]|\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)|\x1b[()][0-9A-Za-z]|\x1b[=>]")
@@ -74,7 +75,9 @@ class Login:
 
     @property
     def where(self) -> str:
-        return f"{self.ip} port {self.port}" + (f" (via {route_text(self)})" if self.via else "")
+        if self.via:
+            return tr("{ip} port {port} (via {route})", ip=self.ip, port=self.port, route=route_text(self))
+        return tr("{ip} port {port}", ip=self.ip, port=self.port)
 
     @property
     def passwords(self):
@@ -247,12 +250,12 @@ def _call(make, limit: float, stop: threading.Event | None = None):
         except concurrent.futures.TimeoutError:
             if stop is not None and stop.is_set():
                 future.cancel()
-                raise SSHError("Cancelled.", "cancelled") from None
+                raise SSHError(_("Cancelled."), "cancelled") from None
             if time.monotonic() > deadline:
                 future.cancel()
-                raise SSHError("The device stopped answering (timed out).", "timeout") from None
+                raise SSHError(_("The device stopped answering (timed out)."), "timeout") from None
         except concurrent.futures.CancelledError:
-            raise SSHError("Cancelled.", "cancelled") from None
+            raise SSHError(_("Cancelled."), "cancelled") from None
 
 
 def _algorithms() -> dict:
@@ -318,36 +321,44 @@ def _failure(e: Exception, login: Login, hop: Login | None = None, changed: bool
     if isinstance(e, SSHError):
         return e
     who = hop or login
-    where = f"{hop.ip}, on the way to {login.ip}," if hop else login.where
     if changed or isinstance(e, asyncssh.HostKeyNotVerifiable):
-        return SSHError(f"The SSH key of {who.ip} changed since the last connection: it was reset or replaced, or "
-                        "something is in between. If that's expected, forget its saved SSH key, then try again.",
-                        "key")
+        return SSHError(tr("The SSH key of {ip} changed since the last connection: it was reset or replaced, or "
+                           "something is in between. If that's expected, forget its saved SSH key, then try again.",
+                           ip=who.ip), "key")
     if isinstance(e, asyncssh.PermissionDenied):
-        return SSHError(f"{where} didn't accept the username and password." if hop else
-                        f"{login.where} didn't accept the username and password.", "auth")
+        return SSHError(tr("{hop}, on the way to {ip}, didn't accept the username and password.", hop=hop.ip,
+                           ip=login.ip) if hop else
+                        tr("{device} didn't accept the username and password.", device=login.where), "auth")
     if isinstance(e, asyncssh.ChannelOpenError):  # the device before it couldn't pass the connection on
         if e.code == 1:  # SSH_OPEN_ADMINISTRATIVELY_PROHIBITED: its SSH server forwards nothing
-            return SSHError(f"A device on the way to {login.ip} ({route_text(login) or 'its route'}) doesn't forward "
-                            "connections (TCP forwarding is off in its SSH server).", "forwarding")
-        return SSHError(f"{who.ip} port {who.port} can't be reached from {through.ip if through else 'its route'}"
-                        + (f", on the way to {login.ip}" if hop else "") + f" ({e.reason or 'connecting failed'}).",
-                        "unreachable")
+            return SSHError(tr("A device on the way to {ip} ({route}) doesn't forward connections (TCP forwarding is "
+                               "off in its SSH server).", ip=login.ip, route=route_text(login) or _("its route")),
+                            "forwarding")
+        source, reason = through.ip if through else _("its route"), e.reason or _("connecting failed")
+        return SSHError(tr("{ip} port {port} can't be reached from {source}, on the way to {target} ({reason}).",
+                           ip=who.ip, port=who.port, source=source, target=login.ip, reason=reason) if hop else
+                        tr("{ip} port {port} can't be reached from {source} ({reason}).", ip=who.ip, port=who.port,
+                           source=source, reason=reason), "unreachable")
     if isinstance(e, ConnectionRefusedError):
-        return SSHError(f"Nothing accepts SSH connections on {who.ip} port {who.port}"
-                        + (f", on the way to {login.ip}." if hop else "."), "refused")
+        return SSHError(tr("Nothing accepts SSH connections on {ip} port {port}, on the way to {target}.", ip=who.ip,
+                           port=who.port, target=login.ip) if hop else
+                        tr("Nothing accepts SSH connections on {ip} port {port}.", ip=who.ip, port=who.port), "refused")
     if isinstance(e, (asyncio.TimeoutError, TimeoutError, asyncssh.TimeoutError)):
-        return SSHError(f"No SSH answer from {who.ip} port {who.port}"
-                        + (f", on the way to {login.ip}" if hop else "") + " (timed out).", "timeout")
+        return SSHError(tr("No SSH answer from {ip} port {port}, on the way to {target} (timed out).", ip=who.ip,
+                           port=who.port, target=login.ip) if hop else
+                        tr("No SSH answer from {ip} port {port} (timed out).", ip=who.ip, port=who.port), "timeout")
     if isinstance(e, OSError) and e.errno in (errno.EHOSTUNREACH, errno.ENETUNREACH, errno.EHOSTDOWN):
-        return SSHError(f"{who.ip} can't be reached from {HERE}.", "unreachable")
+        return SSHError(tr("{ip} can't be reached from this phone.", ip=who.ip) if HERE == "this phone" else
+                        tr("{ip} can't be reached from this computer.", ip=who.ip), "unreachable")
     if isinstance(e, asyncssh.KeyExchangeFailed):
-        return SSHError(f"{who.ip} port {who.port} only offers SSH algorithms this app doesn't have: {e.reason}",
-                        "algorithms")
+        return SSHError(tr("{ip} port {port} only offers SSH algorithms this app doesn't have: {reason}", ip=who.ip,
+                           port=who.port, reason=e.reason), "algorithms")
     if isinstance(e, (asyncssh.ConnectionLost, asyncssh.DisconnectError, ConnectionResetError, BrokenPipeError)):
         reason = getattr(e, "reason", "") or str(e)
-        return SSHError(f"The connection to {login.where} dropped" + (f": {reason}" if reason else "."), "other")
-    return SSHError(f"SSH to {login.where} failed: {getattr(e, 'reason', '') or e or type(e).__name__}", "other")
+        return SSHError(tr("The connection to {device} dropped: {said}", device=login.where, said=reason) if reason
+                        else tr("The connection to {device} dropped.", device=login.where), "other")
+    return SSHError(tr("SSH to {device} failed: {said}", device=login.where,
+                       said=getattr(e, 'reason', '') or e or type(e).__name__), "other")
 
 
 # ---------------------------------------------------------------------------
@@ -367,7 +378,7 @@ def run(login: Login, command: str, timeout: float = 60, stop: threading.Event |
         try:
             done = await conns[-1].run(command, check=False, timeout=timeout, encoding="utf-8", errors="replace")
         except asyncssh.TimeoutError:
-            raise SSHError("The device stopped answering (timed out).", "timeout") from None
+            raise SSHError(_("The device stopped answering (timed out)."), "timeout") from None
         except Exception as e:
             raise _failure(e, login) from e
         finally:
@@ -401,11 +412,12 @@ def _run_nested(login: Login, command: str | None, timeout: float, stop) -> Resu
                 text.append(data)
                 typer.feed(data)
                 if typer.unanswered:
-                    raise SSHError(f"{login.where} didn't accept the username and password.", "auth")
+                    raise SSHError(tr("{device} didn't accept the username and password.", device=login.where),
+                                   "auth")
             await process.wait_closed()
             return process.exit_status, plain("".join(text))
         except asyncio.TimeoutError:
-            raise SSHError("The device stopped answering (timed out).", "timeout") from None
+            raise SSHError(_("The device stopped answering (timed out)."), "timeout") from None
         except SSHError:
             raise
         except Exception as e:
@@ -456,16 +468,17 @@ def _nested_failure(text: str, login: Login) -> SSHError | None:
     """What a hop's own SSH client printed, as an SSHError, if it failed."""
     t = text.lower()
     if "host key mismatch" in t or "remote host identification has changed" in t:
-        return SSHError(f"The SSH key of {login.ip} changed since {route_text(login)} last connected to it. If "
-                        "that's expected, remove it from that device's known hosts, then try again.", "key")
+        return SSHError(tr("The SSH key of {ip} changed since {route} last connected to it. If that's expected, "
+                           "remove it from that device's known hosts, then try again.", ip=login.ip,
+                           route=route_text(login)), "key")
     if "permission denied" in t or "authentication failed" in t or "exited: no auth methods" in t:
-        return SSHError(f"{login.where} didn't accept the username and password.", "auth")
+        return SSHError(tr("{device} didn't accept the username and password.", device=login.where), "auth")
     if "connection refused" in t:
-        return SSHError(f"Nothing accepts SSH connections on {login.where}.", "refused")
+        return SSHError(tr("Nothing accepts SSH connections on {device}.", device=login.where), "refused")
     if "timed out" in t:
-        return SSHError(f"No SSH answer from {login.where} (timed out).", "timeout")
+        return SSHError(tr("No SSH answer from {device} (timed out).", device=login.where), "timeout")
     if "no route to host" in t or "network is unreachable" in t or "host is unreachable" in t:
-        return SSHError(f"{login.ip} can't be reached from {login.via[-1].ip}.", "unreachable")
+        return SSHError(tr("{ip} can't be reached from {hop}.", ip=login.ip, hop=login.via[-1].ip), "unreachable")
     return None
 
 
@@ -474,7 +487,8 @@ def check_login(login: Login, stop: threading.Event | None = None) -> None:
     result = run(login, "true", timeout=40, stop=stop)
     if result.code:
         raise _nested_failure(result.err, login) or SSHError(
-            f"Logging in to {login.where} worked, but the device didn't run a command (exit code {result.code}).")
+            tr("Logging in to {device} worked, but the device didn't run a command (exit code {code}).",
+               device=login.where, code=result.code))
 
 
 # ---------------------------------------------------------------------------
@@ -493,8 +507,8 @@ def download(login: Login, path: str, local: Path, stop: threading.Event | None 
 
 def _copy(login: Login, paths, progress, stop, idle: float) -> None:
     if login.nested:
-        raise SSHError(f"A device on the way to {login.ip} ({route_text(login)}) doesn't forward connections, so "
-                       "files can't be copied to or from it.", "forwarding")
+        raise SSHError(tr("A device on the way to {ip} ({route}) doesn't forward connections, so files can't be "
+                          "copied to or from it.", ip=login.ip, route=route_text(login)), "forwarding")
     moved = [time.monotonic()]
 
     def seen(_source, _target, done: int, total: int) -> None:
@@ -512,14 +526,14 @@ def _copy(login: Login, paths, progress, stop, idle: float) -> None:
                 await asyncio.wait([copying], timeout=1)
                 if not copying.done() and time.monotonic() - moved[0] > idle:
                     copying.cancel()
-                    raise SSHError("The device stopped answering (timed out).", "timeout")
+                    raise SSHError(_("The device stopped answering (timed out)."), "timeout")
             copying.result()
         except asyncssh.SFTPError as e:  # what the device's scp said
             reason = str(e.reason or e)
             if "no space" in reason.lower():
-                raise SSHError("The device ran out of space for the file (its memory is full). Rebooting it frees "
-                               "memory; then try again.", "space") from None
-            raise SSHError(f"Copying failed: {reason}") from None
+                raise SSHError(_("The device ran out of space for the file (its memory is full). Rebooting it frees "
+                                 "memory; then try again."), "space") from None
+            raise SSHError(tr("Copying failed: {reason}", reason=reason)) from None
         except (SSHError, asyncio.CancelledError):
             raise
         except Exception as e:
@@ -632,7 +646,7 @@ class Forward(Shell):
             _close(self.conns)
             failure = _failure(e, self.login)
             return self._end(str(failure), failure)
-        self.on_output(f"Forwarding 127.0.0.1:{local} to {host}:{port} through {self.login.ip}: close this session "
-                       "to stop.\r\n")
+        self.on_output(tr("Forwarding 127.0.0.1:{local} to {host}:{port} through {device}: close this session to "
+                          "stop.", local=local, host=host, port=port, device=self.login.ip) + "\r\n")
         await self.conns[-1].wait_closed()
         self._end("")

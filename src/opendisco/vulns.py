@@ -29,7 +29,8 @@ import time
 import urllib.request
 from pathlib import Path
 
-from opendisco import __version__, tls
+from opendisco import __version__, i18n, tls
+from opendisco.i18n import _, N_, sentences, tr
 
 FORMAT = 1  # of cves.json; a saved list in another format is ignored
 BUNDLED = Path(__file__).resolve().parent / "resources" / "cves.json"
@@ -265,7 +266,7 @@ def list_info() -> dict:
 def list_label() -> str:
     """ "list of 2026-10-24" """
     date = current()[0].get("generated")
-    return f"list of {date}" if date else "list (date unknown)"
+    return tr("list of {date}", date=date) if date else _("list (date unknown)")
 
 
 Match = collections.namedtuple("Match", "cve family version fixed")
@@ -311,12 +312,14 @@ def check(d):
     return sorted(matches, key=lambda m: (m.cve.get("score") or 0, m.cve["id"]), reverse=True)
 
 
-LEVELS = {"critical": "error", "high": "warn", "medium": "warn", "low": "note"}
+# The level of an issue by the severities cves.json gives, which stay English in the list and exports (Details
+# shows them translated)
+LEVELS = {N_("critical"): "error", N_("high"): "warn", N_("medium"): "warn", N_("low"): "note"}
 _RANK = {"note": 0, "warn": 1, "error": 2}
 
 
 def _software(m: Match) -> str:
-    return FAMILY_SOFTWARE.get(m.family, "Firmware")
+    return FAMILY_SOFTWARE.get(m.family, N_("Firmware"))  # English, as to_dict exports it
 
 
 def issue(matches) -> tuple:
@@ -327,22 +330,36 @@ def issue(matches) -> tuple:
     for m in matches:
         by_software.setdefault((m.family, m.version), []).append(m)
     for (family, version), group in by_software.items():
-        name = _software(group[0])
+        name = _(_software(group[0]))
         counts = collections.Counter(m.cve.get("severity") or "unrated" for m in group)
-        tally = ", ".join(f"{counts[s]} {s}" for s in ("critical", "high", "medium", "low", "unrated") if counts[s])
+        said = {"critical": tr("{count} critical", count=counts["critical"]),
+                "high": tr("{count} high", count=counts["high"]),
+                "medium": tr("{count} medium", count=counts["medium"]),
+                "low": tr("{count} low", count=counts["low"]),
+                "unrated": tr("{count} unrated", count=counts["unrated"])}
+        tally = ", ".join(said[s] for s in said if counts[s])  # in this order
         n = len(group)
-        text = (f"{name} {version} has {n} known vulnerabilit{'y' if n == 1 else 'ies'} ({tally}): "
-                + ", ".join(m.cve["id"] for m in group) + ".")
+        ids = ", ".join(m.cve["id"] for m in group)
+        text = (tr("{software} {version} has {count} known vulnerability ({tally}): {ids}.", software=name,
+                   version=version, count=n, tally=tally, ids=ids) if n == 1 else
+                tr("{software} {version} has {count} known vulnerabilities ({tally}): {ids}.", software=name,
+                   version=version, count=n, tally=tally, ids=ids))
         fixes = [m.fixed for m in group if m.fixed]
-        unfixed = [m.cve["id"] for m in group if not m.fixed]
+        unfixed = ", ".join(m.cve["id"] for m in group if not m.fixed)
         if fixes:
             best = max(fixes, key=version_key)
-            text += f" Upgrade{' UniFi Network' if family == 'unifi-network' else ''} to {best} or later"
-            text += f" (no fixed version is named for {', '.join(unfixed)})." if unfixed else "."
+            if family == "unifi-network":
+                upgrade = (tr("Upgrade UniFi Network to {version} or later (no fixed version is named for {ids}).",
+                              version=best, ids=unfixed) if unfixed else
+                           tr("Upgrade UniFi Network to {version} or later.", version=best))
+            else:
+                upgrade = (tr("Upgrade to {version} or later (no fixed version is named for {ids}).", version=best,
+                              ids=unfixed) if unfixed else tr("Upgrade to {version} or later.", version=best))
+            text = sentences(text, upgrade)
         else:
-            text += " No fixed version is named: update to the latest firmware."
+            text = sentences(text, _("No fixed version is named: update to the latest firmware."))
         parts.append(text)
-    return level, " ".join(parts)
+    return level, sentences(*parts)
 
 
 def detail_lines(matches) -> list:
@@ -350,9 +367,11 @@ def detail_lines(matches) -> list:
     lines = []
     for m in matches:
         score = m.cve.get("score")
-        rating = f"{m.cve.get('severity') or 'unrated'}{f' {score:g}' if score is not None else ''}"
-        fixed = f"fixed in {m.fixed}" if m.fixed else "no fix named"
-        lines.append(f"{m.cve['id']:<16} {rating:<13} {_software(m)} {m.version}, {fixed}: {m.cve.get('summary', '')}")
+        rating = f"{_(m.cve.get('severity') or N_('unrated'))}{f' {score:g}' if score is not None else ''}"
+        fixed = tr("fixed in {version}", version=m.fixed) if m.fixed else _("no fix named")
+        rating += " " * (13 - i18n.width(rating))  # (a column: Japanese characters are two wide)
+        lines.append(f"{m.cve['id']:<16} {rating} {_(_software(m))} {m.version}, {fixed}: "
+                     f"{m.cve.get('summary', '')}")
     return lines
 
 

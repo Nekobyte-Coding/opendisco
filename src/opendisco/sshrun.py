@@ -23,6 +23,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from opendisco import terminal
+from opendisco.i18n import _, tr
 
 IS_WINDOWS = terminal.IS_WINDOWS
 PASSPHRASE_PROMPT = re.compile(rb"(?i)passphrase for key[^\r\n]{0,200}:\s*$")
@@ -59,7 +60,9 @@ class Login:
 
     @property
     def where(self) -> str:
-        return f"{self.ip} port {self.port}" + (f" (via {route_text(self)})" if self.via else "")
+        if self.via:
+            return tr("{ip} port {port} (via {route})", ip=self.ip, port=self.port, route=route_text(self))
+        return tr("{ip} port {port}", ip=self.ip, port=self.port)
 
     @property
     def passwords(self):
@@ -252,7 +255,8 @@ def check_login(login: Login, stop: threading.Event | None = None) -> None:
     result = run(login, "true", timeout=40, stop=stop)
     if result.code:
         raise _failure(result.err, 255, login) or SSHError(
-            f"Logging in to {login.where} worked, but the device didn't run a command (exit code {result.code}).")
+            tr("Logging in to {device} worked, but the device didn't run a command (exit code {code}).",
+               device=login.where, code=result.code))
 
 
 def upload(login: Login, local: Path, path: str, progress=None, stop: threading.Event | None = None,
@@ -273,11 +277,12 @@ def _copy(login: Login, argv: list, progress, stop, idle: float) -> None:
                 progress(min(100, int(found[-1])))
 
     if login.nested:
-        raise SSHError(f"A device on the way to {login.ip} ({route_text(login)}) doesn't forward connections, so "
-                       "files can't be copied to or from it.", "forwarding")
+        raise SSHError(tr("A device on the way to {ip} ({route}) doesn't forward connections, so files can't be "
+                          "copied to or from it.", ip=login.ip, route=route_text(login)), "forwarding")
     code, _out, err = _spawn(argv, login.passwords, 24 * 3600, idle, on_tty=seen, stop=stop)
     if code:
-        raise _failure(err, 255, login) or SSHError(f"Copying failed: {_last_line(err) or f'scp exit code {code}'}")
+        raise _failure(err, 255, login) or SSHError(
+            tr("Copying failed: {reason}", reason=_last_line(err) or tr("scp exit code {code}", code=code)))
 
 
 def _spawn(argv: list, password: str, timeout: float, idle: float, on_tty=None, stop=None,
@@ -413,15 +418,15 @@ def _check_limits(proc, stop, start, last, timeout, idle, watcher) -> None:
     now = time.monotonic()
     if stop is not None and stop.is_set():
         _kill(proc)
-        raise SSHError("Cancelled.", "cancelled")
+        raise SSHError(_("Cancelled."), "cancelled")
     if watcher.unanswered:
         _kill(proc)
         if any(watcher.typed.values()):
-            raise SSHError("The device didn't accept the username and password.", "auth")
-        raise SSHError("The device asks for a password, and none was given.", "auth")
+            raise SSHError(_("The device didn't accept the username and password."), "auth")
+        raise SSHError(_("The device asks for a password, and none was given."), "auth")
     if now - start > timeout or now - last > idle:
         _kill(proc)
-        raise SSHError("The device stopped answering (timed out).", "timeout")
+        raise SSHError(_("The device stopped answering (timed out)."), "timeout")
 
 
 def _kill(proc) -> None:
@@ -459,34 +464,36 @@ def _failure(text: str, code: int, login: Login) -> SSHError | None:
     t = text.lower()
     where = login.where
     if terminal.KEY_CHANGED.decode().lower() in t or "host key verification failed" in t:
-        return SSHError(f"The SSH key of {login.ip} changed since the last connection: it was reset or replaced, or "
-                        "something is in between. If that's expected, right-click it and choose Forget SSH key, "
-                        "then try again.", "key")
+        return SSHError(tr("The SSH key of {ip} changed since the last connection: it was reset or replaced, or "
+                           "something is in between. If that's expected, right-click it and choose Forget SSH key, "
+                           "then try again.", ip=login.ip), "key")
     # Not scp's "scp: /path: Permission denied", which is about a file.
     if re.search(r"permission denied(?: \(|, please)|too many authentication failures|authentication failed", t):
         asked = terminal.ASKER.findall(text.encode())  # whose prompt was answered last
         hop = next((h for h in login.via if asked and asked[-1][1].decode() in (h.alias, h.ip)), None)
         if hop:
-            return SSHError(f"{hop.ip}, on the way to {login.ip}, didn't accept its username and password.", "auth")
-        return SSHError(f"{where} didn't accept the username and password.", "auth")
+            return SSHError(tr("{hop}, on the way to {ip}, didn't accept its username and password.", hop=hop.ip,
+                               ip=login.ip), "auth")
+        return SSHError(tr("{device} didn't accept the username and password.", device=where), "auth")
     if "administratively prohibited" in t or "stdio forwarding failed" in t or re.search(r"channel \d+: open failed", t):
-        return SSHError(f"A device on the way to {login.ip} ({route_text(login) or 'its route'}) doesn't forward "
-                        "connections (TCP forwarding is off in its SSH server).", "forwarding")
+        return SSHError(tr("A device on the way to {ip} ({route}) doesn't forward connections (TCP forwarding is off "
+                           "in its SSH server).", ip=login.ip, route=route_text(login) or _("its route")), "forwarding")
     if "connection refused" in t:
-        return SSHError(f"Nothing accepts SSH connections on {where}.", "refused")
+        return SSHError(tr("Nothing accepts SSH connections on {device}.", device=where), "refused")
     if "timed out" in t:
-        return SSHError(f"No SSH answer from {where} (timed out).", "timeout")
+        return SSHError(tr("No SSH answer from {device} (timed out).", device=where), "timeout")
     if any(s in t for s in ("no route to host", "host is down", "network is unreachable", "host unreachable")):
-        return SSHError(f"{login.ip} can't be reached from this computer.", "unreachable")
+        return SSHError(tr("{ip} can't be reached from this computer.", ip=login.ip), "unreachable")
     if "no matching" in t or "unable to negotiate" in t:
-        return SSHError(f"{where} only offers SSH algorithms this computer's ssh no longer has: "
-                        f"{_last_line(text)}", "algorithms")
+        return SSHError(tr("{device} only offers SSH algorithms this computer's ssh no longer has: {said}",
+                           device=where, said=_last_line(text)), "algorithms")
     if "no space left" in t:
-        return SSHError("The device ran out of space for the file (its memory is full). Rebooting it frees "
-                        "memory; then try again.", "space")
+        return SSHError(_("The device ran out of space for the file (its memory is full). Rebooting it frees "
+                          "memory; then try again."), "space")
     if code == 255:
         line = _last_line(text)
         if not line or "closed" in t or "reset" in t or "broken pipe" in t:
-            return SSHError(f"The connection to {where} dropped" + (f": {line}" if line else "."), "other")
-        return SSHError(f"SSH to {where} failed: {line}", "other")
+            return SSHError(tr("The connection to {device} dropped: {said}", device=where, said=line) if line else
+                            tr("The connection to {device} dropped.", device=where), "other")
+        return SSHError(tr("SSH to {device} failed: {said}", device=where, said=line), "other")
     return None

@@ -28,7 +28,8 @@ from collections import Counter
 from html import escape
 from pathlib import Path
 
-from opendisco import __version__, core, vulns
+from opendisco import __version__, core, i18n, vulns
+from opendisco.i18n import _, N_, tr
 
 NOTES_FILE = "notes.json"
 NOTE_MARK = "✎"  # after the name of a device with a note, in the list
@@ -42,25 +43,26 @@ SECONDS = "\u00a0s"  # after a number: a no-break space, so a wrapped label neve
 
 # Export's choices: (kind, button, what it saves, file types, the first the default and on phones
 # the only one). The Site Report comes first, then the scan's data, then the site-wide extras.
-SCAN_EXPORT = ("scan", "Site Report…", "The site's devices, firmware, CVEs, factory logins and every issue, "
-                                       "a page to print or save as PDF", ["html"])
-DATA_EXPORT = ("data", "Scan data…", "Every device as the table lists it, with diagnostics, for a spreadsheet "
-                                     "or a script", ["csv", "json"])
+SCAN_EXPORT = ("scan", N_("Site Report…"), N_("The site's devices, firmware, CVEs, factory logins and every issue, "
+                                              "a page to print or save as PDF"), ["html"])
+DATA_EXPORT = ("data", N_("Scan data…"), N_("Every device as the table lists it, with diagnostics, for a spreadsheet "
+                                            "or a script"), ["csv", "json"])
 SITE_EXPORTS = [
-    ("security", "Security report…", "Known CVEs and outdated firmware, device by device", ["html", "csv"]),
-    ("backups", "Config backups…", "Every saved config backup, with an index", ["zip"]),
-    ("notes", "Notes…", "Every device's note, seen in this scan or not", ["html", "csv", "json"]),
-    ("log", "Log…", "The Log", ["txt"]),
+    ("security", N_("Security report…"), N_("Known CVEs and outdated firmware, device by device"), ["html", "csv"]),
+    ("backups", N_("Config backups…"), N_("Every saved config backup, with an index"), ["zip"]),
+    ("notes", N_("Notes…"), N_("Every device's note, seen in this scan or not"), ["html", "csv", "json"]),
+    ("log", N_("Log…"), N_("The Log"), ["txt"]),
 ]
-FORMAT_NAMES = {"html": "HTML", "csv": "CSV", "json": "JSON", "zip": "a .zip", "txt": "a text file"}
+FORMAT_NAMES = {"html": "HTML", "csv": "CSV", "json": "JSON", "zip": N_("a .zip"), "txt": N_("a text file")}
 
 
 def choice_text(text: str, types, extra: str = "") -> str:
-    """An export choice's line: what it saves, how many (extra), and the formats it's saved in
-    ("Known CVEs ...: HTML or CSV.")."""
-    names = [FORMAT_NAMES.get(t, t.upper()) for t in types]
-    formats = names[0] if len(names) == 1 else f"{', '.join(names[:-1])} or {names[-1]}"
-    return f"{text}{f' ({extra})' if extra else ''}: {formats}."
+    """An export choice's line: what it saves (text, translated), how many (extra), and the formats
+    it's saved in ("Known CVEs ...: HTML or CSV.")."""
+    names = [_(FORMAT_NAMES.get(t, t.upper())) for t in types]
+    formats = names[0] if len(names) == 1 else tr("{formats} or {last}", formats=", ".join(names[:-1]), last=names[-1])
+    return (tr("{text} ({extra}): {formats}.", text=text, extra=extra, formats=formats) if extra
+            else tr("{text}: {formats}.", text=text, formats=formats))
 
 
 
@@ -70,11 +72,12 @@ _MAC_LIKE = re.compile(r"[0-9a-f]{1,4}(?:[:.-][0-9a-f]{1,4})+")
 
 def search_text(d) -> str:
     """Everything the search looks through for a device, in lower case: its addresses, MACs,
-    model, name, vendor, firmware, Status text (and the name of each finding), Via and note."""
+    model, name, vendor, firmware, Status text (and the name of each finding, in English too), Via and note."""
     macs = [m for m in (d.mac, *sorted(d.other_macs)) if m]
     fields = [*d.ips, *macs, *(m.replace(":", "") for m in macs), d.model, d.name, d.vendor, d.firmware,
               d.info.get("firmware") or "", core.status_cell(d)[0],
               *(core.status_label(tag) for _, tag, _ in d.issues),
+              *(core.STATUS_LABELS.get(tag, "") for _, tag, _ in d.issues),
               ",".join(v for v in core.VIA_ORDER if v in d.via), d.note]
     return "\n".join(str(f) for f in fields if f).lower()
 
@@ -306,7 +309,7 @@ def latency_text(d) -> str:
         return ""
     try:
         rows = dict(health.detail_rows(d)) if hasattr(health, "detail_rows") else {}
-        return rows.get("Latency") or health.latency_cell(d) or ""
+        return rows.get(_("Latency")) or rows.get("Latency") or health.latency_cell(d) or ""
     except Exception:
         return ""
 
@@ -347,10 +350,11 @@ _LEVEL_CLASS = {"error": "error", "warn": "warn", "note": "info", "ok": "ok"}
 
 
 def _page(title: str, body: str) -> str:
+    made = tr("Exported {date} by OpenDisco {version}.", date=time.strftime("%Y-%m-%d %H:%M"), version=__version__)
     return (f'<!doctype html><html><head><meta charset="utf-8">\n'
             f'<meta name="viewport" content="width=device-width, initial-scale=1"><title>{escape(title)}</title>\n'
             f"<style>{_CSS}</style>\n</head><body>{body}\n"
-            f'<p class="muted">Exported {time.strftime("%Y-%m-%d %H:%M")} by OpenDisco {__version__}.</p>'
+            f'<p class="muted">{made}</p>'
             "</body></html>\n")
 
 
@@ -381,14 +385,14 @@ def _cve_rows(d) -> list:
         score = m.cve.get("score")
         level = _LEVEL_CLASS[vulns.LEVELS.get(severity, "warn")]
         rows.append([f'<a href="{vulns.nvd_url(m.cve["id"])}">{escape(m.cve["id"])}</a>',
-                     f'<span class="{level}">{escape(severity)}{f" {score:g}" if score is not None else ""}</span>',
-                     escape(f"{vulns.FAMILY_SOFTWARE.get(m.family, 'Firmware')} {m.version}"),
-                     escape(m.fixed or "none named"), escape(m.cve.get("summary") or "")])
+                     f'<span class="{level}">{escape(_(severity))}{f" {score:g}" if score is not None else ""}</span>',
+                     escape(f"{vulns.FAMILY_SOFTWARE.get(m.family, _('Firmware'))} {m.version}"),
+                     escape(m.fixed or _("none named")), escape(m.cve.get("summary") or "")])
     return rows
 
 
 def _who(d) -> str:
-    return d.name or d.model or d.ip or d.mac or "device"
+    return d.name or d.model or d.ip or d.mac or _("device")
 
 
 def _plain(fn, *args) -> str:
@@ -419,47 +423,54 @@ def device_report(d, res=None, backups=(), noted: str = "") -> str:
     title = _who(d)
     ident = " · ".join(escape(x) for x in (d.ip, d.mac or "", d.model, d.vendor) if x)
     seen = time.strftime("%Y-%m-%d %H:%M", time.localtime(d.last_seen))
-    out = [f"<h1>{escape(title)}</h1><p>{ident}</p><p class=\"muted\">Last heard {seen}"
-           + (f"; found through {escape(d.found_by.get('ip', '?'))}" if d.found_by else "") + "</p>"]
+    heard = (tr("Last heard {when}; found through {address}", when=seen, address=escape(d.found_by.get("ip", "?")))
+             if d.found_by else tr("Last heard {when}", when=seen))
+    out = [f"<h1>{escape(title)}</h1><p>{ident}</p><p class=\"muted\">{heard}</p>"]
     if d.note:
-        when = f'<p class="muted">Written {escape(noted.replace("T", " ")[:16])}</p>' if noted else ""
-        out.append(f'<h2>Note</h2><div class="note">{escape(d.note)}</div>{when}')
-    status, _ = core.status_cell(d)
+        when = (f'<p class="muted">{tr("Written {when}", when=escape(noted.replace("T", " ")[:16]))}</p>' if noted
+                else "")
+        out.append(f'<h2>{_("Note")}</h2><div class="note">{escape(d.note)}</div>{when}')
+    status = core.status_cell(d)[0]
     issues = _issue_list(d)
-    out.append(f"<h2>Status: {escape(status)}</h2>" + (f"<ul>{issues}</ul>" if issues else "<p>Nothing found wrong.</p>"))
+    out.append(f"<h2>{tr('Status: {status}', status=escape(status))}</h2>"
+               + (f"<ul>{issues}</ul>" if issues else f"<p>{_('Nothing found wrong.')}</p>"))
 
-    firmware = [["Running", escape(d.info.get("firmware") or d.firmware or "not reported")]]
+    firmware = [[_("Running"), escape(d.info.get("firmware") or d.firmware or _("not reported"))]]
     latest, outdated = latest_firmware(d)
     if latest:
-        firmware.append(["Latest", escape(latest) + (' <b class="warn">(newer than this one)</b>' if outdated
-                                                     else " (up to date)")])
+        firmware.append([_("Latest"), escape(latest) + (f' <b class="warn">{_("(newer than this one)")}</b>' if outdated
+                                                        else f" {_('(up to date)')}")])
     fix = cve_fix(d)
     if fix:
-        firmware.append(["Fixes its known CVEs", escape(fix) + " or later"])
-    out.append("<h2>Firmware</h2>" + _table(None, firmware))
+        firmware.append([_("Fixes its known CVEs"), tr("{version} or later", version=escape(fix))])
+    out.append(f"<h2>{_('Firmware')}</h2>" + _table(None, firmware))
     latency = latency_text(d)
     if latency:
-        out.append(f"<h2>Latency</h2><p>{escape(latency)}</p>")
+        out.append(f"<h2>{_('Latency')}</h2><p>{escape(latency)}</p>")
 
+    listed = escape(vulns.list_label())
     if d.cves:
-        out.append(f"<h2>Known CVEs ({len(d.cves)})</h2><p class=\"muted\">From the {escape(vulns.list_label())}. "
-                   f"{escape(vulns.NVD_NOTICE)}</p>" + _table(["CVE", "Severity", "Affects", "Fixed in", "Summary"],
-                                                              _cve_rows(d)))
+        out.append(f"<h2>{tr('Known CVEs ({count})', count=len(d.cves))}</h2><p class=\"muted\">"
+                   f"{i18n.sentences(tr('From the {list}.', list=listed), escape(_(vulns.NVD_NOTICE)))}</p>"
+                   + _table(["CVE", _("Severity"), _("Affects"), _("Fixed in"), _("Summary")], _cve_rows(d)))
     elif d.cves is not None:
-        out.append(f"<h2>Known CVEs</h2><p>None in the {escape(vulns.list_label())}; no match isn't proof it's safe.</p>")
+        out.append(f"<h2>{_('Known CVEs')}</h2><p>"
+                   + tr("None in the {list}; no match isn't proof it's safe.", list=listed) + "</p>")
     else:
-        out.append("<h2>Known CVEs</h2><p>Not checked: the CVE list doesn't cover this model or firmware.</p>")
+        out.append(f"<h2>{_('Known CVEs')}</h2><p>"
+                   + _("Not checked: the CVE list doesn't cover this model or firmware.") + "</p>")
 
-    out.append("<h2>Ports</h2>" + _ports_html(d))
-    out.append(f"<h2>Details</h2><pre>{escape(_plain(core.render_details, d))}</pre>")
+    out.append(f"<h2>{_('Ports')}</h2>" + _ports_html(d))
+    out.append(f"<h2>{_('Details')}</h2><pre>{escape(_plain(core.render_details, d))}</pre>")
     packets = _plain(core.render_packets, d, res.inv if res else None, res.counters if res else None)
-    out.append(f"<h2>Packets</h2><pre>{escape(_packets_summary(packets))}</pre>"
-               f"<details><summary>Every packet kept, decoded</summary><pre>{escape(packets)}</pre></details>")
+    out.append(f"<h2>{_('Packets')}</h2><pre>{escape(_packets_summary(packets))}</pre>"
+               f"<details><summary>{_('Every packet kept, decoded')}</summary><pre>{escape(packets)}</pre></details>")
     if backups:
-        out.append("<h2>Config backups</h2><p>In this .zip's backups folder, newest first, each with a .json "
-                   "of where it came from:</p><ul>"
+        out.append(f"<h2>{_('Config backups')}</h2><p>"
+                   + _("In this .zip's backups folder, newest first, each with a .json of where it came from:")
+                   + "</p><ul>"
                    + "".join(f'<li><a href="backups/{escape(name)}">{escape(name)}</a>'
-                             + (f" ({escape(reason)})" if reason else "") + "</li>"
+                             + (f" ({escape(_(reason))})" if reason else "") + "</li>"
                              for name, reason in (b if isinstance(b, tuple) else (b, "") for b in backups))
                    + "</ul>")
     return _page(f"OpenDisco: {title}", "\n".join(out))
@@ -467,28 +478,35 @@ def device_report(d, res=None, backups=(), noted: str = "") -> str:
 
 def _ports_html(d) -> str:
     parts = []
-    said = [[escape(label), escape("; ".join(f"{port} ({core.PORT_SOURCES[source]})" for source, port in ports.items()))]
+    said = [[escape(label), escape("; ".join(f"{port} ({_(core.PORT_SOURCES[source])})"
+                                             for source, port in ports.items()))]
             for label, ports in (("HTTP", d.said_ports("http")), ("HTTPS", d.said_ports("https")),
                                  ("SSH", d.said_ports("ssh"))) if ports]
     if said:
-        parts.append("<p>What it says:</p>" + _table(["Service", "Port"], said))
+        parts.append(f"<p>{_('What it says:')}</p>" + _table([_("Service"), _("Port")], said))
     if d.ports is None:
-        parts.append("<p>No deep check ran on it (Deep checks, or a port search, check its TCP ports).</p>")
+        parts.append(f"<p>{_('No deep check ran on it (Deep checks, or a port search, check its TCP ports).')}</p>")
     elif not d.ports:
-        parts.append("<p>No TCP port answered the deep check.</p>")
+        parts.append(f"<p>{_('No TCP port answered the deep check.')}</p>")
     else:
-        parts.append("<p>Open TCP ports:</p>" + _table(["Port", "Service", "What answered"],
-                                                       [[str(p), escape(d.services.get(p, "")),
-                                                         escape(str(d.service_info.get(p, "")))] for p in d.ports]))
+        parts.append(f"<p>{_('Open TCP ports:')}</p>" + _table([_("Port"), _("Service"), _("What answered")],
+                                                               [[str(p), escape(d.services.get(p, "")),
+                                                                 escape(str(d.service_info.get(p, "")))]
+                                                                for p in d.ports]))
     if d.port_search:
         ps = d.port_search
-        what = "every TCP port" if ps["checked"] >= 65535 else f"{ps['checked']:,} of 65,535 TCP ports"
-        parts.append(f"<p>Port search for {escape(core.SERVICE_NAMES.get(ps['for'], ps['for']))}: {what}"
-                     + (" (stopped early)" if ps.get("stopped") else "")
-                     + f", {time.strftime('%Y-%m-%d %H:%M', time.localtime(ps['at']))}.</p>")
+        what = (_("every TCP port") if ps["checked"] >= 65535
+                else tr("{count:,} of 65,535 TCP ports", count=ps["checked"]))
+        service = escape(_(core.SERVICE_NAMES.get(ps["for"], ps["for"])))
+        when = time.strftime("%Y-%m-%d %H:%M", time.localtime(ps["at"]))
+        parts.append("<p>" + (tr("Port search for {service}: {what} (stopped early), {when}.", service=service,
+                                 what=what, when=when) if ps.get("stopped")
+                              else tr("Port search for {service}: {what}, {when}.", service=service, what=what,
+                                      when=when)) + "</p>")
     url = core.web_url(d)
     if url:
-        parts.append(f'<p>Web UI: <a href="{escape(url)}">{escape(url)}</a></p>')
+        link = f'<a href="{escape(url)}">{escape(url)}</a>'
+        parts.append(f"<p>{tr('Web UI: {link}', link=link)}</p>")
     return "".join(parts)
 
 
@@ -554,7 +572,7 @@ def _severities(cves) -> dict:
     return counts
 
 
-_SEVERITY_ORDER = ("critical", "high", "medium", "low", "unrated")
+_SEVERITY_ORDER = (N_("critical"), N_("high"), N_("medium"), N_("low"), N_("unrated"))  # (the CVE list's words)
 
 
 def security_report(devices) -> str:
@@ -565,37 +583,45 @@ def security_report(devices) -> str:
     outdated = [r for r in rows if r["outdated"]]
     unchecked = [r for r in rows if r["device"].cves is None]
     tally = _severities([m for r in with_cves for m in r["cves"]])
-    counts = ", ".join(f"{tally[s]} {s}" for s in _SEVERITY_ORDER if tally.get(s))
+    counts = ", ".join(f"{tally[s]} {_(s)}" for s in _SEVERITY_ORDER if tally.get(s))
     latest_known = any(r["latest"] for r in rows)  # the firmware check during the scan found the latest
-    summary = (f"{len(rows)} device(s) with firmware to check: {len(with_cves)} with known CVEs"
-               + (f" ({counts})" if counts else "")
-               + (f", {len(outdated)} running older firmware than the latest" if latest_known
-                  else "; the latest firmware wasn't looked up for any of them")
-               + (f", {len(unchecked)} the CVE list doesn't cover" if unchecked else "") + ".")
+    found = [tr("{count} with known CVEs", count=len(with_cves)) + (f" ({counts})" if counts else "")]
+    if latest_known:
+        found.append(tr("{count} running older firmware than the latest", count=len(outdated)))
+    else:
+        found[0] = tr("{found}; the latest firmware wasn't looked up for any of them", found=found[0])
+    if unchecked:
+        found.append(tr("{count} the CVE list doesn't cover", count=len(unchecked)))
+    summary = tr("{count} device(s) with firmware to check: {found}.", count=len(rows), found=", ".join(found))
     left_out = len(devices) - len(rows)
     table = []
     for r in rows:
         d = r["device"]
         sev = _severities(r["cves"])
-        cves = (", ".join(f'<span class="{_LEVEL_CLASS[vulns.LEVELS.get(s, "warn")]}">{sev[s]} {s}</span>'
+        cves = (", ".join(f'<span class="{_LEVEL_CLASS[vulns.LEVELS.get(s, "warn")]}">{sev[s]} {_(s)}</span>'
                           for s in _SEVERITY_ORDER if sev.get(s)) if r["cves"]
-                else "not checked" if d.cves is None else '<span class="ok">none known</span>')
-        latest = escape(r["latest"]) + (' <b class="warn">newer</b>' if r["outdated"] else "") if r["latest"] else "?"
+                else _("not checked") if d.cves is None else f'<span class="ok">{_("none known")}</span>')
+        latest = (escape(r["latest"]) + (f' <b class="warn">{_("newer")}</b>' if r["outdated"] else "")
+                  if r["latest"] else "?")
         table.append([escape(d.ip or "-"), escape(d.name or ""), escape(d.model or ""), escape(d.firmware or "?"),
-                      *([latest] if latest_known else []), cves, escape(r["fix"] + " or later") if r["fix"] else ""])
-    head = ["IP", "Name", "Model", "Firmware", *(["Latest"] if latest_known else []), "Known CVEs", "Fixed by"]
-    out = [f"<h1>Security report</h1><p>{escape(summary)}</p>", _table(head, table)]
+                      *([latest] if latest_known else []), cves,
+                      escape(tr("{version} or later", version=r["fix"])) if r["fix"] else ""])
+    head = ["IP", _("Name"), _("Model"), _("Firmware"), *([_("Latest")] if latest_known else []), _("Known CVEs"),
+            _("Fixed by")]
+    out = [f"<h1>{_('Security report')}</h1><p>{escape(summary)}</p>", _table(head, table)]
     if left_out:
-        out.append(f'<p class="muted">{left_out} other device(s) reported no firmware, so nothing could be '
-                   "checked for them.</p>")
+        out.append('<p class="muted">'
+                   + tr("{count} other device(s) reported no firmware, so nothing could be checked for them.",
+                        count=left_out) + "</p>")
     for r in with_cves:
         d = r["device"]
         out.append(f"<h2>{escape(d.ip or d.mac or '-')} {escape(_who(d) if _who(d) != d.ip else '')}</h2>"
-                   + _table(["CVE", "Severity", "Affects", "Fixed in", "Summary"], _cve_rows(d)))
-    out.append(f'<p class="muted">CVEs from the {escape(vulns.list_label())}. No match isn\'t proof a device is safe: '
-               f"only models and firmware versions discovery identifies for certain are checked. "
-               f"{escape(vulns.NVD_NOTICE)}</p>")
-    return _page("OpenDisco security report", "\n".join(out))
+                   + _table(["CVE", _("Severity"), _("Affects"), _("Fixed in"), _("Summary")], _cve_rows(d)))
+    out.append('<p class="muted">'
+               + i18n.sentences(tr("CVEs from the {list}.", list=escape(vulns.list_label())),
+                                _("No match isn't proof a device is safe: only models and firmware versions discovery "
+                                  "identifies for certain are checked."), escape(_(vulns.NVD_NOTICE))) + "</p>")
+    return _page(_("OpenDisco security report"), "\n".join(out))
 
 
 def security_csv(devices) -> str:
@@ -631,11 +657,11 @@ def notes_html(notes: Notes, devices=()) -> str:
     for mac, entry, d in _note_rows(notes, devices):
         ip = d.ip if d else entry.get("ip") or ""
         who = (d.name or d.model) if d else entry.get("name") or entry.get("model") or ""
-        rows.append([escape(mac), escape(ip), escape(who), "yes" if d else '<span class="muted">no</span>',
+        rows.append([escape(mac), escape(ip), escape(who), _("yes") if d else f'<span class="muted">{_("no")}</span>',
                      escape(str(entry.get("updated", "")).replace("T", " ")), f'<div class="note">{escape(entry["text"])}</div>'])
-    body = (f"<h1>Device notes</h1><p>{len(rows)} note(s), kept by MAC address.</p>"
-            + _table(["MAC", "IP", "Device", "In this scan", "Updated", "Note"], rows))
-    return _page("OpenDisco notes", body)
+    body = (f"<h1>{_('Device notes')}</h1><p>{tr('{count} note(s), kept by MAC address.', count=len(rows))}</p>"
+            + _table(["MAC", "IP", _("Device"), _("In this scan"), _("Updated"), _("Note")], rows))
+    return _page(_("OpenDisco notes"), body)
 
 
 def notes_csv(notes: Notes, devices=()) -> str:
@@ -660,7 +686,7 @@ def write_backups_zip(path, backups, notes: Notes | None = None, devices=()) -> 
     folder a device named like devicetools' (aa-bb-cc-dd-ee-ff), each backup with its .json, and an
     index.txt naming the devices. Returns how many backups went in."""
     known = {d.mac: d for d in devices if d.mac}
-    lines, count = ["OpenDisco config backups, " + time.strftime("%Y-%m-%d %H:%M"), ""], 0
+    lines, count = [tr("OpenDisco config backups, {date}", date=time.strftime("%Y-%m-%d %H:%M")), ""], 0
     with zipfile.ZipFile(path, "w", zipfile.ZIP_DEFLATED) as z:
         for mac, paths in backups:
             d = known.get(mac)
@@ -702,24 +728,26 @@ def write_site_export(kind: str, path, devices=(), notes: Notes | None = None, l
 
 
 # -- the Site Report -----------------------------------------------------------------------
-DEMO_STAMP = "Demo network: made-up devices"
+DEMO_STAMP = N_("Demo network: made-up devices")
 # Its sections of issues after Known CVEs, with Firmware updates between the two: (title, the tags of
 # core.STATUS_LABELS each gathers). Every other issue, one added later included, goes under Other
 # issues, device by device.
-REPORT_SECTIONS = [("Factory logins and factory defaults", ("FACTORY-LOGIN", "DEFAULT")),
-                   ("Latency", ("HIGH-LATENCY", "PING-LOSS")),
-                   ("airMAX link health", ("WEAK-SIGNAL", "HOT-SIGNAL", "CHAIN-IMBALANCE", "LOW-SNR", "LOW-CAPACITY",
-                                           "LOW-QUALITY"))]
-LEVEL_NAMES = {"error": "Errors", "warn": "Warnings", "note": "Notices"}
+REPORT_SECTIONS = [(N_("Factory logins and factory defaults"), ("FACTORY-LOGIN", "DEFAULT")),
+                   (N_("Latency"), ("HIGH-LATENCY", "PING-LOSS")),
+                   (N_("airMAX link health"), ("WEAK-SIGNAL", "HOT-SIGNAL", "CHAIN-IMBALANCE", "LOW-SNR",
+                                               "LOW-CAPACITY", "LOW-QUALITY"))]
+LEVEL_NAMES = {"error": N_("Errors"), "warn": N_("Warnings"), "note": N_("Notices")}
 ATTENTION_SHOWN = 10  # the summary's list of devices needing attention first
 LATENCY_SHOWN = 10  # the Latency table's slowest devices, besides the ones flagged
-# The families the summary counts devices by: vulns' families, as Ubiquiti names them
+# The families the summary counts devices by: vulns' families, as Ubiquiti names them (translated
+# where they're shown)
 FAMILY_NAMES = {"airmax-ac": "airMAX AC", "airmax-m": "airMAX M", "af60": "airFiber 60", "af60-xg": "airFiber 60",
                 "airfiber": "airFiber", "gbe": "GigaBeam", "aircube": "airCube", "edgeos": "EdgeRouter",
                 "edgeswitch": "EdgeSwitch", "edgeswitch-x": "EdgeSwitch X", "edgeswitch-xp": "EdgeSwitch XP",
                 "airgateway": "airGateway", "edgepower": "EdgePower", "usg": "UniFi Security Gateway",
-                "unifi-os": "UniFi OS console", "unifi-ap": "UniFi access point", "unifi-switch": "UniFi switch",
-                "uxg": "UniFi gateway", "unifi-lte": "UniFi LTE", "ubb": "UniFi Building Bridge"}
+                "unifi-os": N_("UniFi OS console"), "unifi-ap": N_("UniFi access point"),
+                "unifi-switch": N_("UniFi switch"), "uxg": N_("UniFi gateway"), "unifi-lte": "UniFi LTE",
+                "ubb": "UniFi Building Bridge"}
 _RANK = {level: n for n, level in enumerate(core.LEVEL_ORDER)}
 
 _REPORT_CSS = """
@@ -765,28 +793,34 @@ def scan_mode(opts) -> str:
     """The scan's mode as the app's list names it, with what was added to it ("Full scan, with deep
     checks and temporary addresses")."""
     vlans = opts.vlans or bool(getattr(opts, "vlan_ids", None))
-    name = ("Direct to a device" if opts.direct else "Trunk VLANs" if vlans else "Sniff the wire" if opts.sniff
-            else "Listen only" if opts.listen else "Quick" if opts.quick else "Full scan")
-    extras = ["deep checks" if opts.deep else "port checks" if opts.ports else "",
-              "every TCP port of the addresses given" if opts.all_ports else "",
-              "temporary addresses" if (opts.aliases or opts.alias) and not (vlans or opts.direct) else ""]
+    name = (_("Direct to a device") if opts.direct else _("Trunk VLANs") if vlans else _("Sniff the wire")
+            if opts.sniff else _("Listen only") if opts.listen else _("Quick") if opts.quick else _("Full scan"))
+    extras = [_("deep checks") if opts.deep else _("port checks") if opts.ports else "",
+              _("every TCP port of the addresses given") if opts.all_ports else "",
+              _("temporary addresses") if (opts.aliases or opts.alias) and not (vlans or opts.direct) else ""]
     extras = [e for e in extras if e]
-    return name + (f", with {' and '.join(extras)}" if extras else "")
+    if not extras:
+        return name
+    joined = extras[0]
+    for extra in extras[1:]:
+        joined = tr("{first} and {second}", first=joined, second=extra)
+    return tr("{mode}, with {extras}", mode=name, extras=joined)
 
 
 def scanned_networks(res) -> list:
     """What the scan covered, a phrase each: each interface's subnet ("10.60.12.0/24 on en0
     (Ethernet)"), the subnets and addresses it was given (Settings' list, the command line's), the
     networks reached through temporary addresses and the VLANs probed."""
-    out = [f"{i.network} on {i.name}" + (f" ({i.label})" if i.label else "")
+    out = [tr("{network} on {interface}", network=i.network, interface=i.name) + (f" ({i.label})" if i.label else "")
            for i in res.ifaces if i.prefix < 32 and not i.ip.startswith("169.254.")]
     out += list(res.opts.targets or ())
-    out += [f"{t.network} (temporary address)" for t in res.base_targets]
+    out += [tr("{network} (temporary address)", network=t.network) for t in res.base_targets]
     vlans = set(getattr(res.opts, "vlan_ids", None) or ())
     if not res.opts.direct:
-        vlans |= {v for tr in res.trunks for v in tr.tagged_ids()}
+        vlans |= {v for trunk in res.trunks for v in trunk.tagged_ids()}
     if vlans:
-        out.append(f"VLAN{'s' if len(vlans) > 1 else ''} {', '.join(map(str, sorted(vlans)))}")
+        ids = ", ".join(map(str, sorted(vlans)))
+        out.append(tr("VLANs {ids}", ids=ids) if len(vlans) > 1 else tr("VLAN {ids}", ids=ids))
     return list(dict.fromkeys(out))
 
 
@@ -830,7 +864,7 @@ def _status_html(d) -> str:
     """The Status column, each finding named in its level's colour."""
     found = dict.fromkeys((level, tag) for level, tag, _ in d.issues)
     if not found:
-        return '<span class="info">Console</span>' if d.console else '<span class="ok">OK</span>'
+        return f'<span class="info">{_("Console")}</span>' if d.console else f'<span class="ok">{_("OK")}</span>'
     return ", ".join(f'<span class="{_LEVEL_CLASS.get(level, "warn")}">{escape(core.status_label(tag))}</span>'
                      for level, tag in found)
 
@@ -865,34 +899,37 @@ def _issue_section(devices, tags, ids: dict) -> list:
 def _summary(devices, ids: dict) -> str:
     """The tiles (devices, then issues by level), the devices by vendor and family, and the ones
     needing attention first."""
-    tiles = [("", len(devices), f"device{'s' if len(devices) != 1 else ''}",
-              f"{len(needs_attention(devices))} need attention")]
+    tiles = [("", len(devices), _("devices") if len(devices) != 1 else _("device"),
+              tr("{count} need attention", count=len(needs_attention(devices))))]
     for level in ("error", "warn", "note"):
         issues = sum(1 for d in devices for lv, _, _ in d.issues if lv == level)
         hit = sum(1 for d in devices if any(lv == level for lv, _, _ in d.issues))
-        tiles.append((_LEVEL_CLASS[level] if issues else "", issues, LEVEL_NAMES[level].lower(),
-                      f"on {hit} device{'s' if hit != 1 else ''}" if issues else "none"))
+        tiles.append((_LEVEL_CLASS[level] if issues else "", issues, _(LEVEL_NAMES[level]).lower(),
+                      (tr("on {count} devices", count=hit) if hit != 1 else tr("on {count} device", count=hit))
+                      if issues else _("none")))
     out = ['<div class="tiles">' + "".join(f'<div class="tile {cls}"><b>{n}</b>{escape(what)}<br><span>{escape(sub)}'
                                           f"</span></div>" for cls, n, what, sub in tiles) + "</div>"]
     groups, families = {}, {d.model: family_name(d) for d in devices if family_name(d)}
     for d in devices:  # (one whose family isn't known takes another of its model's)
-        groups.setdefault((d.vendor or "Unknown vendor", family_name(d) or families.get(d.model, "")), []).append(
+        groups.setdefault((d.vendor or _("Unknown vendor"), family_name(d) or families.get(d.model, "")), []).append(
             d.model or "?")
-    rows = [[escape(vendor), escape(family) if family else '<span class="muted">not known</span>',
+    rows = [[escape(vendor), escape(_(family)) if family else f'<span class="muted">{_("not known")}</span>',
              escape(", ".join(f"{m} ×{n}" if n > 1 else m for m, n in sorted(Counter(models).items()))),
              str(len(models))]
             for (vendor, family), models in sorted(groups.items(), key=lambda g: (-len(g[1]), g[0]))]
-    out.append("<h3>By vendor and family</h3>" + _report_table(["Vendor", "Family", "Models", "Devices"], rows))
+    out.append(f"<h3>{_('By vendor and family')}</h3>"
+               + _report_table([_("Vendor"), _("Family"), _("Models"), _("Devices")], rows))
     worst = needs_attention(devices)
     if worst:
         items = "".join(f'<li>{_ip_link(d, ids)} {escape(d.name if d.name != d.ip else "")} '
                         f'<span class="muted">{escape(d.model)}</span>: {_status_html(d)}</li>'
                         for d in worst[:ATTENTION_SHOWN])
         more = len(worst) - ATTENTION_SHOWN
-        out.append(f"<h3>Needing attention first</h3><ol>{items}</ol>"
-                   + (f'<p class="muted">And {more} more with warnings: see the device table.</p>' if more > 0 else ""))
+        out.append(f"<h3>{_('Needing attention first')}</h3><ol>{items}</ol>"
+                   + ('<p class="muted">' + tr("And {count} more with warnings: see the device table.", count=more)
+                      + "</p>" if more > 0 else ""))
     else:
-        out.append('<p class="ok">No device has a warning or an error.</p>')
+        out.append(f'<p class="ok">{_("No device has a warning or an error.")}</p>')
     return "\n".join(out)
 
 
@@ -907,8 +944,8 @@ def _device_table(rows, ids: dict) -> str:
         runs = ((d.health or {}).get("firmware") or {}).get("current") or d.firmware  # without its build number
         cells.append([f'<a id="{_anchor(d, ids)}"></a>{ip}', escape(d.vlan_label), escape(d.vendor), escape(d.model),
                       escape(d.name), escape(d.mac or ""), escape(runs), latest, _status_html(d)])
-    return _report_table(["IP", "VLAN", "Vendor", "Model", "Name", "MAC", "Firmware", "Latest", "Status"],
-                         cells, nowrap=(0, 3, 5), wide=True)
+    return _report_table(["IP", "VLAN", _("Vendor"), _("Model"), _("Name"), "MAC", _("Firmware"), _("Latest"),
+                          _("Status")], cells, nowrap=(0, 3, 5), wide=True)
 
 
 def _cve_section(devices, ids: dict) -> str:
@@ -920,28 +957,43 @@ def _cve_section(devices, ids: dict) -> str:
             found.setdefault(m.cve["id"], (m, []))[1].append(d)
     with_cves = [d for d in devices if d.cves or any(tag == "CVE" for _, tag, _ in d.issues)]
     unchecked = sum(1 for d in devices if d.cves is None and d.firmware)
-    intro = (f"{len(found)} known CVE{'s' if len(found) != 1 else ''} on {len(with_cves)} "
-             f"device{'s' if len(with_cves) != 1 else ''}" if with_cves else "No device matches a known CVE")
-    out = [f"<h2>Known CVEs{f' ({len(found)})' if found else ''}</h2><p>{intro}, from the "
-           f"{escape(vulns.list_label())}. No match isn't proof a device is safe: only models and firmware versions "
-           "discovery identifies for certain are checked"
-           + (f"; {unchecked} device{'s' if unchecked != 1 else ''} reported firmware the list doesn't cover"
-              if unchecked else "") + ".</p>"]
+    listed = escape(vulns.list_label())
+    if with_cves:
+        cves = tr("{count} known CVEs", count=len(found)) if len(found) != 1 else tr("{count} known CVE", count=1)
+        on = (tr("{count} devices", count=len(with_cves)) if len(with_cves) != 1
+              else tr("{count} device", count=len(with_cves)))
+        intro = tr("{cves} on {devices}, from the {list}.", cves=cves, devices=on, list=listed)
+    else:
+        intro = tr("No device matches a known CVE, from the {list}.", list=listed)
+    if not unchecked:
+        proof = _("No match isn't proof a device is safe: only models and firmware versions discovery identifies "
+                  "for certain are checked.")
+    elif unchecked == 1:
+        proof = tr("No match isn't proof a device is safe: only models and firmware versions discovery identifies "
+                   "for certain are checked; {count} device reported firmware the list doesn't cover.", count=1)
+    else:
+        proof = tr("No match isn't proof a device is safe: only models and firmware versions discovery identifies "
+                   "for certain are checked; {count} devices reported firmware the list doesn't cover.",
+                   count=unchecked)
+    out = [f"<h2>{tr('Known CVEs ({count})', count=len(found)) if found else _('Known CVEs')}</h2>"
+           f"<p>{i18n.sentences(intro, proof)}</p>"]
     rows = []
     for cve_id, (m, hit) in sorted(found.items(), key=lambda f: (-(f[1][0].cve.get("score") or 0), f[0])):
         severity = m.cve.get("severity") or "unrated"
         score = m.cve.get("score")
         rows.append([f'<a href="{vulns.nvd_url(cve_id)}">{escape(cve_id)}</a>',
-                     f'<span class="{_LEVEL_CLASS[vulns.LEVELS.get(severity, "warn")]}">{escape(severity)}'
-                     f'{f" {score:g}" if score is not None else ""}</span>', escape(m.fixed or "none named"),
+                     f'<span class="{_LEVEL_CLASS[vulns.LEVELS.get(severity, "warn")]}">{escape(_(severity))}'
+                     f'{f" {score:g}" if score is not None else ""}</span>', escape(m.fixed or _("none named")),
                      escape(m.cve.get("summary") or ""),
                      ", ".join(_ip_link(d, ids) for d in hit)])
     if rows:
-        out.append(_report_table(["CVE", "Severity", "Fixed in", "Summary", "Found on"], rows, nowrap=(0,), wide=True))
+        out.append(_report_table(["CVE", _("Severity"), _("Fixed in"), _("Summary"), _("Found on")], rows,
+                                 nowrap=(0,), wide=True))
     out += _issue_section(devices, ("CVE",), ids)
     if found:
-        out.append(f'<p class="muted">Each CVE\'s page: {escape(vulns.nvd_url("<CVE ID>"))}. '
-                   f"{escape(vulns.NVD_NOTICE)}</p>")
+        out.append('<p class="muted">'
+                   + i18n.sentences(tr("Each CVE's page: {url}.", url=escape(vulns.nvd_url(_("<CVE ID>")))),
+                                    escape(_(vulns.NVD_NOTICE))) + "</p>")
     return "\n".join(out)
 
 
@@ -951,11 +1003,15 @@ def _firmware_section(devices, ids: dict) -> str:
     checked = [(d, latest, outdated) for d, latest, outdated in checked if latest]
     newer = [(d, latest) for d, latest, outdated in checked if outdated]
     if not checked:
-        return ("<h2>Firmware updates</h2><p>The latest firmware wasn't looked up in this scan (Check firmware "
-                "versions during scans is off in Settings, or Ubiquiti's firmware server didn't answer).</p>")
+        return (f"<h2>{_('Firmware updates')}</h2><p>"
+                + _("The latest firmware wasn't looked up in this scan (Check firmware versions during scans is off "
+                    "in Settings, or Ubiquiti's firmware server didn't answer).") + "</p>")
     if not newer:
-        return (f"<h2>Firmware updates</h2><p class=\"ok\">All {len(checked)} device{'s' if len(checked) != 1 else ''}"
-                " whose latest firmware Ubiquiti's firmware server lists run it.</p>")
+        return (f"<h2>{_('Firmware updates')}</h2><p class=\"ok\">"
+                + (tr("All {count} devices whose latest firmware Ubiquiti's firmware server lists run it.",
+                      count=len(checked)) if len(checked) != 1
+                   else tr("All {count} device whose latest firmware Ubiquiti's firmware server lists run it.",
+                           count=len(checked))) + "</p>")
     rows = []
     for d, latest in newer:
         found = (d.health or {}).get("firmware") or {}
@@ -963,12 +1019,14 @@ def _firmware_section(devices, ids: dict) -> str:
         rows.append([_ip_link(d, ids), escape(d.name),
                      escape(d.model), escape(found.get("current") or d.firmware), f"<b>{escape(latest)}</b>",
                      escape(found.get("date") or ""),
-                     f'<span class="error">{escape(fix)} or later</span>' if fix else ""])
-    return (f"<h2>Firmware updates ({len(newer)})</h2><p>{len(newer)} of {len(checked)} device"
-            f"{'s' if len(checked) != 1 else ''} whose latest firmware Ubiquiti's firmware server lists run an "
-            "older version.</p>"
-            + _report_table(["IP", "Name", "Model", "Runs", "Latest", "Released", "Fixes its known CVEs"], rows,
-                            nowrap=(0,), wide=True))
+                     f'<span class="error">{tr("{version} or later", version=escape(fix))}</span>' if fix else ""])
+    older = (tr("{count} of {total} devices whose latest firmware Ubiquiti's firmware server lists run an older "
+                "version.", count=len(newer), total=len(checked)) if len(checked) != 1
+             else tr("{count} of {total} device whose latest firmware Ubiquiti's firmware server lists run an older "
+                     "version.", count=len(newer), total=len(checked)))
+    return (f"<h2>{tr('Firmware updates ({count})', count=len(newer))}</h2><p>{older}</p>"
+            + _report_table(["IP", _("Name"), _("Model"), _("Runs"), _("Latest"), _("Released"),
+                             _("Fixes its known CVEs")], rows, nowrap=(0,), wide=True))
 
 
 def _ms(value: float) -> str:
@@ -982,10 +1040,11 @@ def _latency_cells(d) -> list:
     if not sent:
         return None
     if not replies:
-        return ["no reply", "", f"0 of {sent}"]
+        return [_("no reply"), "", tr("{count} of {total}", count=0, total=sent)]
     lost = sent - len(replies)
     return [f"{_ms(sum(replies) / len(replies))} ms", f"{_ms(min(replies))}–{_ms(max(replies))} ms",
-            f"{len(replies)} of {sent}" + (f" ({round(lost * 100 / sent)}% lost)" if lost else "")]
+            tr("{count} of {total} ({percent}% lost)", count=len(replies), total=sent, percent=round(lost * 100 / sent))
+            if lost else tr("{count} of {total}", count=len(replies), total=sent)]
 
 
 def _latency_table(devices, tags, ids: dict) -> str:
@@ -993,7 +1052,7 @@ def _latency_table(devices, tags, ids: dict) -> str:
     measured = [(d, _latency_cells(d)) for d in devices]
     measured = [(d, cells) for d, cells in measured if cells]
     if not measured:
-        return "<p>Latency wasn't measured in this scan.</p>"
+        return "<p>" + _("Latency wasn't measured in this scan.") + "</p>"
 
     def average(d):
         replies = d.health["latency"].get("replies_ms") or []
@@ -1003,14 +1062,28 @@ def _latency_table(devices, tags, ids: dict) -> str:
     rest = sorted((m for m in measured if m not in flagged), key=lambda m: -average(m[0]))
     rows = [[_ip_link(d, ids), escape(d.name), escape(d.model), *cells] for d, cells in flagged + rest[:LATENCY_SHOWN]]
     answered = sum(1 for d, _ in measured if average(d) >= 0)
-    order = "those flagged come first, then the rest" if flagged else "they're listed"
-    out = [f"<p>{answered} of {len(measured)} device{'s' if len(measured) != 1 else ''} pinged after the scan "
-           f"answered; {order} slowest first.</p>",
-           _report_table(["IP", "Name", "Model", "Average", "Range", "Replies"], rows, nowrap=(0, 3, 4), wide=True)]
+    count, total = answered, len(measured)
+    if flagged:
+        said = (tr("{count} of {total} devices pinged after the scan answered; those flagged come first, then the rest "
+                   "slowest first.", count=count, total=total) if total != 1
+                else tr("{count} of {total} device pinged after the scan answered; those flagged come first, then the "
+                        "rest slowest first.", count=count, total=total))
+    else:
+        said = (tr("{count} of {total} devices pinged after the scan answered; they're listed slowest first.",
+                   count=count, total=total) if total != 1
+                else tr("{count} of {total} device pinged after the scan answered; they're listed slowest first.",
+                        count=count, total=total))
+    out = [f"<p>{said}</p>",
+           _report_table(["IP", _("Name"), _("Model"), _("Average"), _("Range"), _("Replies")], rows, nowrap=(0, 3, 4),
+                         wide=True)]
     left = rest[LATENCY_SHOWN:]
     if left:
-        out.append(f'<p class="muted">{len(left)} other device{"s" if len(left) != 1 else ""} answered in '
-                   f"{_ms(max(average(d) for d, _ in left))} ms or less on average.</p>")
+        slowest = _ms(max(average(d) for d, _ in left))
+        out.append('<p class="muted">'
+                   + (tr("{count} other devices answered in {milliseconds} ms or less on average.", count=len(left),
+                         milliseconds=slowest) if len(left) != 1
+                      else tr("{count} other device answered in {milliseconds} ms or less on average.", count=1,
+                              milliseconds=slowest)) + "</p>")
     return "\n".join(out)
 
 
@@ -1024,22 +1097,23 @@ def _link_section(devices, title, tags, ids: dict) -> str:
         reading = links.html(d) if links is not None and (d.health or {}).get("link") else ""
         if found or reading:
             blocks.append(f'<div class="device">{_device_heading(d, ids)}'
-                          + (f"<ul>{_issue_list(d, found)}</ul>" if found else '<p class="ok">Nothing flagged.</p>')
+                          + (f"<ul>{_issue_list(d, found)}</ul>" if found
+                             else f'<p class="ok">{_("Nothing flagged.")}</p>')
                           + f"{reading}</div>")
     if not blocks:
         return ""
     flagged = sum(1 for d in devices if any(tag in tags for _, tag, _ in d.issues))
-    return f"<h2>{escape(title)}{f' ({flagged})' if flagged else ''}</h2>" + "\n".join(blocks)
+    return f"<h2>{escape(_(title))}{f' ({flagged})' if flagged else ''}</h2>" + "\n".join(blocks)
 
 
 def _notes_section(rows, ids: dict) -> str:
     noted = [d for d, _ in rows if d.note]
     if not noted:
         return ""
-    return (f"<h2>Device notes ({len(noted)})</h2>"
-            + _report_table(["IP", "Device", "Note"], [[_ip_link(d, ids), escape(_who(d)),
-                                                        f'<div class="note">{escape(d.note)}</div>'] for d in noted],
-                            nowrap=(0,)))
+    return (f"<h2>{tr('Device notes ({count})', count=len(noted))}</h2>"
+            + _report_table(["IP", _("Device"), _("Note")], [[_ip_link(d, ids), escape(_who(d)),
+                                                              f'<div class="note">{escape(d.note)}</div>']
+                                                             for d in noted], nowrap=(0,)))
 
 
 def report_file_name(site: str) -> str:
@@ -1059,38 +1133,43 @@ def site_report(res, site: str = "", demo: bool = False) -> str:
     when = time.strftime("%Y-%m-%d %H:%M", time.localtime(getattr(res, "finished", None) or time.time()))
     networks = scanned_networks(res)
     heard = sum(1 for d in devices if d.ubnt_packets)
-    facts = [("Scanned", when), ("Mode", scan_mode(res.opts)),
-             *([("Networks", ", ".join(networks))] if networks else []),
-             ("Devices", f"{len(devices)}, {heard} answered UBNT discovery; the scan took {res.elapsed:.0f} s"
-                         + (" (stopped early)" if res.interrupted else ""))]
-    head = ((f'<div class="stamp">{escape(DEMO_STAMP)}</div>' if demo else "")
-            + (f'<p class="kicker">Site Report</p><h1>{escape(site)}</h1>' if site else "<h1>Site Report</h1>")
+    took = (tr("{count}, {answered} answered UBNT discovery; the scan took {seconds:.0f}{unit} (stopped early)",
+               count=len(devices), answered=heard, seconds=res.elapsed, unit=SECONDS) if res.interrupted
+            else tr("{count}, {answered} answered UBNT discovery; the scan took {seconds:.0f}{unit}",
+                    count=len(devices), answered=heard, seconds=res.elapsed, unit=SECONDS))
+    facts = [(_("Scanned"), when), (_("Mode"), scan_mode(res.opts)),
+             *([(_("Networks"), ", ".join(networks))] if networks else []), (_("Devices"), took)]
+    head = ((f'<div class="stamp">{escape(_(DEMO_STAMP))}</div>' if demo else "")
+            + (f'<p class="kicker">{_("Site Report")}</p><h1>{escape(site)}</h1>' if site
+               else f"<h1>{_('Site Report')}</h1>")
             + '<dl class="facts">' + "".join(f"<dt>{escape(k)}</dt><dd>{escape(v)}</dd>" for k, v in facts) + "</dl>")
-    out = [f"<header>{head}</header>", "<h2>Summary</h2>", _summary(devices, ids),
-           f"<h2>Devices ({len(devices)})</h2>", _device_table(rows, ids) if rows else "<p>No devices were found.</p>",
-           _cve_section(devices, ids)]
+    out = [f"<header>{head}</header>", f"<h2>{_('Summary')}</h2>", _summary(devices, ids),
+           f"<h2>{tr('Devices ({count})', count=len(devices))}</h2>",
+           _device_table(rows, ids) if rows else f"<p>{_('No devices were found.')}</p>", _cve_section(devices, ids)]
     title, tags = REPORT_SECTIONS[0]
     found = _issue_section(devices, tags, ids)
-    out.append(f"<h2>{escape(title)}{f' ({len(found)})' if found else ''}</h2>" + ("\n".join(found) if found else
-               '<p class="ok">No device takes its factory login or reports factory defaults.</p>'))
+    out.append(f"<h2>{escape(_(title))}{f' ({len(found)})' if found else ''}</h2>" + ("\n".join(found) if found else
+               f'<p class="ok">{_("No device takes its factory login or reports factory defaults.")}</p>'))
     out.append(_firmware_section(devices, ids))
     title, tags = REPORT_SECTIONS[1]
     found = _issue_section(devices, tags, ids)
-    out.append(f"<h2>{escape(title)}{f' ({len(found)})' if found else ''}</h2>"
+    out.append(f"<h2>{escape(_(title))}{f' ({len(found)})' if found else ''}</h2>"
                + _latency_table(devices, tags, ids) + "\n".join(found))
     out.append(_link_section(devices, *REPORT_SECTIONS[2], ids))
     others = _issue_section(devices, None, ids)
-    out.append(f"<h2>Other issues ({len(others)})</h2>" + "\n".join(others) if others else
-               '<h2>Other issues</h2><p class="ok">None.</p>')
+    out.append(f"<h2>{tr('Other issues ({count})', count=len(others))}</h2>" + "\n".join(others) if others else
+               f'<h2>{_("Other issues")}</h2><p class="ok">{_("None.")}</p>')
     out.append(_notes_section(rows, ids))
     wire = res.wire_text(verbose=True)
     if wire:
-        out.append(f"<h2>{escape(res.wire_title())}</h2><pre>{escape(wire)}</pre>")
+        out.append(f"<h2>{escape(_(res.wire_title()))}</h2><pre>{escape(wire)}</pre>")
     if res.notes:
-        out.append("<h2>Scan notes</h2><ul>" + "".join(f"<li>{escape(msg)}</li>" for _, msg in res.notes) + "</ul>")
-    out.append(f"<footer>Made {time.strftime('%Y-%m-%d %H:%M')} by OpenDisco {__version__}.</footer>")
-    title = " · ".join(x for x in ("Site Report", site, when, "Demo" if demo else "") if x)
-    return (f'<!doctype html><html lang="en"><head><meta charset="utf-8">\n'
+        out.append(f"<h2>{_('Scan notes')}</h2><ul>" + "".join(f"<li>{escape(msg)}</li>" for _, msg in res.notes)
+                   + "</ul>")
+    made = tr("Made {date} by OpenDisco {version}.", date=time.strftime("%Y-%m-%d %H:%M"), version=__version__)
+    out.append(f"<footer>{made}</footer>")
+    title = " · ".join(x for x in (_("Site Report"), site, when, _("Demo") if demo else "") if x)
+    return (f'<!doctype html><html lang="{i18n.language}"><head><meta charset="utf-8">\n'
             f'<meta name="viewport" content="width=device-width, initial-scale=1"><title>{escape(title)}</title>\n'
             f"<style>{_REPORT_CSS}</style>\n</head><body>\n" + "\n".join(o for o in out if o) + "\n</body></html>\n")
 
@@ -1104,24 +1183,28 @@ def _addresses(net: ipaddress.IPv4Network) -> int:
 def _check(spec: str):
     """(the network, "") or (None, what's wrong with it)."""
     if ":" in spec:
-        return None, f"{spec} is IPv6: UBNT discovery runs over IPv4"
+        return None, tr("{spec} is IPv6: UBNT discovery runs over IPv4", spec=spec)
     if not re.fullmatch(r"\d{1,3}(?:\.\d{1,3}){3}(?:/\d{1,2})?", spec):
-        return None, (f"{spec!r} isn't an IPv4 subnet or address: write one like 10.20.0.0/24 or 10.20.0.7"
-                      + (" (names aren't looked up here)" if re.search(r"[A-Za-z]", spec) else ""))
+        if re.search(r"[A-Za-z]", spec):
+            return None, tr("{spec!r} isn't an IPv4 subnet or address: write one like 10.20.0.0/24 or 10.20.0.7 "
+                            "(names aren't looked up here)", spec=spec)
+        return None, tr("{spec!r} isn't an IPv4 subnet or address: write one like 10.20.0.0/24 or 10.20.0.7", spec=spec)
     try:
         net = ipaddress.IPv4Network(spec, strict=False)
     except ValueError:
-        return None, f"{spec} isn't a valid address: each part is 0 to 255, and the mask /0 to /32"
+        return None, tr("{spec} isn't a valid address: each part is 0 to 255, and the mask /0 to /32", spec=spec)
     first = net.network_address
-    for test, why in ((first.is_loopback, "is this computer's own loopback"),
-                      (first.is_multicast, "is multicast, not devices"),
-                      (first.is_link_local, "is link-local, which no router or VPN forwards"),
-                      (int(first) >> 24 == 0, "isn't an address devices use"),
-                      (first.is_reserved, "is reserved (240.0.0.0 and up), not devices")):
+    for test, why in ((first.is_loopback, tr("{network} is this computer's own loopback", network=net)),
+                      (first.is_multicast, tr("{network} is multicast, not devices", network=net)),
+                      (first.is_link_local, tr("{network} is link-local, which no router or VPN forwards",
+                                               network=net)),
+                      (int(first) >> 24 == 0, tr("{network} isn't an address devices use", network=net)),
+                      (first.is_reserved, tr("{network} is reserved (240.0.0.0 and up), not devices", network=net))):
         if test:
-            return None, f"{net} {why}"
+            return None, why
     if net.prefixlen < 16:
-        return None, f"{net} is larger than a /16 ({net.num_addresses:,} addresses): give the subnets the gear is on"
+        return None, tr("{network} is larger than a /16 ({count:,} addresses): give the subnets the gear is on",
+                        network=net, count=net.num_addresses)
     return net, ""
 
 
@@ -1137,7 +1220,7 @@ def parse_sweep_list(text: str) -> tuple:
                 continue
             net, why = _check(spec)
             if net is None:
-                problems.append(f"Line {n}: {why}.")
+                problems.append(tr("Line {line}: {problem}.", line=n, problem=why))
                 continue
             if net in seen:
                 continue
@@ -1145,8 +1228,9 @@ def parse_sweep_list(text: str) -> tuple:
             total += _addresses(net)
             targets.append(str(net.network_address) if net.prefixlen == 32 else str(net))
     if total > SWEEP_LIMIT:
-        problems.append(f"These add up to {total:,} addresses, about {sweep_seconds(total):.0f}{SECONDS} more on every "
-                        f"scan; the limit is {SWEEP_LIMIT:,} (a /19's worth). List the subnets the gear is on.")
+        problems.append(tr("These add up to {count:,} addresses, about {seconds:.0f}{unit} more on every scan; the "
+                           "limit is {limit:,} (a /19's worth). List the subnets the gear is on.", count=total,
+                           seconds=sweep_seconds(total), unit=SECONDS, limit=SWEEP_LIMIT))
     return targets, problems
 
 
@@ -1167,5 +1251,11 @@ def sweep_targets(saved) -> list:
 
 def describe_targets(targets) -> str:
     total = sum(_addresses(ipaddress.IPv4Network(t)) for t in targets)
-    return (f"{', '.join(targets[:4])}{f' and {len(targets) - 4} more' if len(targets) > 4 else ''} "
-            f"({total:,} address{'es' if total != 1 else ''}, about {max(1, round(sweep_seconds(total)))}{SECONDS})")
+    listed = (tr("{targets} and {count} more", targets=", ".join(targets[:4]), count=len(targets) - 4)
+              if len(targets) > 4 else ", ".join(targets))
+    seconds = max(1, round(sweep_seconds(total)))
+    if total != 1:
+        return tr("{targets} ({count:,} addresses, about {seconds}{unit})", targets=listed, count=total,
+                  seconds=seconds, unit=SECONDS)
+    return tr("{targets} ({count:,} address, about {seconds}{unit})", targets=listed, count=total, seconds=seconds,
+              unit=SECONDS)

@@ -29,13 +29,18 @@ import zipfile
 from pathlib import Path
 
 from opendisco import FULL_NAME, __version__, core, demossh, devicetools, health, linkhealth, records
+from opendisco.i18n import N_, _, tr
 
-MODE = "Demo network"
-MODE_HELP = "Made-up WISP gear, for trying the app without any."
+MODE = N_("Demo network")
+MODE_HELP = N_("Made-up WISP gear, for trying the app without any.")
 STAMP = records.DEMO_STAMP  # "Demo network: made-up devices"
 NOTE = (f"{STAMP}. Nothing was sent on the network: the device tools work on simulated gear. Log in as demo / demo "
         "(the bench spare: ubnt / ubnt).")
-NO_WEB_UI = "The demo network's devices are made up: they have no web UI to open."
+NO_WEB_UI = N_("The demo network's devices are made up: they have no web UI to open.")
+# What a phone's device tool (phonetools' app.device_job) is doing, for "The demo network's … is still running"
+PHONE_JOBS = {"firmware": N_("firmware update"), "login": N_("login change"), "backup": N_("config backup"),
+              "upload": N_("config upload"), "reboot": N_("reboot"), "link": N_("link health check"),
+              "backup_all": N_("Back up all")}
 DAY = 86400
 # The interface Details names for the untagged VLAN, as each system calls its first one
 INTERFACE = {"darwin": "en0", "ios": "en0", "win32": "Ethernet", "android": "wlan0"}.get(sys.platform, "eth0")
@@ -495,7 +500,7 @@ class Demo:
             self._set(terminal, "OwnSession", demossh.own_session_factory(session))  # (a computer without ssh)
             self._set(terminal, "in_app_terminals", lambda: True)
         title = app.main_window.title
-        self._set(app.main_window, "title", f"{app.formal_name} Demo" if mobile else f"{title}: {MODE}")
+        self._set(app.main_window, "title", tr("{app} Demo", app=app.formal_name) if mobile else f"{title}: {_(MODE)}")
         if hasattr(app, "_top_changed"):
             app._top_changed()  # Android's title bar
         demossh.NETWORK = self.network
@@ -506,8 +511,8 @@ class Demo:
 
     def status(self, res: core.ScanResult) -> str:
         heard = sum(1 for d in res.devices if d.ubnt_packets)
-        return (f"{STAMP}: {len(res.devices)} device(s), {heard} answered UBNT discovery. Nothing was sent on the "
-                "network; log in as demo / demo.")
+        return tr("{stamp}: {count} device(s), {heard} answered UBNT discovery. Nothing was sent on the network; log in "
+                  "as demo / demo.", stamp=_(STAMP), count=len(res.devices), heard=heard)
 
     def saved_settings(self, settings: dict) -> dict:
         """settings.json's own values of what the demo keeps apart, whatever the app has now."""
@@ -524,14 +529,14 @@ class Demo:
         """What's still running on a made-up device, which has to finish before the demo ends."""
         app = self.app
         if app.rescanning or app.finding or app.measuring is not None:
-            return "a rescan, port search or latency measurement"
+            return _("a rescan, port search or latency measurement")
         job = getattr(app, "device_job", None)
-        if job:
-            return job["name"]
+        if job:  # (the phones' device tools)
+            return _(PHONE_JOBS.get(job["name"], job["name"]))
         if not app.caps["mobile"]:
             from opendisco import devicegui
             if devicegui._busy:
-                return ", ".join(sorted(set(devicegui._busy.values())))
+                return ", ".join(sorted({_(doing) for doing in devicegui._busy.values()}))
         return ""
 
     def end(self, quitting: bool = False) -> None:
@@ -551,7 +556,7 @@ class Demo:
                 app.ssh[1].close()
             if not app.caps["mobile"]:
                 for window in list(app.windows):  # the device tools' windows, its notes, its hidden devices
-                    if window is not app.main_window and window.title != "Settings":
+                    if window is not app.main_window and window.title != _("Settings"):
                         window.close()
             demossh.NETWORK = None
             for target, name, value in reversed(self.patches):
@@ -585,11 +590,13 @@ def stamp_bytes(name: str, data: bytes) -> bytes:
     bom = data.startswith(b"\xef\xbb\xbf")
     text = data[3 if bom else 0:].decode("utf-8", "surrogateescape")
     if ext in (".html", ".htm"):
-        if STAMP in text:  # the Site Report stamps itself (records.site_report's demo)
+        if _(STAMP) in text:  # the Site Report stamps itself (records.site_report's demo)
             return data
+        # (the reports are in the app's language; the data exports below keep the English stamp)
         banner = (f'<p style="background:#fff3cd;color:#664d03;border:1px solid #e0c46c;border-radius:6px;'
-                  f'padding:8px 12px;font-weight:600">{STAMP}. Nothing in this report is real.</p>')
-        text = re.sub(r"<title>", "<title>Demo: ", text, count=1)
+                  f'padding:8px 12px;font-weight:600">{tr("{stamp}. Nothing in this report is real.", stamp=_(STAMP))}</p>')
+        text = re.sub(r"<title>(.*?)</title>", lambda m: f"<title>{tr('Demo: {title}', title=m.group(1))}</title>",
+                      text, count=1, flags=re.DOTALL)
         text, n = re.subn(r"<body[^>]*>", lambda m: m.group(0) + banner, text, count=1)
         text = text if n else banner + text
     elif ext == ".json":

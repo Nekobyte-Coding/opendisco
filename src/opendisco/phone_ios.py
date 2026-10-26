@@ -8,12 +8,16 @@ a wide Stage Manager window) the device list stays in a column at the left and t
 beside it, in a split view (_Split). At a compact width the iPad app is the iPhone's: pages are
 pushed over the list. Changing between the two moves the open pages across.
 """
+import math
 from pathlib import Path
 
 import toga
 from toga.style import Pack
 
-# SF Symbols for the device page's tabs, in place of Toga's star on every one
+from opendisco import i18n
+from opendisco.i18n import _, tr
+
+# SF Symbols for the device page's tabs, in place of Toga's star on every one (by their English titles)
 TAB_SYMBOLS = {"Details": "info.circle", "Packets": "doc.text.magnifyingglass", "Tools": "wrench.and.screwdriver",
                "Notes": "text.bubble", "Log": "list.bullet.rectangle"}
 # and for Export's reports (phone.export_choices)
@@ -174,8 +178,8 @@ class _Split:
         try:  # iOS 17 and later
             note = _objc("UIContentUnavailableConfiguration").emptyConfiguration()
             note.image = _objc("UIImage").systemImageNamed("network")
-            note.text = "No Device Selected"
-            note.secondaryText = "Run a Quick Scan or a Full Scan, then pick a device from the list."
+            note.text = _("No Device Selected")
+            note.secondaryText = _("Run a Quick Scan or a Full Scan, then pick a device from the list.")
             self.empty.contentUnavailableConfiguration = note
         except Exception:
             pass
@@ -210,7 +214,8 @@ class _Split:
                 self._collapse()
         except Exception:  # the layout stays as it was rather than the app stopping
             import traceback
-            self.app._append_log("Couldn't change the iPad layout:\n" + traceback.format_exc(), status=False)
+            self.app._append_log(tr("Couldn't change the iPad layout:\n{error}", error=traceback.format_exc()),
+                                 status=False)
 
     def _expand(self):
         global _moving
@@ -304,18 +309,19 @@ def fit(app, export, notes, settings):
         return _objc("UIBarButtonItem").alloc().initWithPrimaryAction(act)
 
     bar = app.main_window._impl.container.content_controller.navigationItem
-    export_item = item("square.and.arrow.up", "Export", export)
+    export_item = item("square.and.arrow.up", _("Export"), export)
     bar.leftBarButtonItem = export_item
-    bar.rightBarButtonItems = _objc("NSArray").arrayWithArray([item("gearshape", "Settings", settings),
-                                                               item("list.bullet.rectangle", "Notes and Log", notes)])
-    bar.backButtonTitle = "Devices"
+    bar.rightBarButtonItems = _objc("NSArray").arrayWithArray([
+        item("gearshape", _("Settings"), settings), item("list.bullet.rectangle", _("Notes and Log"), notes)])
+    bar.backButtonTitle = _("Devices")
     app.export_button = BarItem(export_item)
     app.export_button.enabled = False
     try:
         app.table._impl.native.separatorStyle = 1  # UITableViewCellSeparatorStyleSingleLine
         UIImage = _objc("UIImage")
+        symbols = {_(title): symbol for title, symbol in TAB_SYMBOLS.items()}  # by the titles as shown
         for tab in app.tabs._impl.sub_containers:
-            image = UIImage.systemImageNamed(TAB_SYMBOLS.get(str(tab.controller.tabBarItem.title), ""))
+            image = UIImage.systemImageNamed(symbols.get(str(tab.controller.tabBarItem.title), ""))
             if image:
                 tab.controller.tabBarItem.image = image
         for label in app.status.widgets:  # the list's status line and Tools'
@@ -523,7 +529,7 @@ async def open_file(app):
 
 def here(app) -> str:
     """What the app's text calls the device it runs on."""
-    return "this iPad" if _pad() else "this iPhone"
+    return _("this iPad") if _pad() else _("this iPhone")
 
 
 def _shortened(label):
@@ -540,6 +546,32 @@ def _shortened(label):
     impl.rehint = shortening
     impl.native.lineBreakMode = 4  # NSLineBreakByTruncatingTail
     label.refresh()
+
+
+def wrap_switch(switch):
+    """A switch's text in as many lines as it takes: iOS gives it one, and a long one (a
+    translation, say) pushed the switch past the screen's edge. (Toga's Switch keeps a text's
+    first line only, so the lines go to the label itself.)"""
+    from rubicon.objc import CGSize, send_message
+    try:
+        label = switch._impl.native_label
+        text = str(label.text)
+        room = float(_class_value(_objc("UIScreen"), "mainScreen").bounds.size.width) - 110  # (the switch, margins)
+        wide = send_message(label, "intrinsicContentSize", restype=CGSize, argtypes=[]).width
+        if wide <= room or "\n" in text:
+            return
+        label.numberOfLines = 0
+        switch._impl.set_text(i18n.fill(text, max(10, int(i18n.width(text) * room / wide))))
+        impl, rehint = switch._impl, switch._impl.rehint
+
+        def whole_lines():  # (Toga's layout drops a fraction of a point: the second line went to "…")
+            rehint()
+            switch.intrinsic.height = math.ceil(switch.intrinsic.height)
+
+        impl.rehint = whole_lines
+        switch.refresh()
+    except Exception:
+        pass  # cosmetic
 
 
 def style_button(button, kind="filled", color=None):
@@ -715,7 +747,7 @@ def share(app, path: Path):
         popover.barButtonItem = app.export_button.native
 
     def done(activity, completed: bool, items, error) -> None:
-        app.status.text = f"Shared {path.name}" if completed else "Export not shared."
+        app.status.text = tr("Shared {name}", name=path.name) if completed else _("Export not shared.")
 
     app._share_done = Block(done, None, objc_id, bool, objc_id, objc_id)  # kept alive while it's up
     sheet.completionWithItemsHandler = app._share_done
@@ -723,7 +755,7 @@ def share(app, path: Path):
     while shown.presentedViewController:
         shown = shown.presentedViewController
     shown.presentViewController(sheet, animated=True, completion=None)
-    app.status.text = f"Saved {path.name}: share it to Files, Mail or AirDrop."
+    app.status.text = tr("Saved {name}: share it to Files, Mail or AirDrop.", name=path.name)
 
 
 class Picker:
@@ -829,7 +861,7 @@ def done_bar(app, widget):
         block = Block(lambda action: end_editing(app), None, objc_id)
         app._done_blocks.append(block)
         UIBarButtonItem = _objc("UIBarButtonItem")
-        done = _objc("UIAction").actionWithTitle("Done", image=None, identifier=None, handler=block)
+        done = _objc("UIAction").actionWithTitle(_("Done"), image=None, identifier=None, handler=block)
         bar = _objc("UIToolbar").alloc().init()
         bar.items = _objc("NSArray").arrayWithArray([UIBarButtonItem.flexibleSpaceItem(),
                                                      UIBarButtonItem.alloc().initWithPrimaryAction(done)])

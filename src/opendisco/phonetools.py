@@ -12,7 +12,6 @@ starts, and waiting for a reboot can be stopped too. Shared by iOS and Android.
 """
 import re
 import shutil
-import textwrap
 import threading
 import traceback
 from pathlib import Path
@@ -21,7 +20,8 @@ import toga
 from toga.style import Pack
 from toga.style.pack import COLUMN, ROW
 
-from opendisco import core, devicetools, linkhealth, phone, phonessh, terms
+from opendisco import core, devicetools, i18n, linkhealth, phone, phonessh, terms
+from opendisco.i18n import N_, _, tr
 
 
 def _label(d) -> str:
@@ -45,21 +45,21 @@ def update_buttons(app, d):
     ubiquiti = bool(d and (d.info.get("firmware") or d.info.get("platform")))
     stoppable = job["name"] if job and job["stop"] and d and job["key"] == d.key else ""
     retitle, ssh = phone.native(app).retitle, phonessh.available()
-    retitle(app.firmware_button, "Stop" if stoppable == "firmware" else "Firmware")
+    retitle(app.firmware_button, _("Stop") if stoppable == "firmware" else _("Firmware"))
     app.firmware_button.enabled = (idle and ubiquiti) or stoppable == "firmware"
     for button, action in ((app.config_button, "edit"), (app.login_button, "login"), (app.reboot_button, "reboot")):
         button.enabled = idle and devicetools.offers(d, action)[0] and ssh
-    retitle(app.reboot_button, "Stop" if stoppable == "reboot" else "Reboot")
+    retitle(app.reboot_button, _("Stop") if stoppable == "reboot" else _("Reboot"))
     app.reboot_button.enabled = app.reboot_button.enabled or stoppable == "reboot"
     kept = bool(d and d.mac and devicetools.list_backups(d.mac))
     app.backups_button.enabled = bool(d and d.mac) and not job and (
         kept or (idle and devicetools.offers(d, "backup")[0] and ssh))
     locating = bool(d and d.key in app.phone_locating)
-    retitle(app.locate_button, "Stop locating" if locating else "Locate")
+    retitle(app.locate_button, _("Stop locating") if locating else _("Locate"))
     app.locate_button.enabled = locating or (idle and devicetools.offers(d, "locate")[0] and ssh)
     app.link_button.enabled = idle and devicetools.offers(d, "link")[0] and ssh
     backing_up = bool(job and job["name"] == "backup_all")
-    retitle(app.backup_all_button, "Stop" if backing_up else "Back up all")
+    retitle(app.backup_all_button, _("Stop") if backing_up else _("Back up all"))
     app.backup_all_button.enabled = backing_up or (ssh and bool(app.result) and not (
         app.running or app.rescanning or app.finding or job))
 
@@ -98,7 +98,7 @@ async def _alert(app, title: str, text: str, question: bool = False):
 def _offered(app, d, action: str) -> bool:
     ok, why = devicetools.offers(d, action)
     if not ok:
-        _say(app, f"{_label(d)}: {why}.")
+        _say(app, tr("{device}: {reason}.", device=_label(d), reason=why))
     return ok
 
 
@@ -110,12 +110,12 @@ async def firmware(app):
     if job:
         if job["name"] == "firmware" and job["stop"]:
             job["stop"].set()
-            _say(app, "Stopping…")
+            _say(app, _("Stopping…"))
         return
     d = app._selected_device()
     if d is None:
         return
-    _say(app, f"Asking Ubiquiti's firmware server about {d.ip or d.mac}…", begins=True)
+    _say(app, tr("Asking Ubiquiti's firmware server about {device}…", device=d.ip or d.mac), begins=True)
     try:
         check = await _work(app, devicetools.check_firmware, d)
     except devicetools.ToolError as e:
@@ -132,37 +132,40 @@ async def firmware(app):
         return
     if not _offered(app, d, "update") or not d.ip:
         return
-    if await _alert(app, f"Firmware {check.latest}", f"{_label(d)} runs {check.current}. Install {check.latest} "
-                    "now?", question=True):
+    if await _alert(app, tr("Firmware {version}", version=check.latest),
+                    tr("{device} runs {current}. Install {latest} now?", device=_label(d), current=check.current,
+                       latest=check.latest), question=True):
         await _update(app, d, check)
 
 
 async def _update(app, d, check):
-    login = await phone.ask_route(app, d, f"Log in to install firmware {check.latest}.")
+    login = await phone.ask_route(app, d, tr("Log in to install firmware {version}.", version=check.latest))
     if not login:
         return
     family = devicetools.FAMILY_NAMES[devicetools.family(d)]
-    message = (f"Install {family} firmware {check.latest} on {_label(d)}? It runs {check.current} now.\n\n"
-               f"OpenDisco downloads it from Ubiquiti ({devicetools.fmt_size(check.size)}), checks it, copies it "
-               "to the device and starts the installation. The device restarts to install it and is offline for a "
-               "few minutes: don't unplug it or turn it off until it's back.")
+    size = devicetools.fmt_size(check.size)
+    message = tr("Install {family} firmware {version} on {device}? It runs {current} now.\n\n"
+                 "OpenDisco downloads it from Ubiquiti ({size}), checks it, copies it to the device and starts the "
+                 "installation. The device restarts to install it and is offline for a few minutes: don't unplug it "
+                 "or turn it off until it's back.", family=family, version=check.latest, device=_label(d),
+                 current=check.current, size=size)
     if devicetools.family(d) == "edgeos":
-        _say(app, f"Reading the firmware images of {d.ip}…")
+        _say(app, tr("Reading the firmware images of {ip}…", ip=d.ip))
         try:
             note = await _work(app, devicetools.edgeos_update_note, login, check.latest)
         except (devicetools.ToolError, phonessh.SSHError) as e:
-            _say(app, f"Firmware update of {d.ip}: {e}")
+            _say(app, tr("Firmware update of {ip}: {error}", ip=d.ip, error=e))
             return
-        message = (f"Install EdgeOS firmware {check.latest} on {_label(d)}? It runs {check.current} now.\n\n"
-                   f"OpenDisco downloads it from Ubiquiti ({devicetools.fmt_size(check.size)}), checks it, copies it "
-                   "to the router and adds it with EdgeOS's add system image. Once EdgeOS lists it as the image it "
-                   "boots, OpenDisco restarts the router, which is offline for a few minutes: don't unplug it or turn "
-                   f"it off until it's back.\n\n{note}")
+        message = tr("Install EdgeOS firmware {version} on {device}? It runs {current} now.\n\n"
+                     "OpenDisco downloads it from Ubiquiti ({size}), checks it, copies it to the router and adds it "
+                     "with EdgeOS's add system image. Once EdgeOS lists it as the image it boots, OpenDisco restarts "
+                     "the router, which is offline for a few minutes: don't unplug it or turn it off until it's back."
+                     "\n\n{note}", version=check.latest, device=_label(d), current=check.current, size=size, note=note)
     if devicetools.family(d) in ("unifi", "unifi-os"):
-        message += ("\n\nUbiquiti's help center describes updating over SSH as a last resort, for when the UniFi app "
-                    "can't update the device.")
+        message += "\n\n" + _("Ubiquiti's help center describes updating over SSH as a last resort, for when the "
+                               "UniFi app can't update the device.")
     message += "\n\n" + terms.risk("firmware")
-    if not await _alert(app, "Install firmware?", message, question=True):
+    if not await _alert(app, _("Install firmware?"), message, question=True):
         return
     stop = threading.Event()
     _begin(app, d, "firmware", stop)
@@ -176,14 +179,15 @@ async def _update(app, d, check):
     def work():
         path = None
         try:
-            report(f"Downloading firmware {check.latest} from Ubiquiti…", 0)
+            report(tr("Downloading firmware {version} from Ubiquiti…", version=check.latest), 0)
             path = devicetools.download_release(
                 check.release, folder, stop=stop,
                 progress=lambda done, total: report(None, 100 * done / total if total else None))
-            report(f"Downloaded and checked (SHA-256 {check.release['sha256_checksum'][:16]}…).", 100)
+            report(tr("Downloaded and checked (SHA-256 {checksum}…).",
+                      checksum=check.release['sha256_checksum'][:16]), 100)
 
             def step(text, percent=None):
-                if text and text.startswith("Starting the installation"):
+                if text and text in map(_, devicetools.INSTALL_STARTS):  # (past cancelling)
                     app._from_worker(no_stop)
                 report(text, percent)
 
@@ -202,18 +206,19 @@ async def _update(app, d, check):
         _end(app)
     if "error" in outcome:
         text = outcome["error"]
-        if stop.is_set() and "Cancelled" in text:
-            text = "Stopped. Nothing was installed."
-        _say(app, f"Firmware update of {d.ip}: {text}")
+        if stop.is_set() and ("Cancelled" in text or _("Cancelled.") in text):
+            text = _("Stopped. Nothing was installed.")
+        _say(app, tr("Firmware update of {ip}: {error}", ip=d.ip, error=text))
         return
-    _say(app, f"Back after {outcome['offline']:.0f} s. Reading its firmware again…")
+    _say(app, tr("Back after {seconds:.0f} s. Reading its firmware again…", seconds=outcome['offline']))
     now = await _reread(app, d)
     if now is None:
-        _say(app, f"{d.ip} is back: rescan it to see the version it runs.")
+        _say(app, tr("{ip} is back: rescan it to see the version it runs.", ip=d.ip))
     elif devicetools.version_key(now) == devicetools.version_key(check.latest):
-        _say(app, f"Updated: {d.ip} runs {now}.")
+        _say(app, tr("Updated: {ip} runs {version}.", ip=d.ip, version=now))
     else:
-        _say(app, f"{d.ip} is back, but reports firmware {now or 'unknown'}, not {check.latest}.")
+        _say(app, tr("{ip} is back, but reports firmware {version}, not {latest}.", ip=d.ip,
+                     version=now or _("unknown"), latest=check.latest))
 
 
 async def _reread(app, d) -> str | None:
@@ -239,25 +244,26 @@ async def config(app):
     if d is None or app.device_job or not _offered(app, d, "edit"):
         return
     kind = devicetools.config_kind(d)
-    login = await phone.ask_route(app, d, f"Log in to read its configuration ({devicetools.CONFIG_FILES[kind]}).")
+    login = await phone.ask_route(app, d, tr("Log in to read its configuration ({file}).",
+                                             file=devicetools.CONFIG_FILES[kind]))
     if not login:
         return
-    _say(app, f"Reading the config of {d.ip}…", begins=True)
+    _say(app, tr("Reading the config of {ip}…", ip=d.ip), begins=True)
     try:
         text, pending = await _work(app, devicetools.read_device_config, login, kind)
         tools = await _work(app, devicetools.config_tools, login, kind)
     except (phonessh.SSHError, devicetools.ToolError) as e:
         _say(app, str(e))
         return
-    _say(app, f"Read the config of {d.ip}.")
+    _say(app, tr("Read the config of {ip}.", ip=d.ip))
     ConfigPage(app, d, login, text, pending, kind, tools)
 
 
-ABOUT_CONFIG = {
-    "airos": "{file}, one setting per line. Save writes it to flash for the next reboot; Apply saves it and applies "
-             "it now, as the web UI's Apply does (the connection can drop for a moment).",
-    "edgeos": "{file}, EdgeOS's boot config. Save checks that EdgeOS reads it and makes it the boot config, for the "
-              "next reboot; Apply loads, commits and saves it now (the connection can drop for a moment).",
+ABOUT_CONFIG = {  # (templates: _() and .format(file=...) where shown)
+    "airos": N_("{file}, one setting per line. Save writes it to flash for the next reboot; Apply saves it and "
+                "applies it now, as the web UI's Apply does (the connection can drop for a moment)."),
+    "edgeos": N_("{file}, EdgeOS's boot config. Save checks that EdgeOS reads it and makes it the boot config, for "
+                 "the next reboot; Apply loads, commits and saves it now (the connection can drop for a moment)."),
 }
 ABOUT_CONFIG["isp"] = ABOUT_CONFIG["airos"]
 
@@ -274,14 +280,14 @@ class ConfigPage:
         ui = phone.native(app)
         self.box = toga.MultilineTextInput(value=text, style=Pack(flex=1, font_family="monospace", font_size=10))
         self.state = toga.Label("")
-        self.buttons = [toga.Button("Reload", on_press=self.reload, style=Pack(flex=1)),
-                        toga.Button("Save", on_press=lambda w, **kw: app.loop.create_task(self._write(False)),
+        self.buttons = [toga.Button(_("Reload"), on_press=self.reload, style=Pack(flex=1)),
+                        toga.Button(_("Save"), on_press=lambda w, **kw: app.loop.create_task(self._write(False)),
                                     style=Pack(flex=1)),
-                        toga.Button("Apply", on_press=lambda w, **kw: app.loop.create_task(self._write(True)),
+                        toga.Button(_("Apply"), on_press=lambda w, **kw: app.loop.create_task(self._write(True)),
                                     style=Pack(flex=1))]
-        about = ABOUT_CONFIG[kind].format(file=devicetools.CONFIG_FILES[kind])
+        about = _(ABOUT_CONFIG[kind]).format(file=devicetools.CONFIG_FILES[kind])
         if d.mac:
-            about += " What it has is kept as a backup before each write."
+            about = i18n.sentences(about, _("What it has is kept as a backup before each write."))
         about = app._wrap(about)
         content = toga.Box(style=Pack(direction=COLUMN, flex=1, margin=12, gap=8), children=[
             toga.Label(about), self.box, self.state,
@@ -295,11 +301,11 @@ class ConfigPage:
         self.page = ui.Page(app, content, on_back=self.leaving)
         self._pending(pending)
         self._enable(True)
-        self.page.show("Config", _label(d))
+        self.page.show(_("Config"), _label(d))
 
     def _pending(self, pending):
-        self.state.text = self.app._wrap("It has changes that aren't applied yet (made in its web UI, or saved "
-                                         "without applying)." if pending else self.tools["why"])
+        self.state.text = self.app._wrap(_("It has changes that aren't applied yet (made in its web UI, or saved "
+                                           "without applying).") if pending else self.tools["why"])
 
     def _changed(self) -> bool:
         return self.box.value.replace("\r", "") != self.saved.replace("\r", "")
@@ -310,9 +316,9 @@ class ConfigPage:
             self.app.loop.create_task(self._discard_or_keep())
 
     async def _discard_or_keep(self):
-        if not await _alert(self.app, "Discard the changes?", "The edits haven't been saved to the device.",
+        if not await _alert(self.app, _("Discard the changes?"), _("The edits haven't been saved to the device."),
                             question=True):
-            self.page.show("Config", _label(self.d))
+            self.page.show(_("Config"), _label(self.d))
 
     def _enable(self, on: bool):
         reload, save, apply = self.buttons
@@ -322,7 +328,7 @@ class ConfigPage:
 
     async def reload(self, widget, **kwargs):
         self._enable(False)
-        self.state.text = "Reading…"
+        self.state.text = _("Reading…")
         try:
             text, pending = await _work(self.app, devicetools.read_device_config, self.login, self.kind)
         except (phonessh.SSHError, devicetools.ToolError) as e:
@@ -338,23 +344,30 @@ class ConfigPage:
         text = self.box.value
         problems = devicetools.config_problems(text, self.kind)
         if problems:
-            heading = ("EdgeOS wouldn't read it:\n" if self.kind == "edgeos"
-                       else "airOS reads only key=value lines. These aren't:\n")
-            await app.main_window.dialog(toga.ErrorDialog("Not a config", heading + "\n".join(problems[:10])))
+            heading = (_("EdgeOS wouldn't read it:") if self.kind == "edgeos"
+                       else _("airOS reads only key=value lines. These aren't:"))
+            await app.main_window.dialog(toga.ErrorDialog(_("Not a config"), heading + "\n" + "\n".join(problems[:10])))
             return
         changed = devicetools.lines_changed(self.saved, text)
-        boot = "boot config" if self.kind == "edgeos" else "flash"
-        what = ("Apply the config on" if apply else f"Save the config to {boot} on") + f" {_label(self.d)}?"
-        detail = (f"{changed} line(s) changed. " if changed else "Nothing changed here. ") + (
-            f"It's applied now and saved to {boot}; the device restarts what the changes affect." if apply
-            else "It takes effect at the next reboot.") + "\n\n" + terms.risk("apply" if apply else "save")
+        edgeos, device = self.kind == "edgeos", _label(self.d)
+        if apply:
+            what = tr("Apply the config on {device}?", device=device)
+            then = (_("It's applied now and saved to boot config; the device restarts what the changes affect.")
+                    if edgeos else
+                    _("It's applied now and saved to flash; the device restarts what the changes affect."))
+        else:
+            what = (tr("Save the config to boot config on {device}?", device=device) if edgeos
+                    else tr("Save the config to flash on {device}?", device=device))
+            then = _("It takes effect at the next reboot.")
+        changes = tr("{count} line(s) changed.", count=changed) if changed else _("Nothing changed here.")
+        detail = i18n.sentences(changes, then) + "\n\n" + terms.risk("apply" if apply else "save")
         if not await _alert(app, what, detail, question=True):
             return
         self._enable(False)
-        self.state.text = "Applying…" if apply else "Saving…"
+        self.state.text = _("Applying…") if apply else _("Saving…")
         def work():
             if self.d.mac:  # what it had, kept before it's replaced
-                devicetools.save_backup(self.d, self.saved, self.kind, "before edit")
+                devicetools.save_backup(self.d, self.saved, self.kind, N_("before edit"))  # (kept in English)
             return devicetools.push_config(self.login, self.kind, text, apply,
                                            report=lambda m: app._from_worker(setattr, self.state, "text", app._wrap(m)))
 
@@ -362,7 +375,7 @@ class ConfigPage:
             message = await _work(app, work)
         except devicetools.LostConnection as e:  # what it means for the device, as far as it's known
             self.state.text = app._wrap(str(e))
-            await app.main_window.dialog(toga.ErrorDialog("Connection lost", str(e)))
+            await app.main_window.dialog(toga.ErrorDialog(_("Connection lost"), str(e)))
         except (devicetools.ToolError, phonessh.SSHError, OSError) as e:
             self.state.text = app._wrap(str(e))
         else:
@@ -377,11 +390,11 @@ async def change_login(app):
     d = app._selected_device()
     if d is None or app.device_job or not _offered(app, d, "login"):
         return
-    login = await phone.ask_route(app, d, "Log in with its current username and password first.")
+    login = await phone.ask_route(app, d, _("Log in with its current username and password first."))
     if not login:
         return
     kind = devicetools.config_kind(d)  # "airos" or "edgeos"
-    _say(app, f"Reading the config of {d.ip}…", begins=True)
+    _say(app, tr("Reading the config of {ip}…", ip=d.ip), begins=True)
     try:
         if kind == "edgeos":
             text, _pending = await _work(app, devicetools.read_device_config, login, kind)
@@ -393,31 +406,36 @@ async def change_login(app):
         return
     answer = await _new_login_page(app, d, login, text)
     if not answer:
-        _say(app, "The login wasn't changed.")
+        _say(app, _("The login wasn't changed."))
         return
     new_text, new_user, new_password, scheme = answer
-    what = (f"the password of {login.user} on {_label(d)}" if new_user == login.user
-            else f"the login of {_label(d)} from {login.user} to {new_user} with the new password")
+    same = new_user == login.user
+    what = (tr("Change the password of {user} on {device}?", user=login.user, device=_label(d)) if same
+            else tr("Change the login of {device} from {user} to {new_user} with the new password?", device=_label(d),
+                    user=login.user, new_user=new_user))
     if kind == "edgeos":
-        message = (f"Change {what}? EdgeOS commits it right away and saves it to its boot config; the old "
-                   f"{'password' if new_user == login.user else 'login'} stops working.")
-        if new_user != login.user:
-            message += (f"\n\nAs Ubiquiti's help center does it, {new_user} is made first, with {login.user}'s level "
-                        f"and settings, and OpenDisco logs in with it; only then is {login.user} deleted, logged in "
-                        f"as {new_user}.")
-        message += "\n\nEdgeOS hashes the password itself and stores it so, never as plain text."
+        message = i18n.sentences(what, _("EdgeOS commits it right away and saves it to its boot config; the old "
+                                         "password stops working.") if same else
+                                 _("EdgeOS commits it right away and saves it to its boot config; the old login "
+                                   "stops working."))
+        if not same:
+            message += "\n\n" + tr("As Ubiquiti's help center does it, {new_user} is made first, with {user}'s level "
+                                    "and settings, and OpenDisco logs in with it; only then is {user} deleted, logged "
+                                    "in as {new_user}.", new_user=new_user, user=login.user)
+        message += "\n\n" + _("EdgeOS hashes the password itself and stores it so, never as plain text.")
         if pending:
-            message += ("\n\nIts config also has changes that are committed but not saved (in its CLI): saving the "
-                        "new login saves them too.")
+            message += "\n\n" + _("Its config also has changes that are committed but not saved (in its CLI): saving "
+                                   "the new login saves them too.")
     else:
-        message = (f"Change {what}? It's applied right away and saved to flash; the old login stops working.\n\n"
-                   f"The password is stored on the device as an {scheme} hash, the format it uses now.")
+        message = (i18n.sentences(what, _("It's applied right away and saved to flash; the old login stops working."))
+                   + "\n\n" + tr("The password is stored on the device as an {scheme} hash, the format it uses now.",
+                                  scheme=scheme))
         if pending:
-            message += ("\n\nIts config also has changes that aren't applied yet (made in its web UI, or saved without "
-                        "applying): they're applied with it.")
+            message += "\n\n" + _("Its config also has changes that aren't applied yet (made in its web UI, or saved "
+                                   "without applying): they're applied with it.")
     message += "\n\n" + terms.risk("login")
-    if not await _alert(app, "Change login?", message, question=True):
-        _say(app, "The login wasn't changed.")
+    if not await _alert(app, _("Change login?"), message, question=True):
+        _say(app, _("The login wasn't changed."))
         return
     new = phonessh.Login(login.ip, login.port, new_user, new_password, login.alias, login.known_hosts, login.via,
                          login.nested)
@@ -428,12 +446,12 @@ async def change_login(app):
         report = lambda m: app._from_worker(_say, app, m)  # noqa: E731
         try:
             if d.mac:  # what it had, kept before it's replaced
-                devicetools.save_backup(d, text, kind, "before login change")
+                devicetools.save_backup(d, text, kind, N_("before login change"))  # (kept in English)
             if kind == "edgeos":  # new_text: the steps; it logs in with the new login itself
                 outcome["said"] = devicetools.change_edgeos_login(login, new, new_text, report=report)
                 return
             outcome["said"] = devicetools.write_config(login, new_text, True, new_login=new, report=report)
-            app._from_worker(_say, app, "Logging in with the new login…")
+            app._from_worker(_say, app, _("Logging in with the new login…"))
             phonessh.check_login(new)
         except (devicetools.ToolError, phonessh.SSHError, OSError) as e:
             outcome["error"] = str(e)
@@ -443,8 +461,8 @@ async def change_login(app):
     finally:
         _end(app)
     if "error" in outcome:
-        _say(app, f"{outcome['error']} If the device takes neither login now, its web UI or a reset to factory "
-                  "defaults gets it back.")
+        _say(app, tr("{error} If the device takes neither login now, its web UI or a reset to factory defaults gets "
+                     "it back.", error=outcome['error']))
         return
     app.phone_passwords[d.key] = new_password
     devicetools.forget_factory_login(d)
@@ -452,8 +470,9 @@ async def change_login(app):
         app.settings.setdefault("device_logins", {})[d.mac] = {"user": new_user, "port": login.port}
     app._save_settings()
     app._rediagnose()
-    _say(app, f"Done: {d.ip} takes the new login ({new_user}). {outcome['said']}" if kind == "edgeos"
-         else f"Done: {d.ip} takes the new login ({new_user}), applied and saved to flash.")
+    _say(app, tr("Done: {ip} takes the new login ({user}). {said}", ip=d.ip, user=new_user, said=outcome['said'])
+         if kind == "edgeos" else tr("Done: {ip} takes the new login ({user}), applied and saved to flash.", ip=d.ip,
+                                     user=new_user))
 
 
 async def _new_login_page(app, d, login, text):
@@ -474,10 +493,10 @@ async def _new_login_page(app, d, login, text):
     def change(*args, **kwargs):
         phone.hook(app, "end_editing")(app)
         if first.value != second.value:
-            trouble.text = "The two passwords differ."
+            trouble.text = _("The two passwords differ.")
             return
         if not first.value:
-            trouble.text = "The new password is empty."
+            trouble.text = _("The new password is empty.")
             return
         try:
             new_text, scheme = devicetools.new_login(d, login, text, user.value.strip(), first.value)
@@ -492,23 +511,24 @@ async def _new_login_page(app, d, login, text):
         finish(None)
 
     note = (devicetools.new_login_note(d) if devicetools.config_kind(d) == "edgeos" else
-            "The new password is stored on the device hashed the way it hashes the current one, never as plain text.")
-    go = toga.Button("Change", on_press=change)
+            _("The new password is stored on the device hashed the way it hashes the current one, never as plain "
+              "text."))
+    go = toga.Button(_("Change"), on_press=change)
     second.on_confirm = change
     first.on_confirm = lambda widget, **kwargs: second.focus()
     content = toga.Box(style=Pack(direction=COLUMN, margin=14, gap=10), children=[
         toga.Label(app._wrap(f"{_label(d)}\n{note}")),
-        toga.Box(style=row, children=[toga.Label("Username", style=label), user]),
-        toga.Box(style=row, children=[toga.Label("New password", style=label), first]),
-        toga.Box(style=row, children=[toga.Label("Again", style=label), second]),
+        toga.Box(style=row, children=[toga.Label(_("Username"), style=label), user]),
+        toga.Box(style=row, children=[toga.Label(_("New password"), style=label), first]),
+        toga.Box(style=row, children=[toga.Label(_("Again"), style=label), second]),
         trouble,
         toga.Box(style=Pack(direction=ROW, gap=8), children=[
-            toga.Box(style=Pack(flex=1)), toga.Button("Cancel", on_press=cancel), go])])
+            toga.Box(style=Pack(flex=1)), toga.Button(_("Cancel"), on_press=cancel), go])])
     ui.style_button(go)
     phone.hook(app, "plain_entry")(user)
     for entry in (first, second):
         phone.hook(app, "plain_entry")(entry, new_password=True)
-    close = phone.push_panel(app, "New login", content, on_back=lambda: finish(None))
+    close = phone.push_panel(app, _("New login"), content, on_back=lambda: finish(None))
     first.focus()
     return await answer
 
@@ -535,17 +555,18 @@ class BackupsPage:
         self.state = toga.Label("")
         can = devicetools.offers(d, "backup")[0] and bool(d.ip) and phonessh.available()
         self.opener = phone.hook(app, "open_file")
-        self.backup_button = toga.Button("Back up now", on_press=self.backup_now, enabled=can, style=grow)
-        self.upload_button = toga.Button("Upload a file", on_press=self.upload_file,
+        self.backup_button = toga.Button(_("Back up now"), on_press=self.backup_now, enabled=can, style=grow)
+        self.upload_button = toga.Button(_("Upload a file"), on_press=self.upload_file,
                                          enabled=can and self.opener is not None, style=grow)
-        self.compare_button = toga.Button("Compare", on_press=self.compare, enabled=False, style=grow)
-        self.restore_button = toga.Button("Restore", on_press=self.restore, enabled=False, style=grow)
-        self.share_button = toga.Button("Share", on_press=self.share, enabled=False, style=grow)
-        self.delete_button = toga.Button("Delete", on_press=self.delete, enabled=False, style=grow)
-        about = app._wrap(f"Copies of {devicetools.CONFIG_FILES.get(kind, 'its config')} kept for {d.mac} on "
-                          f"{phone.hook(app, 'here')(app)}. Compare shows what differs from another backup or its "
-                          "config now. Restore uploads one to it again (the same model only), showing what changes "
-                          "first and keeping its current config as a backup.")
+        self.compare_button = toga.Button(_("Compare"), on_press=self.compare, enabled=False, style=grow)
+        self.restore_button = toga.Button(_("Restore"), on_press=self.restore, enabled=False, style=grow)
+        self.share_button = toga.Button(_("Share"), on_press=self.share, enabled=False, style=grow)
+        self.delete_button = toga.Button(_("Delete"), on_press=self.delete, enabled=False, style=grow)
+        about = app._wrap(tr("Copies of {file} kept for {mac} on {device}. Compare shows what differs from another "
+                             "backup or its config now. Restore uploads one to it again (the same model only), showing "
+                             "what changes first and keeping its current config as a backup.",
+                             file=devicetools.CONFIG_FILES.get(kind) or _("its config"), mac=d.mac,
+                             device=phone.hook(app, "here")(app)))
         row = Pack(direction=ROW, gap=8)
         content = toga.Box(style=Pack(direction=COLUMN, flex=1, margin=12, gap=8), children=[
             toga.Label(about), self.list, self.state,
@@ -559,7 +580,7 @@ class BackupsPage:
         self.page = ui.Page(app, content, on_back=self.closed)
         app.phone_backups = self
         self.refresh()
-        self.page.show("Config backups", _label(d))
+        self.page.show(_("Config backups"), _label(d))
 
     def closed(self):
         if getattr(self.app, "phone_backups", None) is self:
@@ -568,7 +589,7 @@ class BackupsPage:
     def refresh(self):
         self.backups = devicetools.list_backups(self.d.mac)
         self.list.data = [_backup_row(b) for b in self.backups]
-        self.state.text = f"{len(self.backups)} kept." if self.backups else "None kept yet."
+        self.state.text = tr("{count} kept.", count=len(self.backups)) if self.backups else _("None kept yet.")
         self.picked(self.list)
 
     def _picked(self):
@@ -604,15 +625,17 @@ class BackupsPage:
                 backup, other = sorted((backup, other), key=lambda b: b.when)  # the older first
             old, new = backup.text(), other.text() if other != "now" else None
         except OSError as e:
-            self.state.text = app._wrap(f"Can't read it: {e.strerror or e}")
+            self.state.text = app._wrap(tr("Can't read it: {error}", error=e.strerror or e))
             return
-        names = (f"backup {backup.date}", "on the device now" if other == "now" else f"backup {other.date}")
+        names = (tr("backup {date}", date=backup.date),
+                 _("on the device now") if other == "now" else tr("backup {date}", date=other.date))
         if other == "now":
-            login = await phone.ask_route(app, d, f"Log in to read its config ({devicetools.CONFIG_FILES[kind]}) and "
-                                                  f"compare it with the backup taken {backup.date}.")
+            login = await phone.ask_route(app, d, tr("Log in to read its config ({file}) and compare it with the "
+                                                     "backup taken {date}.", file=devicetools.CONFIG_FILES[kind],
+                                                     date=backup.date))
             if not login:
                 return
-            self.state.text = f"Reading the config of {d.ip}…"
+            self.state.text = tr("Reading the config of {ip}…", ip=d.ip)
             self.compare_button.enabled = False
             try:
                 new = await _work(app, devicetools.read_current, login, kind)
@@ -623,51 +646,62 @@ class BackupsPage:
                 self.picked(self.list)
             self.state.text = ""
         diff, changed = devicetools.config_diff(old, new, *names)
-        between = f"the {names[0]} and the {'config ' + names[1] if other == 'now' else names[1]}"
-        heading = (f"{changed} line(s) differ between {between}." if changed else f"No differences between {between}.")
-        note = (f"Lines marked - are only in the first ({names[0]}), + only in the second ({names[1]}); the ones "
-                "around them are in both, for context.")
-        buttons = [("Done", None, True, "gray")]
+        if other == "now":
+            heading = (tr("{count} line(s) differ between the backup {date} and the config on the device now.",
+                          count=changed, date=backup.date) if changed
+                       else tr("No differences between the backup {date} and the config on the device now.",
+                               date=backup.date))
+        else:
+            heading = (tr("{count} line(s) differ between the backup {date} and the backup {other}.", count=changed,
+                          date=backup.date, other=other.date) if changed
+                       else tr("No differences between the backup {date} and the backup {other}.", date=backup.date,
+                               other=other.date))
+        note = tr("Lines marked - are only in the first ({first}), + only in the second ({second}); the ones around "
+                  "them are in both, for context.", first=names[0], second=names[1])
+        buttons = [(_("Done"), None, True, "gray")]
         if other == "now":  # the config now can be kept, unless the last backup has it already
             try:
                 same = bool(self.backups) and self.backups[0].path.read_bytes() == new.encode("utf-8")
             except OSError:
                 same = False
-            buttons.append(("Same as last backup" if same else "Keep as a backup", "keep", not same, "filled"))
-        if await _diff_page(app, "Compare configs", heading, diff, note, buttons) != "keep":
+            buttons.append((_("Same as last backup") if same else _("Keep as a backup"), "keep", not same, "filled"))
+        if await _diff_page(app, _("Compare configs"), heading, diff, note, buttons) != "keep":
             return
         try:
-            kept = devicetools.save_backup(d, new, kind, "backup")
+            kept = devicetools.save_backup(d, new, kind, N_("backup"))
         except (OSError, devicetools.ToolError) as e:
-            self.state.text = app._wrap(f"Couldn't keep it: {getattr(e, 'strerror', None) or e}")
+            self.state.text = app._wrap(tr("Couldn't keep it: {error}", error=getattr(e, 'strerror', None) or e))
             return
         self.refresh()
-        self.state.text = app._wrap(f"Kept its config now as a backup ({kept.date}); {len(self.backups)} kept.")
-        app._append_log(f"Config backup of {_label(d)}: {kept.path}", status=False)
+        self.state.text = app._wrap(tr("Kept its config now as a backup ({date}); {count} kept.", date=kept.date,
+                                       count=len(self.backups)))
+        app._append_log(tr("Config backup of {device}: {path}", device=_label(d), path=kept.path), status=False)
 
     async def backup_now(self, widget, **kwargs):
         app, d = self.app, self.d
         kind = devicetools.config_kind(d)
-        login = await phone.ask_route(app, d, f"Log in to back up its config ({devicetools.CONFIG_FILES[kind]}).")
+        login = await phone.ask_route(app, d, tr("Log in to back up its config ({file}).",
+                                                 file=devicetools.CONFIG_FILES[kind]))
         if not login:
             return
-        self.state.text = f"Reading the config of {d.ip}…"
+        self.state.text = tr("Reading the config of {ip}…", ip=d.ip)
         self.backup_button.enabled = False
 
         def work():
             text, _pending = devicetools.read_device_config(login, kind)
-            return devicetools.save_backup(d, text, kind, "backup")
+            return devicetools.save_backup(d, text, kind, N_("backup"))
 
         try:
             backup = await _work(app, work)
         except (phonessh.SSHError, devicetools.ToolError, OSError) as e:
-            self.state.text = app._wrap(f"Backup of {d.ip}: {e}")
+            self.state.text = app._wrap(tr("Backup of {ip}: {error}", ip=d.ip, error=e))
             return
         finally:
             self.backup_button.enabled = True
         self.refresh()
-        self.state.text = app._wrap(f"Backed up the config of {d.ip} ({backup.date}); {len(self.backups)} kept.")
-        app._append_log(f"Config backup of {_label(d)}: {backup.path}", status=False)
+        self.state.text = app._wrap(tr("Backed up the config of {ip} ({date}); {count} kept.", ip=d.ip,
+                                       date=backup.date, count=len(self.backups)))
+        app._append_log(tr("Config backup of {device}: {path}", device=_label(d), path=backup.path), status=False)
 
     async def upload_file(self, widget, **kwargs):
         path = await self.opener(self.app)
@@ -684,19 +718,19 @@ class BackupsPage:
         if backup is None:
             return
         name = f"{(self.d.name or self.d.mac or 'device').replace(' ', '_')}_{backup.path.name}"
-        await self.app._save_export(name, "Save a copy of the config", [backup.path.suffix.lstrip(".") or "txt"],
+        await self.app._save_export(name, _("Save a copy of the config"), [backup.path.suffix.lstrip(".") or "txt"],
                                     lambda path: shutil.copyfile(backup.path, path))
 
     async def delete(self, widget, **kwargs):
         backup = self._picked()
-        if backup is None or not await _alert(self.app, "Delete this backup?",
-                                              f"The config taken {backup.date} is deleted from "
-                                              f"{phone.hook(self.app, 'here')(self.app)}.", question=True):
+        if backup is None or not await _alert(self.app, _("Delete this backup?"),
+                                              tr("The config taken {date} is deleted from {device}.", date=backup.date,
+                                                 device=phone.hook(self.app, "here")(self.app)), question=True):
             return
         try:
             devicetools.delete_backup(backup)
         except OSError as e:
-            self.state.text = self.app._wrap(f"Couldn't delete it: {e.strerror or e}")
+            self.state.text = self.app._wrap(tr("Couldn't delete it: {error}", error=e.strerror or e))
             return
         self.refresh()
         phone.update_tools(self.app)
@@ -713,7 +747,8 @@ def _backup_row(b) -> dict:
     """A backup's row in a list: when it was taken; why, the firmware it ran and its size."""
     version = devicetools.device_version(_FirmwareOf(b.meta)) or b.meta.get("firmware", "")
     size = b.path.stat().st_size if b.path.exists() else 0
-    return {"title": b.date, "subtitle": "  ·  ".join(x for x in (b.reason or "backup", version, f"{size:,} bytes")
+    reason = _(b.reason) if b.reason else _("backup")  # (kept in English: "before edit"...)
+    return {"title": b.date, "subtitle": "  ·  ".join(x for x in (reason, version, tr("{size:,} bytes", size=size))
                                                       if x), "icon": None, "backup": b}
 
 
@@ -721,8 +756,8 @@ async def _compare_with(app, d, backup, others, reads: bool):
     """A page listing what the backup can be compared with: the device's config now (when it can
     be read), then its other backups. Returns "now", a Backup, or None when it's left."""
     answer = app.loop.create_future()
-    rows = ([{"title": "Its config now", "subtitle": f"Read from {d.ip} over SSH", "icon": None, "backup": "now"}]
-            if reads else []) + [_backup_row(b) for b in others]
+    rows = ([{"title": _("Its config now"), "subtitle": tr("Read from {ip} over SSH", ip=d.ip), "icon": None,
+              "backup": "now"}] if reads else []) + [_backup_row(b) for b in others]
 
     def picked(widget, **kwargs):
         row = widget.selection
@@ -733,8 +768,9 @@ async def _compare_with(app, d, backup, others, reads: bool):
     chooser = toga.DetailedList(accessors=("title", "subtitle", "icon"), data=rows, on_select=picked,
                                 style=Pack(flex=1))
     content = toga.Box(style=Pack(direction=COLUMN, flex=1, margin=12, gap=8), children=[
-        toga.Label(app._wrap(f"Compare the backup taken {backup.date} with:")), chooser])
-    close = phone.push_panel(app, "Compare with", content, on_back=lambda: answer.done() or answer.set_result(None))
+        toga.Label(app._wrap(tr("Compare the backup taken {date} with:", date=backup.date))), chooser])
+    close = phone.push_panel(app, _("Compare with"), content,
+                             on_back=lambda: answer.done() or answer.set_result(None))
     return await answer
 
 
@@ -757,15 +793,15 @@ async def back_up_all(app):
     if job:
         if job["name"] == "backup_all" and job["stop"]:
             job["stop"].set()
-            _say(app, "Stopping: no more are started, and those under way are cancelled…")
+            _say(app, _("Stopping: no more are started, and those under way are cancelled…"))
         return
     devices = [d for d in (app._device(getattr(row, "key", None)) for row in app.table.data) if d is not None]
     if not any(devicetools.config_kind(d) for d in devices):
-        await _alert(app, "Back up all", "No device in the list keeps a config the app can back up (airMAX, airFiber, "
-                                         "LTU, GigaBeam, EdgeOS).")
+        await _alert(app, _("Back up all"), _("No device in the list keeps a config the app can back up (airMAX, "
+                                              "airFiber, LTU, GigaBeam, EdgeOS)."))
         return
     jobs = devicetools.backup_jobs(devices, lambda d, via: _saved_login(app, d, via), lambda d: phone.route(app, d),
-                                   "no login given yet")
+                                   _("no login given yet"))
     BackupAllPage(app, jobs)
 
 
@@ -784,18 +820,18 @@ class BackupAllPage:
         rows = []
         for job in jobs:
             state = toga.Label(self._text(job))
-            button = toga.Button("Back up", on_press=lambda w, job=job, **kw: app.loop.create_task(self.one(job)),
+            button = toga.Button(_("Back up"), on_press=lambda w, job=job, **kw: app.loop.create_task(self.one(job)),
                                  style=Pack(visibility="hidden"))
             ui.style_button(button, "tinted")
             self.lines[id(job)] = (state, button)
             rows.append(toga.Box(style=Pack(direction=ROW, align_items="center", gap=8), children=[
                 toga.Box(style=Pack(flex=1), children=[state]), button]))
-        about = app._wrap(f"Backs up each device in the list that keeps a config, with the login given for it since "
-                          f"the app opened, {devicetools.BACKUP_AT_ONCE} at a time; one the same as the device's last "
-                          "backup isn't kept again. Those without one are listed at the end, each with a Back up "
-                          "button that asks for it.")
+        about = app._wrap(tr("Backs up each device in the list that keeps a config, with the login given for it since "
+                             "the app opened, {count} at a time; one the same as the device's last backup isn't kept "
+                             "again. Those without one are listed at the end, each with a Back up button that asks "
+                             "for it.", count=devicetools.BACKUP_AT_ONCE))
         self.summary = toga.Label("")
-        self.stop_button = toga.Button("Stop", on_press=self.stopping, style=Pack(flex=1))
+        self.stop_button = toga.Button(_("Stop"), on_press=self.stopping, style=Pack(flex=1))
         ui.style_button(self.stop_button, "tinted", "systemRedColor")
         content = toga.Box(style=Pack(direction=COLUMN, flex=1, margin=12, gap=8), children=[
             toga.Label(about),
@@ -803,25 +839,26 @@ class BackupAllPage:
                 style=Pack(direction=COLUMN, gap=10), children=rows)),
             self.summary, toga.Box(style=Pack(direction=ROW), children=[self.stop_button])])
         self.page = ui.Page(app, content)
-        self.page.show("Back up all", f"{len(jobs)} device(s)")
+        self.page.show(_("Back up all"), tr("{count} device(s)", count=len(jobs)))
         app.loop.create_task(self.run())
 
     def _text(self, job) -> str:
         """The device and how it went, in lines that leave room for its button."""
-        return "\n".join(textwrap.fill(part, 30) for part in (_label(job.d), job.text))
+        return "\n".join(i18n.fill(part, 30) for part in (_label(job.d), job.text))
 
     def stopping(self, widget=None, **kwargs):
         self.stop.set()
         self.stop_button.enabled = False
-        self.summary.text = "Stopping…"
+        self.summary.text = _("Stopping…")
 
     async def run(self):
         app = self.app
         app.device_job = {"key": None, "name": "backup_all", "stop": self.stop}
         app.spinner.start()
         phone.update_tools(app)
-        _say(app, f"Back up all: {sum(j.state == 'waiting' for j in self.jobs)} of {len(self.jobs)} device(s), "
-                  f"{devicetools.BACKUP_AT_ONCE} at a time…", begins=True)
+        _say(app, tr("Back up all: {waiting} of {count} device(s), {at_once} at a time…",
+                     waiting=sum(j.state == 'waiting' for j in self.jobs), count=len(self.jobs),
+                     at_once=devicetools.BACKUP_AT_ONCE), begins=True)
         try:
             await _work(app, devicetools.back_up_all, self.jobs, lambda job: app._from_worker(self.show, job),
                         self.stop)
@@ -834,10 +871,10 @@ class BackupAllPage:
             if job.state in ("skipped", "stopped"):
                 phone.say(app, f"{_label(job.d)}: {job.text}")
         said = devicetools.backup_summary(self.jobs)
-        self.summary.text = app._wrap(f"Done: {said}.")
-        _say(app, f"Back up all: {said}.")
-        app._append_log("Back up all configs:\n" + "".join(f"  {_label(job.d)}: {job.text}\n" for job in self.jobs)
-                        + f"  {said}.", status=False)
+        self.summary.text = app._wrap(tr("Done: {summary}.", summary=said))
+        _say(app, tr("Back up all: {summary}.", summary=said))
+        app._append_log(_("Back up all configs:") + "\n"
+                        + "".join(f"  {_label(job.d)}: {job.text}\n" for job in self.jobs) + f"  {said}.", status=False)
 
     def show(self, job):
         """How a job went, in its line (and the console, once it's done); the counts under the lines."""
@@ -857,7 +894,8 @@ class BackupAllPage:
         app, d = self.app, job.d
         if app.device_job:
             return
-        login = await phone.ask_route(app, d, f"Log in to back up its config ({devicetools.CONFIG_FILES[job.kind]}).")
+        login = await phone.ask_route(app, d, tr("Log in to back up its config ({file}).",
+                                                 file=devicetools.CONFIG_FILES[job.kind]))
         if not login:
             return
         _begin(app, d, "backup")
@@ -871,9 +909,9 @@ class BackupAllPage:
             _end(app)
         for other in self.jobs:  # the other buttons were off meanwhile
             self.show(other)
-        self.summary.text = app._wrap(f"Done: {devicetools.backup_summary(self.jobs)}.")
+        self.summary.text = app._wrap(tr("Done: {summary}.", summary=devicetools.backup_summary(self.jobs)))
         _say(app, f"{_label(d)}: {job.text}")
-        app._append_log(f"Config backup of {_label(d)}: {job.text}", status=False)
+        app._append_log(tr("Config backup of {device}: {result}", device=_label(d), result=job.text), status=False)
 
 
 async def upload(app, d, backup=None, path=None):
@@ -886,19 +924,24 @@ async def upload(app, d, backup=None, path=None):
     try:
         text, meta = (backup.text(), backup.meta) if backup is not None else devicetools.read_config_file(path)
     except (OSError, devicetools.ToolError) as e:
-        await _alert(app, "Upload config", str(e))
+        await _alert(app, _("Upload config"), str(e))
         return
-    source = f"the backup taken {backup.date}" if backup is not None else Path(path).name
+    if backup is not None:  # what's uploaded, heading what it changes; and the login's purpose
+        source = tr("The backup taken {date}", date=backup.date)
+        purpose = tr("Log in to upload the backup taken {date}: what changes is shown first.", date=backup.date)
+    else:
+        source = Path(path).name
+        purpose = tr("Log in to upload {file}: what changes is shown first.", file=source)
     refuse, warn = devicetools.upload_check(d, kind, text, meta)
     if refuse:
-        await _alert(app, "Can't upload this config", refuse)
+        await _alert(app, _("Can't upload this config"), refuse)
         return
-    if warn and not await _alert(app, "Upload this config?", warn + "\n\nGo on?", question=True):
+    if warn and not await _alert(app, _("Upload this config?"), warn + "\n\n" + _("Go on?"), question=True):
         return
-    login = await phone.ask_route(app, d, f"Log in to upload {source}: what changes is shown first.")
+    login = await phone.ask_route(app, d, purpose)
     if not login:
         return
-    _say(app, f"Reading the config of {d.ip} to compare…", begins=True)
+    _say(app, tr("Reading the config of {ip} to compare…", ip=d.ip), begins=True)
     try:
         current, _pending = await _work(app, devicetools.read_device_config, login, kind)
         tools = await _work(app, devicetools.config_tools, login, kind)
@@ -907,20 +950,20 @@ async def upload(app, d, backup=None, path=None):
         return
     choice = await _changes_page(app, d, kind, current, text, source, tools)
     if not choice:
-        _say(app, "Nothing was uploaded.")
+        _say(app, _("Nothing was uploaded."))
         return
     page = getattr(app, "phone_backups", None)
     if page is not None:  # back to Tools, whose console follows the upload
         page.page.close()
         page.closed()
-    app.tabs.current_tab = "Tools"
+    app.tabs.current_tab = _("Tools")
     _begin(app, d, "upload")
     outcome = {}
 
     def work():
         try:
-            kept = devicetools.save_backup(d, current, kind, "before upload")
-            app._from_worker(_say, app, f"Kept its current config as a backup ({kept.date}).")
+            kept = devicetools.save_backup(d, current, kind, N_("before upload"))  # (kept in English)
+            app._from_worker(_say, app, tr("Kept its current config as a backup ({date}).", date=kept.date))
             outcome["said"] = devicetools.push_config(login, kind, text, choice == "apply",
                                                       report=lambda m: app._from_worker(_say, app, m))
         except (devicetools.ToolError, phonessh.SSHError, OSError) as e:
@@ -934,20 +977,20 @@ async def upload(app, d, backup=None, path=None):
 
 
 async def _changes_page(app, d, kind, current, text, source, tools):
-    """What uploading the config changes on the device, on a page: "save", "apply" or None."""
+    """What uploading the config changes on the device, on a page: "save", "apply" or None. source:
+    what's uploaded ("The backup taken...", a file's name as it is)."""
     diff, changed = devicetools.config_diff(current, text)
-    boot = "boot config" if kind == "edgeos" else "flash"
-    if source.startswith("the "):  # "The backup taken...", a file's name as it is
-        source = "The" + source[3:]
-    heading = (f"{source}: {changed} line(s) change." if changed
-               else f"{source}: no differences, the device has this config already.")
-    note = (f"Save writes it to {boot}, for the next reboot. Apply now also applies it: the device restarts what the "
-            "changes affect, and the connection can drop for a moment. Either way its current config is kept as a "
-            "backup first.") + (f" {terms.RISKS['upload']} {terms.RISKS['apply' if tools['apply'] else 'save']} "
-                                f"{terms.TESTED}") + (f" {tools['why']}" if tools["why"] else "")
-    return await _diff_page(app, "Upload config", heading, diff, note, [
-        ("Cancel", None, True, "gray"), ("Save", "save", tools["save"], "tinted"),
-        ("Apply now", "apply", tools["apply"], "filled")])
+    heading = (tr("{source}: {count} line(s) change.", source=source, count=changed) if changed
+               else tr("{source}: no differences, the device has this config already.", source=source))
+    note = i18n.sentences(
+        _("Save writes it to boot config, for the next reboot.") if kind == "edgeos"
+        else _("Save writes it to flash, for the next reboot."),
+        _("Apply now also applies it: the device restarts what the changes affect, and the connection can drop for a "
+          "moment."), _("Either way its current config is kept as a backup first."),
+        _(terms.RISKS['upload']), _(terms.RISKS['apply' if tools['apply'] else 'save']), _(terms.TESTED), tools["why"])
+    return await _diff_page(app, _("Upload config"), heading, diff, note, [
+        (_("Cancel"), None, True, "gray"), (_("Save"), "save", tools["save"], "tinted"),
+        (_("Apply now"), "apply", tools["apply"], "filled")])
 
 
 async def _diff_page(app, title, heading, diff, note, buttons):
@@ -955,7 +998,7 @@ async def _diff_page(app, title, heading, diff, note, buttons):
     enabled, look) in buttons. Returns the answer of the one tapped; None when it's left."""
     answer = app.loop.create_future()
     ui = phone.native(app)
-    view = toga.MultilineTextInput(readonly=True, value=diff or "(no differences)",
+    view = toga.MultilineTextInput(readonly=True, value=diff or _("(no differences)"),
                                    style=Pack(flex=1, font_family="monospace", font_size=10))
 
     def finish(choice):
@@ -983,25 +1026,26 @@ async def reboot(app):
     if job:
         if job["name"] == "reboot" and job["stop"]:
             job["stop"].set()
-            _say(app, "Stopping…")
+            _say(app, _("Stopping…"))
         return
     d = app._selected_device()
     if d is None or not _offered(app, d, "reboot"):
         return
     hops = phone.route(app, d)
-    text = (f"{_label(d)} restarts and is offline for a minute or two, longer for some models: whatever goes "
-            "through it stops meanwhile.")
+    text = tr("{device} restarts and is offline for a minute or two, longer for some models: whatever goes through "
+              "it stops meanwhile.", device=_label(d))
     if hops:
-        text += f" It's reached through {', '.join(h.ip or h.mac for h in hops)}."
+        text = i18n.sentences(text, tr("It's reached through {devices}.",
+                                       devices=", ".join(h.ip or h.mac for h in hops)))
     text += "\n\n" + terms.risk("reboot")
-    if not await _alert(app, f"Reboot {d.ip}?", text, question=True):
+    if not await _alert(app, tr("Reboot {ip}?", ip=d.ip), text, question=True):
         return
-    login = await phone.ask_route(app, d, "Log in to reboot it.")
+    login = await phone.ask_route(app, d, _("Log in to reboot it."))
     if not login:
         return
     stop = threading.Event()
     _begin(app, d, "reboot", stop)
-    _say(app, f"Rebooting {d.ip}…", begins=True)
+    _say(app, tr("Rebooting {ip}…", ip=d.ip), begins=True)
     outcome, report = {}, _reporter(app)
 
     def work():
@@ -1014,7 +1058,8 @@ async def reboot(app):
         await _work(app, work)
     finally:
         _end(app)
-    _say(app, f"{d.ip}: {outcome.get('error') or 'Rebooted: back after %.0f s.' % outcome['took']}")
+    said = outcome.get("error") or tr("Rebooted: back after {seconds:.0f} s.", seconds=outcome["took"])
+    _say(app, f"{d.ip}: {said}")
 
 
 async def locate(app):
@@ -1027,26 +1072,27 @@ async def locate(app):
         try:
             await _work(app, devicetools.locate, login, d, False)
         except (devicetools.ToolError, phonessh.SSHError) as e:
-            _say(app, f"Stop locating {d.ip}: {e}")
+            _say(app, tr("Stop locating {ip}: {error}", ip=d.ip, error=e))
             return
         app.phone_locating.pop(d.key, None)
-        _say(app, f"{d.ip}: its LED is back to normal.")
+        _say(app, tr("{ip}: its LED is back to normal.", ip=d.ip))
         phone.update_tools(app)
         return
     if app.device_job or not _offered(app, d, "locate"):
         return
-    login = await phone.ask_route(app, d, "Log in to blink its LED.")
+    login = await phone.ask_route(app, d, _("Log in to blink its LED."))
     if not login:
         return
     try:
         state = await _work(app, devicetools.locate, login, d, True)
     except (devicetools.ToolError, phonessh.SSHError) as e:
-        _say(app, f"Locate {d.ip}: {e}")
+        _say(app, tr("Locate {ip}: {error}", ip=d.ip, error=e))
         return
     app.phone_locating[d.key] = login
-    said = "" if state else (" It doesn't say it's locating: it may be busy (upgrading)." if state is False
-                             else " It doesn't say whether it took.")
-    _say(app, f"{d.ip}: its LED is blinking.{said} Stop locating stops it.", begins=True)
+    said = "" if state else (_("It doesn't say it's locating: it may be busy (upgrading).") if state is False
+                             else _("It doesn't say whether it took."))
+    _say(app, i18n.sentences(tr("{ip}: its LED is blinking.", ip=d.ip), said, _("Stop locating stops it.")),
+         begins=True)
     phone.update_tools(app)
 
 
@@ -1057,16 +1103,16 @@ async def link(app):
     d = app._selected_device()
     if d is None or app.device_job or not _offered(app, d, "link"):
         return
-    login = await phone.ask_route(app, d, "Log in to read its link health: signal, noise floor, SNR, capacity, "
-                                          "airtime and distance, its own and each station's on an access point.")
+    login = await phone.ask_route(app, d, _("Log in to read its link health: signal, noise floor, SNR, capacity, "
+                                            "airtime and distance, its own and each station's on an access point."))
     if not login:
         return
     _begin(app, d, "link")
-    _say(app, f"Reading the link health of {d.ip}…", begins=True)
+    _say(app, tr("Reading the link health of {ip}…", ip=d.ip), begins=True)
     try:
         reading = await _work(app, devicetools.read_link, login)
     except (devicetools.ToolError, phonessh.SSHError) as e:
-        _say(app, f"Link health of {d.ip}: {e}")
+        _say(app, tr("Link health of {ip}: {error}", ip=d.ip, error=e))
         return
     finally:
         _end(app)
@@ -1074,10 +1120,18 @@ async def link(app):
     app._rediagnose()  # its issues, in the list and Details
     if app._selected_device() is d:
         app.details.value = core.render_details(d)
-    found = [msg.split(". ")[0] + "." for _, _, msg in linkhealth.issues(d)]  # what, without the advice
+    found = [_without_advice(msg) for _level, _tag, msg in linkhealth.issues(d)]  # what, without the advice
     if found:
         phone.say(app, "\n".join(found))
-    _say(app, linkhealth.summary(d) + " Details has every number.")
+    _say(app, i18n.sentences(linkhealth.summary(d), _("Details has every number.")))
+
+
+def _without_advice(message: str) -> str:
+    """An issue's first sentence: what's found, without the advice after it (a Japanese one ends in 。)."""
+    end = re.search(r"\. |。", message)
+    if end is None:
+        return i18n.stop(message)
+    return message[:end.start()] + ("。" if end.group() == "。" else ".")
 
 
 # -- scan from a device given by its address -----------------------------------------
@@ -1085,26 +1139,26 @@ async def scan_address(app):
     """Log in to a device by its address (one the scan didn't find, over a VPN, say), list it,
     and what it sees under it, as Scan from device does."""
     if app.running or app.rescanning or app.finding or app.device_job:
-        app.status.text = "Works once the scan has finished."
+        app.status.text = _("Works once the scan has finished.")
         return
     if not phonessh.available():
-        app.status.text = "Scan from an address needs the app's SSH, which didn't load."
+        app.status.text = _("Scan from an address needs the app's SSH, which didn't load.")
         return
     login = await _address_page(app)
     if not login:
         return
     if app.running or app.rescanning or app.finding:
-        app.status.text = "A scan started meanwhile: scan from the address again once it has finished."
+        app.status.text = _("A scan started meanwhile: scan from the address again once it has finished.")
         return
     result = app.result or core.ScanResult(core.parse_args([]), [], [], [], [], [], [], core.Inventory(), None, 0.0)
     app.rescanning = True
     app.spinner.start()
-    app.status.text = f"Reading what {login.ip} sees…"
+    app.status.text = tr("Reading what {ip} sees…", ip=login.ip)
     try:
         finder, sightings, seen, new = await _work(app, devicetools.scan_from_address, result, login,
                                                    core.local_macs())
     except (phonessh.SSHError, devicetools.ToolError) as e:
-        app.status.text = f"Scan from {login.ip}: {e}"
+        app.status.text = tr("Scan from {ip}: {error}", ip=login.ip, error=e)
         return
     finally:
         app.rescanning = False
@@ -1113,7 +1167,7 @@ async def scan_address(app):
         app.result = result  # the list's devices from now on, as a scan's would be
         app.export_button.enabled = True
     elif result is not app.result:
-        app.status.text = f"Scan from {login.ip} finished after a new scan started: start it again."
+        app.status.text = tr("Scan from {ip} finished after a new scan started: start it again.", ip=login.ip)
         return
     app._show_devices(result.devices)
     if not finder.ubnt_packets:  # what it is: UBNT discovery sent straight to it, as Rescan does
@@ -1127,11 +1181,13 @@ async def scan_address(app):
         app.settings.setdefault("device_logins", {})[finder.mac] = {"user": login.user, "port": login.port}
     app.settings["ssh_user"] = login.user
     app._save_settings()
-    counts = ", ".join(f"{devicetools.SCAN_HOW[how]} {n}" for how in devicetools.SCAN_HOW
+    counts = ", ".join(f"{_(devicetools.SCAN_HOW[how])} {n}" for how in devicetools.SCAN_HOW
                        if (n := sum(1 for s in sightings if s.how == how)))
-    lines = [f"Scan from {login.ip}: {counts or 'nothing listed'}; {len(seen)} device(s), {len(new)} new."]
+    lines = [tr("Scan from {ip}: {counts}; {count} device(s), {new} new.", ip=login.ip,
+                counts=counts or _("nothing listed"), count=len(seen), new=len(new))]
     for dev in seen:
-        lines.append(f"  {dev.ip or '-':15} {dev.name or dev.model or dev.mac or ''}{'  (new)' if dev in new else ''}")
+        lines.append(f"  {dev.ip or '-':15} {dev.name or dev.model or dev.mac or ''}"
+                     f"{'  ' + _('(new)') if dev in new else ''}")
     app._append_log("\n".join(lines), status=False)
     app.status.text = lines[0]
     await phone.warn_factory_login(app, finder, login)
@@ -1142,9 +1198,9 @@ async def _address_page(app):
     closes when that works: the login, or None when cancelled."""
     answer = app.loop.create_future()
     ui = phone.native(app)
-    address = toga.TextInput(placeholder="e.g. 10.20.0.1", style=Pack(flex=1))
+    address = toga.TextInput(placeholder=_("e.g. 10.20.0.1"), style=Pack(flex=1))
     port = toga.TextInput(value="22", style=Pack(flex=1))
-    user = toga.TextInput(value=app.settings.get("ssh_user") or "", placeholder="e.g. ubnt or admin",
+    user = toga.TextInput(value=app.settings.get("ssh_user") or "", placeholder=_("e.g. ubnt or admin"),
                           style=Pack(flex=1))
     password = toga.PasswordInput(style=Pack(flex=1))
     trouble = toga.Label("")
@@ -1159,19 +1215,19 @@ async def _address_page(app):
         phone.hook(app, "end_editing")(app)
         ip, text = address.value.strip(), port.value.strip()
         if not re.fullmatch(r"\d{1,3}(\.\d{1,3}){3}", ip) or not core._usable_ip(ip):
-            trouble.text = "The address is an IPv4 address, such as 10.20.0.1."
+            trouble.text = _("The address is an IPv4 address, such as 10.20.0.1.")
             return
         if not text.isdigit() or not 0 < int(text) < 65536:
-            trouble.text = "The port is a number from 1 to 65535."
+            trouble.text = _("The port is a number from 1 to 65535.")
             return
         if not user.value.strip():
-            trouble.text = "Logging in needs a username."
+            trouble.text = _("Logging in needs a username.")
             return
         known = app.result.inv.find(ip=ip) if app.result else None
         login = phonessh.Login(ip, int(text), user.value.strip(), password.value,
                                phonessh.host_key_alias(known.mac if known else None, ip), app.known_hosts)
         go.enabled = False
-        trouble.text = f"Logging in to {ip}…"
+        trouble.text = tr("Logging in to {ip}…", ip=ip)
         try:
             await _work(app, phonessh.check_login, login)
         except phonessh.SSHError as e:
@@ -1185,23 +1241,23 @@ async def _address_page(app):
         close()
         finish(None)
 
-    go = toga.Button("Log in and scan", on_press=lambda w, **kw: app.loop.create_task(log_in()))
+    go = toga.Button(_("Log in and scan"), on_press=lambda w, **kw: app.loop.create_task(log_in()))
     password.on_confirm = lambda w, **kw: app.loop.create_task(log_in())
-    cancel_button = toga.Button("Cancel", on_press=cancel)
+    cancel_button = toga.Button(_("Cancel"), on_press=cancel)
     content = toga.Box(style=Pack(direction=COLUMN, margin=14, gap=10), children=[
-        toga.Label(app._wrap("Log in to a device by its address, one the scan didn't find (over a VPN, say), to list "
-                             "what it sees: its ARP table, LLDP neighbours and, on airOS, its stations. They're "
-                             "listed under it, and the device tools reach them through it.")),
-        toga.Box(style=row, children=[toga.Label("Address", style=label), address]),
-        toga.Box(style=row, children=[toga.Label("Port", style=label), port]),
-        toga.Box(style=row, children=[toga.Label("Username", style=label), user]),
-        toga.Box(style=row, children=[toga.Label("Password", style=label), password]),
+        toga.Label(app._wrap(_("Log in to a device by its address, one the scan didn't find (over a VPN, say), to "
+                               "list what it sees: its ARP table, LLDP neighbours and, on airOS, its stations. They're "
+                               "listed under it, and the device tools reach them through it."))),
+        toga.Box(style=row, children=[toga.Label(_("Address"), style=label), address]),
+        toga.Box(style=row, children=[toga.Label(_("Port"), style=label), port]),
+        toga.Box(style=row, children=[toga.Label(_("Username"), style=label), user]),
+        toga.Box(style=row, children=[toga.Label(_("Password"), style=label), password]),
         trouble,
         toga.Box(style=Pack(direction=ROW, gap=8), children=[toga.Box(style=Pack(flex=1)), cancel_button, go])])
     ui.style_button(go)
     ui.style_button(cancel_button, "gray")
     for entry in (address, port, user, password):
         phone.hook(app, "plain_entry")(entry)
-    close = phone.push_panel(app, "Scan from an address", content, on_back=lambda: finish(None))
+    close = phone.push_panel(app, _("Scan from an address"), content, on_back=lambda: finish(None))
     address.focus()
     return await answer

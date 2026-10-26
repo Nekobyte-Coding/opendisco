@@ -48,7 +48,8 @@ import urllib.request
 from dataclasses import dataclass, field, replace
 from pathlib import Path
 
-from opendisco import core, linkhealth
+from opendisco import core, i18n, linkhealth
+from opendisco.i18n import _, N_, sentences, tr
 
 if core.platform_name() in ("ios", "android"):  # no ssh program there: asyncssh, with the same calls
     from opendisco import phonessh as sshrun
@@ -157,20 +158,20 @@ BACKUP_AT_ONCE = 3  # devices Back up all backs up at the same time
 EDGESWITCH_PLATFORMS = {"eswh", "esgh", "esx", "esxp"}
 
 # Why an action isn't offered for a family, as the menu shows it.
-_NO_CONFIG = {"unifi": "set by its UniFi controller", "unifi-os": "UniFi OS: in its own settings",
-              "edgeswitch": "EdgeSwitch: in its web UI", "": "not for this device"}
+_NO_CONFIG = {"unifi": N_("set by its UniFi controller"), "unifi-os": N_("UniFi OS: in its own settings"),
+              "edgeswitch": N_("EdgeSwitch: in its web UI"), "": N_("not for this device")}
 NOT_OFFERED = {
-    "update": {"": "not for this device"},
-    "config": dict(_NO_CONFIG, edgeos="not for EdgeOS here"),
+    "update": {"": N_("not for this device")},
+    "config": dict(_NO_CONFIG, edgeos=N_("not for EdgeOS here")),
     "edit": _NO_CONFIG, "backup": _NO_CONFIG, "upload": _NO_CONFIG,
-    "login": {"unifi": "set by its UniFi controller", "unifi-os": "UniFi OS: in its own settings",
-              "isp": "airMAX and EdgeOS only", "": "not for this device"},
-    "scan": {"": "not for this device"},
-    "link": {"": "airMAX only"},
-    "reboot": {"edgeswitch": "EdgeSwitch: in its web UI", "": "not for this device"},
-    "locate": {"airos": "airOS has no LED command", "isp": "no LED command known",
-               "edgeos": "EdgeOS has no LED command", "unifi-os": "UniFi OS: from its UniFi app",
-               "": "not for this device"},
+    "login": {"unifi": N_("set by its UniFi controller"), "unifi-os": N_("UniFi OS: in its own settings"),
+              "isp": N_("airMAX and EdgeOS only"), "": N_("not for this device")},
+    "scan": {"": N_("not for this device")},
+    "link": {"": N_("airMAX only")},
+    "reboot": {"edgeswitch": N_("EdgeSwitch: in its web UI"), "": N_("not for this device")},
+    "locate": {"airos": N_("airOS has no LED command"), "isp": N_("no LED command known"),
+               "edgeos": N_("EdgeOS has no LED command"), "unifi-os": N_("UniFi OS: from its UniFi app"),
+               "": N_("not for this device")},
 }
 # Scan from device: every family's Linux has the kernel's ARP table; airOS lists the stations
 # associated with it (wstalist, the web UI's station list, JSON); lldpd's lldpcli, where the
@@ -178,7 +179,7 @@ NOT_OFFERED = {
 SCAN_FAMILIES = {"airos", "unifi", "unifi-os", "edgeos"}
 SCAN_FILE = "/tmp/opendisco-scan.txt"
 LINK_FILE = "/tmp/opendisco-link.txt"
-SCAN_HOW = {"stations": "its station list", "lldp": "its LLDP neighbours", "arp": "its ARP table"}
+SCAN_HOW = {"stations": N_("its station list"), "lldp": N_("its LLDP neighbours"), "arp": N_("its ARP table")}
 FROM_DEVICE = "from-device"
 
 
@@ -260,7 +261,7 @@ def offers(d, action: str) -> tuple:
         ok = fam == "airos"
     else:  # login
         ok = fam in ("airos", "edgeos")
-    return ok, "" if ok else NOT_OFFERED[action].get(_kind(d), NOT_OFFERED[action][""])
+    return ok, "" if ok else _(NOT_OFFERED[action].get(_kind(d), NOT_OFFERED[action][""]))
 
 
 # ---------------------------------------------------------------------------
@@ -336,7 +337,7 @@ def firmware_index(refresh: bool = False) -> list:
         with _open(INDEX_URL) as reply:
             items = json.loads(reply.read().decode("utf-8"))["_embedded"]["firmware"]
     except (OSError, ValueError, KeyError, TypeError) as e:
-        raise ToolError(f"Ubiquiti's firmware server didn't answer ({_reason(e)}).") from None
+        raise ToolError(tr("Ubiquiti's firmware server didn't answer ({reason}).", reason=_reason(e))) from None
     _INDEX = (time.time(), [i for i in items if isinstance(i, dict)])
     return _INDEX[1]
 
@@ -405,21 +406,24 @@ def cve_issues(d) -> list:
 
 def summary(d, check: Check) -> str:
     """What the firmware check found, in a sentence or three."""
-    what = check.platform or "this device"
+    what = check.platform or _("this device")
     if not check.release:
-        text = f"Ubiquiti's firmware server lists no release for {what}."
+        text = tr("Ubiquiti's firmware server lists no release for {platform}.", platform=what)
     elif not check.current:
-        text = f"The latest release for {what} is {check.latest} ({check.date}); the version it runs is unknown."
+        text = tr("The latest release for {platform} is {latest} ({date}); the version it runs is unknown.",
+                  platform=what, latest=check.latest, date=check.date)
     elif check.newer:
-        text = (f"Firmware {check.latest} is out for {what} (released {check.date}, {fmt_size(check.size)}); "
-                f"it runs {check.current}.")
+        text = tr("Firmware {latest} is out for {platform} (released {date}, {size}); it runs {current}.",
+                  latest=check.latest, platform=what, date=check.date, size=fmt_size(check.size), current=check.current)
     else:
-        text = f"Up to date: it runs {check.current}; the latest release for {what} is {check.latest} ({check.date})."
+        text = tr("Up to date: it runs {current}; the latest release for {platform} is {latest} ({date}).",
+                  current=check.current, platform=what, latest=check.latest, date=check.date)
     cves = cve_issues(d)
     if cves:
-        text += (f"\n\nKnown vulnerabilities in {check.current or 'its firmware'}: {len(cves)}. "
-                 + ("Updating to " + check.latest + " is advised." if check.newer else
-                    "No newer release is listed yet.")
+        text += ("\n\n" + sentences(tr("Known vulnerabilities in {firmware}: {count}.",
+                                       firmware=check.current or _("its firmware"), count=len(cves)),
+                                    tr("Updating to {latest} is advised.", latest=check.latest) if check.newer else
+                                    _("No newer release is listed yet."))
                  + "\n" + "\n".join(f"- {c}" for c in cves[:8]) + ("\n- …" if len(cves) > 8 else ""))
     return text
 
@@ -433,19 +437,19 @@ def fits(d, release: dict) -> str:
     fam = family(d)
     product, platform = str(release.get("product", "")), str(release.get("platform", ""))
     if fam == "airos" and not (product.upper() in AIROS_PLATFORMS and platform == "airmax"):
-        return "The release found isn't airMAX firmware."
+        return _("The release found isn't airMAX firmware.")
     if fam == "unifi":
         if product != "unifi-firmware":
-            return "The release found isn't for a UniFi access point or switch."
+            return _("The release found isn't for a UniFi access point or switch.")
         if platform == "USMULT" or platform.startswith("UGW"):
-            return f"{platform} firmware needs extra steps the app doesn't do."
+            return tr("{platform} firmware needs extra steps the app doesn't do.", platform=platform)
     if fam == "unifi-os":
         if product not in UNIFI_OS_PRODUCTS:
-            return "The release found isn't UniFi OS firmware."
+            return _("The release found isn't UniFi OS firmware.")
         if version_key(device_version(d))[:1] < (2,):
-            return "UniFi OS 1.x installs differently: update it in its own settings first."
+            return _("UniFi OS 1.x installs differently: update it in its own settings first.")
     if fam == "edgeos" and (platform != "edgerouter" or product.lower() != d.fw_platform.lower()):
-        return f"The release found isn't EdgeRouter firmware for {d.fw_platform}."
+        return tr("The release found isn't EdgeRouter firmware for {platform}.", platform=d.fw_platform)
     return ""
 
 
@@ -460,7 +464,7 @@ def download_release(release: dict, folder: Path, progress=None, stop=None) -> P
     want = str(release.get("sha256_checksum") or "").lower()
     size = int(release.get("file_size") or 0)
     if not re.fullmatch(r"[0-9a-f]{64}", want):
-        raise ToolError("The firmware server gives no SHA-256 for this release, so it can't be checked.")
+        raise ToolError(_("The firmware server gives no SHA-256 for this release, so it can't be checked."))
     folder.mkdir(parents=True, exist_ok=True)
     name = re.sub(r"[^A-Za-z0-9._+-]", "_", url.rsplit("/", 1)[-1]) or "firmware.bin"
     path = folder / f"{want[:12]}-{name}"
@@ -481,7 +485,7 @@ def download_release(release: dict, folder: Path, progress=None, stop=None) -> P
             total = int(reply.headers.get("Content-Length") or size or 0)
             while True:
                 if stop is not None and stop.is_set():
-                    raise ToolError("Cancelled.")
+                    raise ToolError(_("Cancelled."))
                 chunk = reply.read(1 << 20)
                 if not chunk:
                     break
@@ -492,16 +496,17 @@ def download_release(release: dict, folder: Path, progress=None, stop=None) -> P
                     progress(done, total)
     except OSError as e:
         part.unlink(missing_ok=True)
-        raise ToolError(f"Downloading the firmware failed ({_reason(e)}).") from None
+        raise ToolError(tr("Downloading the firmware failed ({reason}).", reason=_reason(e))) from None
     except BaseException:
         part.unlink(missing_ok=True)
         raise
     if size and done != size:
         part.unlink(missing_ok=True)
-        raise ToolError(f"The download is {done:,} bytes, not the {size:,} the firmware server lists.")
+        raise ToolError(tr("The download is {done:,} bytes, not the {size:,} the firmware server lists.", done=done,
+                           size=size))
     if digest.hexdigest() != want:
         part.unlink(missing_ok=True)
-        raise ToolError("The download's SHA-256 doesn't match the firmware server's: it was damaged on the way.")
+        raise ToolError(_("The download's SHA-256 doesn't match the firmware server's: it was damaged on the way."))
     os.replace(part, path)
     return path
 
@@ -537,6 +542,13 @@ def detached(command: str, log: str, run: str = "") -> str:
     return f"rm -f {log}; {body} >{log} 2>&1 &"
 
 
+# The report after which a firmware update can't be stopped any more (the GUIs take Cancel away when it
+# comes): the installer starting, on airOS and UniFi, then on EdgeOS.
+INSTALL_STARTS = (N_("Starting the installation. The device restarts on its own: don't unplug it."),
+                  N_("Starting the installation: EdgeOS writes the new image to its flash, which takes a few minutes. "
+                     "Don't unplug it."))
+
+
 def install_firmware(d, login: sshrun.Login, path: Path, report, stop=None, version: str = "") -> float:
     """Copy the firmware to the device, check it there and start the installer, then wait for
     the device to go down and come back. report(text, percent or None). version: the release's,
@@ -544,27 +556,28 @@ def install_firmware(d, login: sshrun.Login, path: Path, report, stop=None, vers
     seconds it was offline."""
     steps = UPDATE_STEPS[family(d)]
     target = steps["path"]
-    report("Making room on the device…", None)
+    report(_("Making room on the device…"), None)
     sshrun.run(login, f"rm -f {target}", stop=stop)
     if family(d) == "edgeos":
         free = re.findall(r"^\S+\s+\d+\s+\d+\s+(\d+)", sshrun.run(login, "df -k /tmp", stop=stop).out, re.M)
         if free and int(free[-1]) * 1024 < path.stat().st_size + (4 << 20):
-            raise ToolError(f"It has {fmt_size(int(free[-1]) * 1024)} free in /tmp, too little for the "
-                            f"{fmt_size(path.stat().st_size)} firmware file, so nothing was copied.")
-    report(f"Copying the firmware to {target}…", 0)
+            raise ToolError(tr("It has {free} free in /tmp, too little for the {size} firmware file, so nothing was "
+                               "copied.", free=fmt_size(int(free[-1]) * 1024), size=fmt_size(path.stat().st_size)))
+    report(tr("Copying the firmware to {path}…", path=target), 0)
     sshrun.upload(login, path, target, progress=lambda p: report(None, p), stop=stop)
 
-    report("Checking the copy on the device…", None)
+    report(_("Checking the copy on the device…"), None)
     copied = _said_md5(sshrun.run(login, _ARRIVED.format(path=target), stop=stop).out)
     if copied and copied != _md5(path):
         sshrun.run(login, f"rm -f {target}", stop=stop)
-        raise ToolError("The copy on the device doesn't match the download: it was damaged on the way.")
+        raise ToolError(_("The copy on the device doesn't match the download: it was damaged on the way."))
     if steps["check"]:
         result = sshrun.run(login, steps["check"], timeout=120, stop=stop)
         if result.code:
             sshrun.run(login, f"rm -f {target}", stop=stop)
             said = _said(result)
-            raise ToolError("The device rejected the firmware file" + (f": {said}" if said else "."))
+            raise ToolError(tr("The device rejected the firmware file: {said}", said=said) if said else
+                            _("The device rejected the firmware file."))
     if family(d) == "edgeos":
         return _install_edgeos(d, login, target, version, report, stop)
     upgrade_time = 0
@@ -573,11 +586,11 @@ def install_firmware(d, login: sshrun.Login, path: Path, report, stop=None, vers
         upgrade_time = int(result.out.strip()) if result.out.strip().isdigit() else 0
 
     if stop is not None and stop.is_set():
-        raise ToolError("Cancelled.")
-    report("Starting the installation. The device restarts on its own: don't unplug it.", None)
+        raise ToolError(_("Cancelled."))
+    report(_(INSTALL_STARTS[0]), None)
     sshrun.run(login, detached(steps["install"], UPDATE_LOG), timeout=60)
     went_down = wait_for(login.ip, login.port, up=False, within=300, report=report,
-                         what="Installing: waiting for the device to restart…")
+                         what=_("Installing: waiting for the device to restart…"))
     if not went_down:
         said = ""
         try:
@@ -585,14 +598,14 @@ def install_firmware(d, login: sshrun.Login, path: Path, report, stop=None, vers
         except sshrun.SSHError:
             pass
         said = re.sub(r"opendisco-exit=\d+\s*", "", said).strip()
-        raise ToolError("The device didn't restart, so the firmware wasn't installed"
-                        + (f". It said: {said}" if said else "."))
+        raise ToolError(tr("The device didn't restart, so the firmware wasn't installed. It said: {said}", said=said)
+                        if said else _("The device didn't restart, so the firmware wasn't installed."))
     started = time.monotonic()
     within = max(900, upgrade_time * 3)
     if not wait_for(login.ip, login.port, up=True, within=within, report=report,
-                    what="Installing: the device is offline while it writes the firmware…"):
-        raise ToolError(f"The device hasn't come back after {within // 60} minutes. It may still be installing: "
-                        "give it a few more minutes before power-cycling it.")
+                    what=_("Installing: the device is offline while it writes the firmware…")):
+        raise ToolError(tr("The device hasn't come back after {minutes} minutes. It may still be installing: give it "
+                           "a few more minutes before power-cycling it.", minutes=within // 60))
     return time.monotonic() - started
 
 
@@ -627,7 +640,8 @@ def edgeos_images(login: sshrun.Login, stop=None) -> list:
     images = parse_images(result.out)
     if not images:
         said = _said(result)
-        raise ToolError("EdgeOS didn't list its firmware images" + (f": {said}" if said else "."))
+        raise ToolError(tr("EdgeOS didn't list its firmware images: {said}", said=said) if said else
+                        _("EdgeOS didn't list its firmware images."))
     return images
 
 
@@ -645,15 +659,16 @@ def edgeos_unsaved(login: sshrun.Login, stop=None) -> bool | None:
     return int(m.group(1)) > 0 if m else None
 
 
-EDGEOS_UNSAVED_TEXT = ("It has config changes that are committed but not saved, which installing would lose: "
-                       "EdgeOS's installer stops for them. Save them (save, in its CLI) or undo them, then update it.")
+EDGEOS_UNSAVED_TEXT = N_("It has config changes that are committed but not saved, which installing would lose: "
+                         "EdgeOS's installer stops for them. Save them (save, in its CLI) or undo them, then update "
+                         "it.")
 
 
 def edgeos_update_note(login: sshrun.Login, version: str, stop=None) -> str:
     """What installing version does to an EdgeRouter's two images, said before it's confirmed;
     ToolError when EdgeOS would stop at config changes not saved."""
     if edgeos_unsaved(login, stop):
-        raise ToolError(EDGEOS_UNSAVED_TEXT)
+        raise ToolError(_(EDGEOS_UNSAVED_TEXT))
     return image_plan(edgeos_images(login, stop), version)
 
 
@@ -661,12 +676,17 @@ def image_plan(images: list, version: str) -> str:
     """What installing version does to the images it keeps, in a sentence."""
     running = next((i for i in images if i.running), None)
     other = next((i for i in images if not i.running), None)
-    text = f"EdgeOS keeps two firmware images: {version} goes in as the one it boots"
+    if running and other:
+        return tr("EdgeOS keeps two firmware images: {version} goes in as the one it boots, and {running}, which it "
+                  "runs now, stays as the backup; {backup}, the backup it has now, is deleted.",
+                  version=version, running=running.version, backup=other.version)
     if running:
-        text += f", and {running.version}, which it runs now, stays as the backup"
+        return tr("EdgeOS keeps two firmware images: {version} goes in as the one it boots, and {running}, which it "
+                  "runs now, stays as the backup.", version=version, running=running.version)
     if other:
-        text += f"; {other.version}, the backup it has now, is deleted"
-    return text + "."
+        return tr("EdgeOS keeps two firmware images: {version} goes in as the one it boots; {backup}, the backup it "
+                  "has now, is deleted.", version=version, backup=other.version)
+    return tr("EdgeOS keeps two firmware images: {version} goes in as the one it boots.", version=version)
 
 
 def _install_edgeos(d, login: sshrun.Login, target: str, version: str, report, stop) -> float:
@@ -674,9 +694,8 @@ def _install_edgeos(d, login: sshrun.Login, target: str, version: str, report, s
     as the default boot, restart the router to run it. Returns the seconds it took to come back."""
     before = edgeos_images(login, stop)
     if stop is not None and stop.is_set():
-        raise ToolError("Cancelled.")
-    report("Starting the installation: EdgeOS writes the new image to its flash, which takes a few minutes. "
-           "Don't unplug it.", None)
+        raise ToolError(_("Cancelled."))
+    report(_(INSTALL_STARTS[1]), None)
     run = secrets.token_hex(6)
     sshrun.run(login, detached(UPDATE_STEPS["edgeos"]["install"], EDGEOS_UPDATE_LOG, run), timeout=60)
     start, said = time.monotonic(), None
@@ -695,13 +714,14 @@ def _install_edgeos(d, login: sshrun.Login, target: str, version: str, report, s
                 sshrun.run(login, f"rm -f {target}")
             except sshrun.SSHError:
                 pass
-            raise ToolError("EdgeOS's installer didn't start (the app couldn't write its log in /tmp), so nothing was "
-                            "installed.")
+            raise ToolError(_("EdgeOS's installer didn't start (the app couldn't write its log in /tmp), so nothing "
+                              "was installed."))
         elif time.monotonic() - start > 1200:
-            raise ToolError("EdgeOS hasn't finished adding the image after 20 minutes, so the app didn't restart it. "
-                            "Look at show system image in its CLI before restarting it.")
+            raise ToolError(_("EdgeOS hasn't finished adding the image after 20 minutes, so the app didn't restart "
+                              "it. Look at show system image in its CLI before restarting it."))
         else:
-            report(f"Installing: EdgeOS is writing the new image… {time.monotonic() - start:.0f}s", None)
+            report(tr("Installing: EdgeOS is writing the new image… {seconds:.0f}s", seconds=time.monotonic() - start),
+                   None)
     said = re.sub(r"opendisco-(?:run|exit)=\w+\s*", "", said).strip()
     try:
         sshrun.run(login, f"rm -f {target}")  # done with, whatever it did
@@ -711,30 +731,34 @@ def _install_edgeos(d, login: sshrun.Login, target: str, version: str, report, s
     new = next((i for i in after if i.default), None)
     if new is None or version_key(new.version) != version_key(version):
         lost = [i.version for i in before if i.name not in {a.name for a in after}]
-        raise ToolError(_edgeos_refused(said) + " It wasn't restarted."
-                        + (f" EdgeOS had already deleted its backup image, {lost[0]}." if lost else ""))
+        raise ToolError(sentences(_edgeos_refused(said), _("It wasn't restarted."),
+                                  tr("EdgeOS had already deleted its backup image, {image}.", image=lost[0]) if lost
+                                  else ""))
     kept = next((i for i in after if not i.default), None)
-    report(f"EdgeOS added {new.name} as the image it boots" + (f"; {kept.version} stays as the backup" if kept else "")
-           + ". Restarting it to run the new one…", None)
+    report(tr("EdgeOS added {image} as the image it boots; {backup} stays as the backup. Restarting it to run the new "
+              "one…", image=new.name, backup=kept.version) if kept else
+           tr("EdgeOS added {image} as the image it boots. Restarting it to run the new one…", image=new.name), None)
     try:
         return reboot(login, d, report=lambda text: report(text, None), within=900)
     except ToolError as e:
-        raise ToolError(f"EdgeOS added {version} as the image it boots, but restarting it failed: {e} It runs the new "
-                        "firmware once it's restarted.") from None
+        raise ToolError(tr("EdgeOS added {version} as the image it boots, but restarting it failed: {error} It runs "
+                           "the new firmware once it's restarted.", version=version, error=e)) from None
 
 
 def _edgeos_refused(said: str) -> str:
     """Why add system image installed nothing, from what it said (EdgeOS's ubnt-upgrade's messages)."""
     if "changes have not been saved" in said:
-        return "Nothing was installed. " + EDGEOS_UNSAVED_TEXT
+        return sentences(_("Nothing was installed."), _(EDGEOS_UNSAVED_TEXT))
     if "needs a reboot before upgrade" in said:
-        return "EdgeOS already has a new image waiting for a restart, so it took no other: Reboot it, then update it."
+        return _("EdgeOS already has a new image waiting for a restart, so it took no other: Reboot it, then update "
+                 "it.")
     if "does not support the device" in said:
-        return "EdgeOS says the image isn't for this router, so it installed nothing."
+        return _("EdgeOS says the image isn't for this router, so it installed nothing.")
     if "enough disk space" in said:
-        return "There isn't room for the new image on its flash, so nothing was installed."
+        return _("There isn't room for the new image on its flash, so nothing was installed.")
     last = ([l.strip() for l in said.split("\n") if l.strip()] or [""])[-1][-300:]  # its verdict
-    return "EdgeOS didn't install the image" + (f". It said: {last}" if last else ".")
+    return (tr("EdgeOS didn't install the image. It said: {said}", said=last) if last else
+            _("EdgeOS didn't install the image."))
 
 
 def _said(result: sshrun.Result) -> str:
@@ -805,16 +829,17 @@ def config_problems(text: str, kind: str = "airos") -> list:
             unquoted = re.sub(r'"(?:[^"\\]|\\.)*"', '""', line)
             depth += unquoted.count("{") - unquoted.count("}")
             if depth < 0:
-                problems.append(f"line {n}: a }} with no {{ before it")
+                problems.append(tr("line {line}: a }} with no {{ before it", line=n))
                 depth = 0
         if depth:
-            problems.append(f"{depth} {{ without a }} to close it")
+            problems.append(tr("{count} {{ without a }} to close it", count=depth))
         if not body.strip():
-            problems.append("it's empty")
+            problems.append(_("it's empty"))
         if EDGEOS_MARK not in text:
-            problems.append(f"no {EDGEOS_MARK} line at the end, which every config EdgeOS saves has")
+            problems.append(tr("no {mark} line at the end, which every config EdgeOS saves has", mark=EDGEOS_MARK))
         return problems
-    return [f"line {n}: {line[:60]}" for n, line in enumerate(text.replace("\r", "").split("\n"), 1)
+    return [tr("line {line}: {text}", line=n, text=line[:60])
+            for n, line in enumerate(text.replace("\r", "").split("\n"), 1)
             if line.strip() and not re.match(r"[A-Za-z0-9_.-]+=", line)]
 
 
@@ -825,6 +850,36 @@ def lines_changed(old: str, new: str) -> int:
     a, b = old.replace("\r", "").splitlines(), new.replace("\r", "").splitlines()
     return sum(max(i2 - i1, j2 - j1) for tag, i1, i2, j1, j2 in difflib.SequenceMatcher(None, a, b, autojunk=False)
                .get_opcodes() if tag != "equal")
+
+
+# What a config change that didn't happen, or may not have, says, by what it was to do: "applied" or
+# "saved" (write_config, write_edgeos), "changed" (change_edgeos_login).
+_UNTOUCHED = {
+    "applied": N_("Connection lost: config not applied. It didn't reach the device, which still has its earlier "
+                  "config."),
+    "saved": N_("Connection lost: config not saved. It didn't reach the device, which still has its earlier config."),
+}
+_DAMAGED = {
+    "applied": N_("The config arrived damaged, so it wasn't applied; the device still has its earlier one."),
+    "saved": N_("The config arrived damaged, so it wasn't saved; the device still has its earlier one."),
+    "changed": N_("The config arrived damaged, so it wasn't changed; the device still has its earlier one."),
+}
+_NOT_STARTED = {
+    "applied": N_("Connection lost before the device got the command: config not applied. It still has its earlier "
+                  "config."),
+    "saved": N_("Connection lost before the device got the command: config not saved. It still has its earlier "
+                "config."),
+    "changed": N_("Connection lost before the device got the command: config not changed. It still has its earlier "
+                  "config."),
+}
+_CANT_TELL = {
+    "applied": N_("Connection lost: the app can't tell whether the config was applied, as it couldn't reach the "
+                  "device again. Reload the config once the device answers to see."),
+    "saved": N_("Connection lost: the app can't tell whether the config was saved, as it couldn't reach the device "
+                "again. Reload the config once the device answers to see."),
+    "changed": N_("Connection lost: the app can't tell whether the config was changed, as it couldn't reach the "
+                  "device again. Reload the config once the device answers to see."),
+}
 
 
 def write_config(login: sshrun.Login, text: str, apply: bool, report=None, stop=None,
@@ -843,7 +898,7 @@ def write_config(login: sshrun.Login, text: str, apply: bool, report=None, stop=
     text = _unix(text)
     what = "applied" if apply else "saved"
     say = report or (lambda message: None)
-    untouched = f"Connection lost: config not {what}. It didn't reach the device, which still has its earlier config."
+    untouched = _(_UNTOUCHED[what])
     if check_tools:
         tools = config_tools(login, "isp", stop)
         if not tools["apply" if apply else "save"]:
@@ -858,24 +913,28 @@ def write_config(login: sshrun.Login, text: str, apply: bool, report=None, stop=
             raise LostConnection(f"{untouched} ({e})", "not done") from None
         # Both: a config saved to flash but not applied (Save) is what the next reboot runs.
         if _lines(running) == _lines(text) and _lines(stored) == _lines(text):
-            return "Nothing to apply: the device already runs this config."
+            return _("Nothing to apply: the device already runs this config.")
     # It runs this config already, but has another saved: saving it is all there is to do (airOS's
     # rc.softrestart save does nothing at all when the saved config matches the running one).
     runs_it = apply and _lines(running) == _lines(text)
 
-    say("Copying the config to the device…")
+    say(_("Copying the config to the device…"))
     _stage(login, [(text, STAGED_CONFIG)], what, untouched, stop)
-    say("Applying it: the device restarts the services the change affects…" if apply else "Saving it to flash…")
+    say(_("Applying it: the device restarts the services the change affects…") if apply else _("Saving it to flash…"))
     # Detached: applying can restart SSH itself, which would end a command run in the session.
     code, said, sent, dropped = _run_staged(
         login, f"mv -f {STAGED_CONFIG} {AIROS_CONFIG} && " + (AIROS_APPLY if apply and not runs_it else AIROS_SAVE),
         STAGED_CONFIG, what, apply, [new_login, login] if new_login else [login], confirm_within, stop, say)
     if code:
-        raise ToolError(("Applying" if apply else "Saving") + " failed" + (f": {said[-300:]}" if said else "."))
-    done = ("It already ran this config: saved to flash, so it runs it after a reboot too." if runs_it
-            else "Applied and saved to flash." if apply else "Saved to flash. It takes effect at the next reboot.")
+        if apply:
+            raise ToolError(tr("Applying failed: {said}", said=said[-300:]) if said else _("Applying failed."))
+        raise ToolError(tr("Saving failed: {said}", said=said[-300:]) if said else _("Saving failed."))
+    done = (_("It already ran this config: saved to flash, so it runs it after a reboot too.") if runs_it
+            else _("Applied and saved to flash.") if apply
+            else _("Saved to flash. It takes effect at the next reboot."))
     if not sent or (dropped and not apply):  # applying restarts SSH: drops then are expected
-        done += " The connection dropped meanwhile: the device finished on its own, checked after reconnecting."
+        done = sentences(done, _("The connection dropped meanwhile: the device finished on its own, checked after "
+                                 "reconnecting."))
     return done
 
 
@@ -899,7 +958,7 @@ def _stage(login: sshrun.Login, files: list, what: str, untouched: str, stop=Non
             arrived = sshrun.run(login, _ARRIVED.format(path=path), stop=stop).out
             if not _arrived_whole(arrived, local):
                 sshrun.run(login, "rm -f " + " ".join(p for _t, p in files), stop=stop)
-                raise ToolError(f"The config arrived damaged, so it wasn't {what}; the device still has its earlier one.")
+                raise ToolError(_(_DAMAGED[what]))
     except sshrun.SSHError as e:
         if e.kind in ("auth", "key", "cancelled"):
             raise
@@ -921,7 +980,7 @@ def _run_staged(login: sshrun.Login, command: str, staged: str, what: str, apply
         if e.kind in ("auth", "key"):
             raise
         sent = False  # it may or may not have got there
-        say(f"Connection lost while starting it ({e}). Reconnecting to find out what the device did…")
+        say(tr("Connection lost while starting it ({error}). Reconnecting to find out what the device did…", error=e))
     state, code, said, dropped = _confirm(logins, run, within, stop, say, staged, log)
     if state == "done":
         return code, said, sent, dropped
@@ -930,15 +989,15 @@ def _run_staged(login: sshrun.Login, command: str, staged: str, what: str, apply
             sshrun.run(login, f"rm -f {staged}", stop=stop)
         except sshrun.SSHError:
             pass
-        raise LostConnection(f"Connection lost before the device got the command: config not {what}. It still has "
-                             "its earlier config.", "not done")
+        raise LostConnection(_(_NOT_STARTED[what]), "not done")
     if not sent:
-        raise LostConnection(f"Connection lost: the app can't tell whether the config was {what}, as it couldn't "
-                             "reach the device again. Reload the config once the device answers to see.", "unknown")
-    raise LostConnection(f"Connection lost after the device started {'applying' if apply else 'saving'} it. It "
-                         "finishes on its own, but the app couldn't reach it again to confirm. Reload the config once "
-                         "it answers." + (" If the change moved its address, VLAN or SSH port, that's expected."
-                                         if apply else ""), "unknown")
+        raise LostConnection(_(_CANT_TELL[what]), "unknown")
+    if apply:
+        raise LostConnection(_("Connection lost after the device started applying it. It finishes on its own, but the "
+                               "app couldn't reach it again to confirm. Reload the config once it answers. If the "
+                               "change moved its address, VLAN or SSH port, that's expected."), "unknown")
+    raise LostConnection(_("Connection lost after the device started saving it. It finishes on its own, but the app "
+                           "couldn't reach it again to confirm. Reload the config once it answers."), "unknown")
 
 
 # A file's MD5 and size as the device sees it, each after a marker: on Windows the output comes
@@ -981,7 +1040,7 @@ def _confirm(logins, run: str, within: float, stop, say, staged: str = STAGED_CO
                     raise
         if out is None:
             dropped = True
-            say(f"Reconnecting to find out what the device did… {time.monotonic() - start:.0f}s")
+            say(tr("Reconnecting to find out what the device did… {seconds:.0f}s", seconds=time.monotonic() - start))
             continue
         if f"opendisco-run={run}" not in out:
             return "not started", None, "", dropped
@@ -1008,20 +1067,21 @@ def config_tools(login: sshrun.Login, kind: str, stop=None) -> dict:
         out = sshrun.run(login, "command -v cfgmtd >/dev/null && echo has-save; "
                                 f"test -x {AIROS_APPLY.split()[0]} && echo has-apply", stop=stop).out
         save, apply = "has-save" in out, "has-apply" in out
-        why = ("" if save and apply else "It has no cfgmtd, so the app can't save a config to its flash." if not save
-               else "It has no rc.softrestart to apply a config in place: Save it, then Reboot it.")
+        why = ("" if save and apply else _("It has no cfgmtd, so the app can't save a config to its flash.") if not save
+               else _("It has no rc.softrestart to apply a config in place: Save it, then Reboot it."))
         return {"save": save, "apply": save and apply, "why": why}
     if kind == "edgeos":
         out = sshrun.run(login, f"test -x {EDGEOS_WRAPPER} && echo has-wrapper; id -Gn", stop=stop).out
         if "has-wrapper" not in out:
-            return {"save": False, "apply": False, "why": f"It has no {EDGEOS_WRAPPER}: it doesn't look like EdgeOS."}
+            return {"save": False, "apply": False,
+                    "why": tr("It has no {program}: it doesn't look like EdgeOS.", program=EDGEOS_WRAPPER)}
         groups = out.replace("has-wrapper", "").split()
         if "vyattacfg" not in groups and "root" not in groups:
             return {"save": False, "apply": False,
-                    "why": f"The login {login.user} isn't in EdgeOS's vyattacfg group, which changing the config "
-                           "needs (an admin login is)."}
+                    "why": tr("The login {user} isn't in EdgeOS's vyattacfg group, which changing the config needs (an "
+                              "admin login is).", user=login.user)}
         return {"save": True, "apply": True, "why": ""}
-    return {"save": False, "apply": False, "why": "The app can't write this device's config."}
+    return {"save": False, "apply": False, "why": _("The app can't write this device's config.")}
 
 
 def read_device_config(login: sshrun.Login, kind: str, stop=None) -> tuple:
@@ -1032,7 +1092,7 @@ def read_device_config(login: sshrun.Login, kind: str, stop=None) -> tuple:
         return read_config(login, stop)
     if kind == "edgeos":
         return _fetch(login, EDGEOS_CONFIG, stop), False
-    raise ToolError("The app can't read this device's config.")
+    raise ToolError(_("The app can't read this device's config."))
 
 
 def push_config(login: sshrun.Login, kind: str, text: str, apply: bool, report=None, stop=None) -> str:
@@ -1042,7 +1102,7 @@ def push_config(login: sshrun.Login, kind: str, text: str, apply: bool, report=N
         return write_config(login, text, apply, report, stop, check_tools=kind == "isp")
     if kind == "edgeos":
         return write_edgeos(login, text, apply, report, stop)
-    raise ToolError("The app can't write this device's config.")
+    raise ToolError(_("The app can't write this device's config."))
 
 
 def edgeos_script(apply: bool) -> str:
@@ -1084,13 +1144,13 @@ def edgeos_script(apply: bool) -> str:
 
 
 EDGEOS_FAILURES = {
-    3: "The config didn't arrive in place, so nothing was changed.",
-    4: "EdgeOS didn't start a config session, so nothing was changed",
-    5: "EdgeOS didn't load it, so nothing was changed",
-    6: "EdgeOS loaded it, but the commit failed. Parts of it may be active now; its boot config is unchanged, so a "
-       "reboot returns to that",
-    7: "It's applied, but saving it to the boot config failed: it runs the new config only until the next reboot",
-    8: f"EdgeOS reads it, but writing {EDGEOS_CONFIG} failed, so nothing was changed",
+    3: N_("The config didn't arrive in place, so nothing was changed."),
+    4: N_("EdgeOS didn't start a config session, so nothing was changed"),
+    5: N_("EdgeOS didn't load it, so nothing was changed"),
+    6: N_("EdgeOS loaded it, but the commit failed. Parts of it may be active now; its boot config is unchanged, so a "
+          "reboot returns to that"),
+    7: N_("It's applied, but saving it to the boot config failed: it runs the new config only until the next reboot"),
+    8: N_("EdgeOS reads it, but writing /config/config.boot failed, so nothing was changed"),  # EDGEOS_CONFIG
 }
 
 
@@ -1108,43 +1168,45 @@ def write_edgeos(login: sshrun.Login, text: str, apply: bool, report=None, stop=
     text = _unix(text)
     problems = config_problems(text, "edgeos")
     if problems:
-        raise ToolError("It isn't a config EdgeOS reads: " + "; ".join(problems[:5]) + ".")
+        raise ToolError(tr("It isn't a config EdgeOS reads: {problems}.", problems="; ".join(problems[:5])))
     what = "applied" if apply else "saved"
     say = report or (lambda message: None)
-    untouched = f"Connection lost: config not {what}. It didn't reach the device, which still has its earlier config."
+    untouched = _(_UNTOUCHED[what])
     tools = config_tools(login, "edgeos", stop)
     if not tools["apply"]:
         raise ToolError(tools["why"])
-    say("Copying the config to the device…")
+    say(_("Copying the config to the device…"))
     _stage(login, [(edgeos_script(apply), EDGEOS_SCRIPT), (text, EDGEOS_STAGED)], what, untouched, stop)
-    say("Loading and committing it: EdgeOS restarts what the change affects…" if apply
-        else "Checking that EdgeOS reads it, then saving it as the boot config…")
+    say(_("Loading and committing it: EdgeOS restarts what the change affects…") if apply
+        else _("Checking that EdgeOS reads it, then saving it as the boot config…"))
     code, said, sent, dropped = _run_staged(login, f"sh {EDGEOS_SCRIPT}", EDGEOS_STAGED, what, apply, [login],
                                             confirm_within, stop, say, EDGEOS_CONFIG_LOG)
     nothing = "opendisco: nothing to commit" in said
     said = "\n".join(l for l in said.split("\n") if not l.startswith("opendisco:")).strip()
     if code:
-        raise ToolError(EDGEOS_FAILURES.get(code, f"It failed (exit code {code})")
-                        + (f". EdgeOS said: {said[-400:]}" if said and code != 3 else "."))
+        failed = _(EDGEOS_FAILURES[code]) if code in EDGEOS_FAILURES else tr("It failed (exit code {code})", code=code)
+        raise ToolError(tr("{failed}. EdgeOS said: {said}", failed=failed, said=said[-400:]) if said and code != 3
+                        else i18n.stop(failed))
     try:
         stored = _fetch(login, EDGEOS_CONFIG, stop)
     except sshrun.SSHError:
         stored = None
     if apply and nothing:
-        done = "It already runs this config: saved as its boot config too."
+        done = _("It already runs this config: saved as its boot config too.")
     elif apply:
-        done = "Loaded, committed and saved: it runs the new config, and boots with it."
+        done = _("Loaded, committed and saved: it runs the new config, and boots with it.")
     else:
-        done = (f"Checked (EdgeOS reads it) and saved as {EDGEOS_CONFIG}: it takes effect at the next reboot. Until "
-                "then, any other change saved on it (web UI, CLI, UISP) replaces it.")
+        done = tr("Checked (EdgeOS reads it) and saved as {file}: it takes effect at the next reboot. Until then, any "
+                  "other change saved on it (web UI, CLI, UISP) replaces it.", file=EDGEOS_CONFIG)
     if stored is None:
-        done += f" The app couldn't read {EDGEOS_CONFIG} back to compare."
+        done = sentences(done, tr("The app couldn't read {file} back to compare.", file=EDGEOS_CONFIG))
     elif boot_lines(stored) != boot_lines(text):
         changed = lines_changed("\n".join(boot_lines(text)), "\n".join(boot_lines(stored)))
-        done += (f" EdgeOS stored it with {changed} line(s) different from the file: it writes the config in its own "
-                 "order and format.")
+        done = sentences(done, tr("EdgeOS stored it with {count} line(s) different from the file: it writes the config "
+                                  "in its own order and format.", count=changed))
     if not sent or (dropped and not apply):
-        done += " The connection dropped meanwhile: the device finished on its own, checked after reconnecting."
+        done = sentences(done, _("The connection dropped meanwhile: the device finished on its own, checked after "
+                                 "reconnecting."))
     return done
 
 
@@ -1188,7 +1250,7 @@ def save_backup(d, text: str, kind: str, reason: str = "backup", root=None) -> B
     """Keep a config of the device: <MAC folder>/<date>_<time>_<file name>, and beside it the
     same name + .json with where it came from."""
     if not d.mac:
-        raise ToolError("Without its MAC address the app can't file a backup of it.")
+        raise ToolError(_("Without its MAC address the app can't file a backup of it."))
     folder = backup_folder(d.mac, root)
     folder.mkdir(parents=True, exist_ok=True)
     when = time.time()
@@ -1265,10 +1327,11 @@ def read_config_file(path) -> tuple:
     when it has one beside it, else nothing."""
     path = Path(path)
     if path.stat().st_size > 4_000_000:
-        raise ToolError(f"{path.name} is {path.stat().st_size:,} bytes: far too big for a device's config.")
+        raise ToolError(tr("{name} is {size:,} bytes: far too big for a device's config.", name=path.name,
+                           size=path.stat().st_size))
     data = path.read_bytes()
     if b"\0" in data[:4096]:
-        raise ToolError(f"{path.name} isn't a text file (a web UI's backup archive is unpacked first).")
+        raise ToolError(tr("{name} isn't a text file (a web UI's backup archive is unpacked first).", name=path.name))
     return data.decode("utf-8", "replace"), _read_meta(path)
 
 
@@ -1287,36 +1350,43 @@ def upload_check(d, kind: str, text: str, meta: dict) -> tuple:
     problems = config_problems(text, kind)
     other = "airos" if kind == "edgeos" else "edgeos"
     if problems and text.strip() and not config_problems(text, other):
-        return (f"It's {'an EdgeOS' if other == 'edgeos' else 'an airOS-style'} {CONFIG_NAMES[other]}, not the "
-                f"{CONFIG_NAMES[kind]} this device keeps.", "")
+        if other == "edgeos":
+            return tr("It's an EdgeOS {file}, not the {own} this device keeps.", file=CONFIG_NAMES[other],
+                      own=CONFIG_NAMES[kind]), ""
+        return tr("It's an airOS-style {file}, not the {own} this device keeps.", file=CONFIG_NAMES[other],
+                  own=CONFIG_NAMES[kind]), ""
     if problems:
-        return (f"It isn't a {CONFIG_NAMES[kind]} that {_kind_name(kind)} reads: " + "; ".join(problems[:5]) + ".", "")
+        return (tr("It isn't a {file} that {system} reads: {problems}.", file=CONFIG_NAMES[kind],
+                   system=_(_kind_name(kind)), problems="; ".join(problems[:5])), "")
     if meta.get("kind") and meta["kind"] != kind:
-        return f"It's a {CONFIG_NAMES.get(meta['kind'], meta['kind'])}, not this device's {CONFIG_NAMES[kind]}.", ""
-    model = d.model or d.fw_platform or "device"
+        return tr("It's a {file}, not this device's {own}.", file=CONFIG_NAMES.get(meta['kind'], meta['kind']),
+                  own=CONFIG_NAMES[kind]), ""
+    model = d.model or d.fw_platform or _("device")
     match = same_model(d, meta)
     if match is False:
-        return (f"It's from model {meta.get('model') or meta.get('platform')}, and this device is model {model}: a "
-                "config goes back only to the same model.", "")
+        return (tr("It's from model {theirs}, and this device is model {model}: a config goes back only to the same "
+                   "model.", theirs=meta.get('model') or meta.get('platform'), model=model), "")
     warn = []
     if match is None:
-        warn.append(f"The file doesn't say which model it's from. Upload only a config from another {model}: settings "
-                    "for other hardware (radios, interfaces) can leave it unreachable.")
+        warn.append(tr("The file doesn't say which model it's from. Upload only a config from another {model}: "
+                       "settings for other hardware (radios, interfaces) can leave it unreachable.", model=model))
     if meta.get("mac") and d.mac and core.norm_mac(meta["mac"]) != d.mac:
-        warn.append(f"It's from another device ({meta['mac']}{', ' + meta['name'] if meta.get('name') else ''}): its "
-                    "address, name and logins come with it.")
+        warn.append(tr("It's from another device ({device}): its address, name and logins come with it.",
+                       device=meta['mac'] + (', ' + meta['name'] if meta.get('name') else '')))
     return "", "\n\n".join(warn)
 
 
 def _kind_name(kind: str) -> str:
-    return {"airos": "airOS", "isp": "the device", "edgeos": "EdgeOS"}.get(kind, "the device")
+    return {"airos": "airOS", "isp": N_("the device"), "edgeos": "EdgeOS"}.get(kind, N_("the device"))
 
 
-def config_diff(old: str, new: str, old_name: str = "on the device", new_name: str = "to upload") -> tuple:
+def config_diff(old: str, new: str, old_name: str | None = None, new_name: str | None = None) -> tuple:
     """(a unified diff from one config to the other, how many lines change): by default from
     the device's config to one to upload; a comparison names its two (a backup's date, "on the
     device now")."""
     import difflib
+    old_name = _("on the device") if old_name is None else old_name
+    new_name = _("to upload") if new_name is None else new_name
     a, b = old.replace("\r", "").splitlines(), new.replace("\r", "").splitlines()
     diff = "\n".join(difflib.unified_diff(a, b, old_name, new_name, n=2, lineterm=""))
     return diff, lines_changed(old, new)
@@ -1352,7 +1422,7 @@ class BackupJob:
     login: object = None  # None: no saved login (skipped)
     hops: list = field(default_factory=list)  # the devices on its route, the nearest first
     missing: str = ""  # a device on its route has no saved login: it's backed up only if it answers directly
-    state: str = "waiting"  # waiting, backing up, backed up, unchanged, failed, skipped, stopped
+    state: str = N_("waiting")  # waiting, backing up, backed up, unchanged, failed, skipped, stopped
     said: str = ""  # why it failed or was skipped
     backup: Backup | None = None  # the new one (backed up), or the last one (unchanged)
 
@@ -1365,14 +1435,16 @@ class BackupJob:
     def text(self) -> str:
         """How it went, for its line in the report."""
         if self.state == "backed up":
-            return f"backed up ({self.backup.date})"
+            return tr("backed up ({date})", date=self.backup.date)
         if self.state == "unchanged":
-            return f"unchanged since its last backup ({self.backup.date})"
-        if self.state in ("failed", "skipped"):
-            return f"{self.state}: {self.said}"
+            return tr("unchanged since its last backup ({date})", date=self.backup.date)
+        if self.state == "failed":
+            return tr("failed: {reason}", reason=self.said)
+        if self.state == "skipped":
+            return tr("skipped: {reason}", reason=self.said)
         if self.state == "stopped":
-            return "not backed up: stopped"
-        return f"{self.state}…" if self.state == "backing up" else self.state
+            return _("not backed up: stopped")
+        return _("backing up…") if self.state == "backing up" else _(self.state)
 
     @property
     def can_retry(self) -> bool:
@@ -1380,12 +1452,13 @@ class BackupJob:
         return self.state in ("skipped", "failed", "stopped") and bool(self.d.ip and self.d.mac)
 
 
-def backup_jobs(devices, saved_login, route, none: str = "no saved login") -> list:
+def backup_jobs(devices, saved_login, route, none: str = N_("no saved login")) -> list:
     """A BackupJob for each device that keeps a config (config_kind). saved_login(d, via) is its
     saved login, reaching it through the logins via (None: there's none); route(d) the devices on
     the way to it, the nearest first. The ones that can't be backed up as they are come last,
     skipped: no saved login (none says so: the phones keep a password only while the app runs),
     no address, no MAC to file the backup under."""
+    none = _(none)
     jobs, skipped = [], []
     for d in devices:
         kind = config_kind(d)
@@ -1393,14 +1466,14 @@ def backup_jobs(devices, saved_login, route, none: str = "no saved login") -> li
             continue
         job = BackupJob(d, kind)
         if not d.ip or not d.mac:
-            job.state, job.said = "skipped", "no IP address" if not d.ip else "no MAC address to file it under"
+            job.state, job.said = "skipped", _("no IP address") if not d.ip else _("no MAC address to file it under")
             skipped.append(job)
             continue
         via = ()
         for hop in route(d):
             login = saved_login(hop, via)
             if login is None:
-                job.missing = f"{none} for {hop.ip or hop.mac}, on the way to it"
+                job.missing = tr("{reason} for {device}, on the way to it", reason=none, device=hop.ip or hop.mac)
                 via = ()
                 break
             via += (login,)
@@ -1450,8 +1523,8 @@ def back_up_all(jobs: list, report=None, stop: threading.Event | None = None, at
                          None)
             if ready is None and not running[0]:  # the rest wait on devices busy with another tool
                 for job in pending:
-                    what = next((busy[k] for k in job.keys if busy.get(k)), "another tool")
-                    job.state, job.said = "failed", f"busy ({what})"
+                    what = next((busy[k] for k in job.keys if busy.get(k)), N_("another tool"))
+                    job.state, job.said = "failed", tr("busy ({task})", task=_(what))
                     say(job)
                 pending = []
                 break
@@ -1462,7 +1535,7 @@ def back_up_all(jobs: list, report=None, stop: threading.Event | None = None, at
             keys = ready.keys
             held.update(keys)
             for key in keys:
-                busy[key] = "backing up" if key == ready.d.key else "a backup through it"
+                busy[key] = N_("backing up") if key == ready.d.key else N_("a backup through it")  # shown by the GUI
             running[0] += 1
             ready.state = "backing up"
             say(ready)
@@ -1496,8 +1569,14 @@ def backup_summary(jobs: list) -> str:
     counts = {}
     for job in jobs:
         counts[job.state] = counts.get(job.state, 0) + 1
-    order = ("backed up", "unchanged", "failed", "skipped", "stopped", "backing up", "waiting")
-    return ", ".join(f"{counts[s]} {s}" for s in order if counts.get(s)) or "no devices that keep a config"
+    said = {"backed up": tr("{count} backed up", count=counts.get("backed up")),
+            "unchanged": tr("{count} unchanged", count=counts.get("unchanged")),
+            "failed": tr("{count} failed", count=counts.get("failed")),
+            "skipped": tr("{count} skipped", count=counts.get("skipped")),
+            "stopped": tr("{count} stopped", count=counts.get("stopped")),
+            "backing up": tr("{count} backing up", count=counts.get("backing up")),
+            "waiting": tr("{count} waiting", count=counts.get("waiting"))}  # in this order
+    return ", ".join(said[s] for s in said if counts.get(s)) or _("no devices that keep a config")
 
 
 # ---------------------------------------------------------------------------
@@ -1525,8 +1604,8 @@ def reboot(login: sshrun.Login, d, report=None, stop=None, within: float = 600) 
     say = report or (lambda message: None)
     before = _uptime(login, stop)
     if before is None:
-        raise ToolError(f"{login.where} doesn't answer over SSH.")
-    say("Restarting it…")
+        raise ToolError(tr("{device} doesn't answer over SSH.", device=login.where))
+    say(_("Restarting it…"))
     try:
         sshrun.run(login, detached(command, REBOOT_LOG), timeout=30, stop=stop)
     except sshrun.SSHError as e:
@@ -1535,7 +1614,7 @@ def reboot(login: sshrun.Login, d, report=None, stop=None, within: float = 600) 
     start, down = time.monotonic(), False
     while time.monotonic() - start < within:
         if stop is not None and stop.is_set():
-            raise ToolError("Stopped waiting. The device carries on restarting by itself.")
+            raise ToolError(_("Stopped waiting. The device carries on restarting by itself."))
         time.sleep(3)
         now = _uptime(login)
         elapsed = time.monotonic() - start
@@ -1551,10 +1630,12 @@ def reboot(login: sshrun.Login, d, report=None, stop=None, within: float = 600) 
             failed = re.search(r"opendisco-exit=([1-9]\d*)", said)
             if failed or elapsed > 90:
                 said = re.sub(r"opendisco-exit=\d+\s*", "", said).strip()
-                raise ToolError("It didn't restart" + (f". It said: {said[-300:]}" if said else
-                                                       " (it may be busy, upgrading its firmware)."))
-        say(("Restarting: waiting for it to come back… " if down else "Restarting… ") + f"{elapsed:.0f}s")
-    raise ToolError(f"It hasn't come back after {within // 60:.0f} minutes. Give it a few more before power-cycling it.")
+                raise ToolError(tr("It didn't restart. It said: {said}", said=said[-300:]) if said else
+                                _("It didn't restart (it may be busy, upgrading its firmware)."))
+        say(tr("Restarting: waiting for it to come back… {seconds:.0f}s", seconds=elapsed) if down else
+            tr("Restarting… {seconds:.0f}s", seconds=elapsed))
+    raise ToolError(tr("It hasn't come back after {minutes:.0f} minutes. Give it a few more before power-cycling it.",
+                       minutes=within // 60))
 
 
 def locate(login: sshrun.Login, d, on: bool = True, stop=None) -> bool | None:
@@ -1563,7 +1644,7 @@ def locate(login: sshrun.Login, d, on: bool = True, stop=None) -> bool | None:
     start, end = LOCATE[family(d)]
     result = sshrun.run(login, f"{start if on else end}; echo; cat {LOCATE_STATE} 2>/dev/null", stop=stop)
     if "not found" in result.out + result.err:
-        raise ToolError(f"It has no {start.split()[0]}.")
+        raise ToolError(tr("It has no {program}.", program=start.split()[0]))
     state = (result.out.split() or [""])[-1].lower()
     return True if state == "true" else False if state == "false" else None
 
@@ -1774,7 +1855,7 @@ def read_link(login: sshrun.Login, stop=None) -> dict:
     parts = sections(_read_written(login, LINK_COMMAND, LINK_FILE, stop))
     status = [line for line in parts.get("status", []) if line.strip()]
     if not any("=" in line for line in status):
-        raise ToolError(f"{login.where} has no mca-status: it isn't an airOS radio.")
+        raise ToolError(tr("{device} has no mca-status: it isn't an airOS radio.", device=login.where))
     return linkhealth.parse(status, "\n".join(parts.get("stations", [])))
 
 
@@ -1872,9 +1953,10 @@ def forget_factory_login(d) -> None:
 
 def _check_password(new_password: str) -> None:
     if not new_password or any(ord(c) < 32 for c in new_password):
-        raise ToolError("The new password can't be empty or hold control characters.")
+        raise ToolError(_("The new password can't be empty or hold control characters."))
     if new_password in FACTORY_PASSWORDS:
-        raise ToolError(f"{new_password} is a factory password, the first one anyone tries: choose another.")
+        raise ToolError(tr("{password} is a factory password, the first one anyone tries: choose another.",
+                           password=new_password))
 
 
 def change_login(text: str, user: str, password: str, new_user: str, new_password: str) -> tuple:
@@ -1882,29 +1964,29 @@ def change_login(text: str, user: str, password: str, new_user: str, new_passwor
     the way the device hashed the current one. The current hash is checked against `password`
     first, so a hash the device can't read is never written. Returns (config, scheme)."""
     if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._-]{0,31}", new_user):
-        raise ToolError("A username is 1 to 32 letters, digits, dots, dashes or underscores, starting with a "
-                        "letter or digit.")
+        raise ToolError(_("A username is 1 to 32 letters, digits, dots, dashes or underscores, starting with a "
+                          "letter or digit."))
     _check_password(new_password)
     lines = text.replace("\r", "").split("\n")
     names = {m.group(1): (n, line.split("=", 1)[1]) for n, line in enumerate(lines)
              if (m := re.match(r"users\.(\d+)\.name=", line))}
     slot = next((k for k, (_n, name) in names.items() if name == user), None)
     if slot is None:
-        raise ToolError(f"The device's config has no login named {user}.")
+        raise ToolError(tr("The device's config has no login named {user}.", user=user))
     if any(name == new_user for k, (_n, name) in names.items() if k != slot):
-        raise ToolError(f"The device already has another login named {new_user}.")
+        raise ToolError(tr("The device already has another login named {user}.", user=new_user))
     key = f"users.{slot}.password="
     at = next((n for n, line in enumerate(lines) if line.startswith(key)), None)
     if at is None:
-        raise ToolError(f"The device's config has no password for {user}.")
+        raise ToolError(tr("The device's config has no password for {user}.", user=user))
     current = lines[at][len(key):]
     scheme = hash_scheme(current)
     if not scheme:
-        raise ToolError("The device stores its password in a format the app doesn't write (not MD5-crypt or "
-                        "SHA-crypt), so it's left alone. Change it in the device's web UI.")
+        raise ToolError(_("The device stores its password in a format the app doesn't write (not MD5-crypt or "
+                          "SHA-crypt), so it's left alone. Change it in the device's web UI."))
     if not verify_password(password, current):
-        raise ToolError("The stored password doesn't match the one just used to log in, so the app can't be "
-                        "sure how the device hashes passwords. Nothing was changed.")
+        raise ToolError(_("The stored password doesn't match the one just used to log in, so the app can't be "
+                          "sure how the device hashes passwords. Nothing was changed."))
     lines[names[slot][0]] = f"users.{slot}.name={new_user}"
     lines[at] = key + new_hash(new_password, current)
     return "\n".join(lines), scheme
@@ -1921,9 +2003,10 @@ def change_login(text: str, user: str, password: str, new_user: str, new_passwor
 # of EdgeOS's commands while they run, as when it's typed in its CLI; the script that holds it is
 # readable by the login alone, and deletes itself as it starts.
 EDGEOS_LOGIN_SCRIPT = "/tmp/opendisco-login.sh"
-# EdgeOS 3's rules for a plaintext-password (its template's syntax lines).
-EDGEOS3_PASSWORD = ((r"[a-z]", "lower case letter"), (r"[A-Z]", "upper case letter"), (r"[0-9]", "digit"),
-                    (r"[^0-9A-Za-z]", "character that's neither a letter nor a digit"))
+# EdgeOS 3's rules for a plaintext-password (its template's syntax lines), and what one that breaks a rule is told.
+EDGEOS3_PASSWORD = ((r"[a-z]", N_("it has no lower case letter")), (r"[A-Z]", N_("it has no upper case letter")),
+                    (r"[0-9]", N_("it has no digit")),
+                    (r"[^0-9A-Za-z]", N_("it has no character that's neither a letter nor a digit")))
 _WORD = re.compile(r'"(?:[^"\\]|\\.)*"|[^\s"]+')
 
 
@@ -1970,21 +2053,22 @@ def edgeos_login(text: str, user: str, new_user: str, new_password: str, version
     one step; a new name two: the new login, with the old one's level and settings, then (logged in
     with it) deleting the old one. version: the EdgeOS it runs, whose password rules apply."""
     if not re.fullmatch(r"[a-z_][a-z0-9_-]{0,31}", new_user):
-        raise ToolError("An EdgeOS username is 1 to 32 lower case letters, digits, underscores or dashes, starting "
-                        "with a letter or an underscore.")
+        raise ToolError(_("An EdgeOS username is 1 to 32 lower case letters, digits, underscores or dashes, starting "
+                          "with a letter or an underscore."))
     _check_password(new_password)
     if "'" in new_password:
-        raise ToolError("EdgeOS can't take a ' in a password: it quotes the password with them to hash it.")
+        raise ToolError(_("EdgeOS can't take a ' in a password: it quotes the password with them to hash it."))
     if version_key(version)[:1] >= (3,):
-        lacks = (["it's shorter than 12 characters"] if len(new_password) < 12 else []) + [
-            f"it has no {what}" for pattern, what in EDGEOS3_PASSWORD if not re.search(pattern, new_password)]
+        lacks = ([_("it's shorter than 12 characters")] if len(new_password) < 12 else []) + [
+            _(lack) for pattern, lack in EDGEOS3_PASSWORD if not re.search(pattern, new_password)]
         if lacks:
-            raise ToolError("EdgeOS 3 won't take this password: " + "; ".join(lacks) + ".")
+            raise ToolError(tr("EdgeOS 3 won't take this password: {problems}.", problems="; ".join(lacks)))
     users = edgeos_users(text)
     if user not in users:
-        raise ToolError(f"Its boot config has no login named {user}, so the app can't tell how it's set up.")
+        raise ToolError(tr("Its boot config has no login named {user}, so the app can't tell how it's set up.",
+                           user=user))
     if new_user != user and new_user in users:
-        raise ToolError(f"It already has another login named {new_user}.")
+        raise ToolError(tr("It already has another login named {user}.", user=new_user))
     password = ["set", "system", "login", "user", new_user, "authentication", "plaintext-password", new_password]
     if new_user == user:
         return [[password]]
@@ -2006,12 +2090,12 @@ def new_login(d, login, text: str, new_user: str, new_password: str) -> tuple:
 def new_login_note(d) -> str:
     """How the new password is kept, said where it's typed."""
     if config_kind(d) != "edgeos":
-        return ("The new password is stored on the device hashed the way it hashes the current one, never as plain "
-                "text; the app checks its hashing against the current password first.")
-    note = "EdgeOS hashes the new password itself and stores it so, never as plain text."
+        return _("The new password is stored on the device hashed the way it hashes the current one, never as plain "
+                 "text; the app checks its hashing against the current password first.")
+    note = _("EdgeOS hashes the new password itself and stores it so, never as plain text.")
     if version_key(device_version(d))[:1] >= (3,):
-        note += (" EdgeOS 3 takes a password of 12 characters or more, with lower and upper case letters, a digit "
-                 "and a character that's neither a letter nor a digit.")
+        note = sentences(note, _("EdgeOS 3 takes a password of 12 characters or more, with lower and upper case "
+                                 "letters, a digit and a character that's neither a letter nor a digit."))
     return note
 
 
@@ -2046,10 +2130,10 @@ def edgeos_login_script(commands: list) -> str:
 
 
 EDGEOS_LOGIN_FAILURES = {
-    4: "EdgeOS didn't start a config session, so nothing was changed",
-    5: "EdgeOS refused the change, so nothing was changed",
-    6: "EdgeOS's commit failed, so nothing was changed",
-    7: "It's committed, but saving it to the boot config failed: it holds only until the next restart",
+    4: N_("EdgeOS didn't start a config session, so nothing was changed"),
+    5: N_("EdgeOS refused the change, so nothing was changed"),
+    6: N_("EdgeOS's commit failed, so nothing was changed"),
+    7: N_("It's committed, but saving it to the boot config failed: it holds only until the next restart"),
 }
 
 
@@ -2067,11 +2151,12 @@ def change_edgeos_login(login: sshrun.Login, new: sshrun.Login, steps: list, rep
     dropped_any = False
     for n, commands in enumerate(steps):
         acting, logins = (login, [login, new]) if n == 0 else (new, [new])  # each login reads its own log
-        both = f" The new login works; {login.user} wasn't deleted, so both work now."
-        untouched = ("Connection lost: the login wasn't changed. The change didn't reach the device." if n == 0
-                     else "Connection lost:" + both)
-        say("Copying the change to the device…" if n == 0 else f"Deleting the old login {login.user}, logged in as "
-                                                               f"{new.user}…")
+        both = tr("The new login works; {user} wasn't deleted, so both work now.", user=login.user)
+        untouched = (_("Connection lost: the login wasn't changed. The change didn't reach the device.") if n == 0
+                     else tr("Connection lost: The new login works; {user} wasn't deleted, so both work now.",
+                             user=login.user))
+        say(_("Copying the change to the device…") if n == 0 else
+            tr("Deleting the old login {old}, logged in as {new}…", old=login.user, new=new.user))
         try:
             sshrun.run(acting, f"rm -f {script}; (umask 077; : >{script})", stop=stop)  # new, and the login's alone
         except sshrun.SSHError as e:
@@ -2079,38 +2164,42 @@ def change_edgeos_login(login: sshrun.Login, new: sshrun.Login, steps: list, rep
                 raise
             raise LostConnection(f"{untouched} ({e})", "not done") from None
         _stage(acting, [(edgeos_login_script(commands), script)], "changed", untouched, stop, private=True)
-        say("Committing and saving it…")
+        say(_("Committing and saving it…"))
         code, said, sent, dropped = _run_staged(acting, f"sh {script}", script, "changed", True, logins,
                                                 confirm_within, stop, say, EDGEOS_CONFIG_LOG)
         dropped_any = dropped_any or dropped or not sent
         if code:
-            told = EDGEOS_LOGIN_FAILURES.get(code, f"It failed (exit code {code})") + (
-                f". EdgeOS said: {said[-400:]}" if said else ".")
+            failed = (_(EDGEOS_LOGIN_FAILURES[code]) if code in EDGEOS_LOGIN_FAILURES
+                      else tr("It failed (exit code {code})", code=code))
+            told = tr("{failed}. EdgeOS said: {said}", failed=failed, said=said[-400:]) if said else i18n.stop(failed)
             if n:
-                raise ToolError(f"Deleting {login.user} failed: {told}" + both + f" Delete {login.user} in "
-                                "EdgeOS's web UI or CLI.")
+                raise ToolError(sentences(tr("Deleting {user} failed: {reason}", user=login.user, reason=told), both,
+                                          tr("Delete {user} in EdgeOS's web UI or CLI.", user=login.user)))
             raise ToolError(told)
         if n == 0:
-            say("Logging in with the new login…")
+            say(_("Logging in with the new login…"))
             try:
                 sshrun.check_login(new, stop=stop)
             except sshrun.SSHError as e:
-                kept = f" {login.user} was kept, so both are set on it." if len(steps) > 1 else ""
-                raise ToolError(f"EdgeOS took the new login, but logging in with it failed ({e}).{kept}") from None
+                kept = tr("{user} was kept, so both are set on it.", user=login.user) if len(steps) > 1 else ""
+                raise ToolError(sentences(tr("EdgeOS took the new login, but logging in with it failed ({error}).",
+                                             error=e), kept)) from None
     if len(steps) > 1:
-        done = f"Committed and saved: {new.user} logs in (checked), and {login.user} is deleted."
+        done = tr("Committed and saved: {new} logs in (checked), and {old} is deleted.", new=new.user, old=login.user)
     else:
-        done = f"Committed and saved: {new.user} takes the new password (checked by logging in with it)."
+        done = tr("Committed and saved: {user} takes the new password (checked by logging in with it).", user=new.user)
     try:
         users = edgeos_users(_fetch(new, EDGEOS_CONFIG, stop))
     except sshrun.SSHError:
         users = None
     if users is None:
-        done += f" The app couldn't read {EDGEOS_CONFIG} back to check it."
+        done = sentences(done, tr("The app couldn't read {file} back to check it.", file=EDGEOS_CONFIG))
     elif new.user not in users or (len(steps) > 1 and login.user in users):
-        done += f" Its {EDGEOS_CONFIG} lists other logins than expected: {', '.join(users) or 'none'}."
+        done = sentences(done, tr("Its {file} lists other logins than expected: {users}.", file=EDGEOS_CONFIG,
+                                  users=", ".join(users) or _("none")))
     if dropped_any:
-        done += " The connection dropped meanwhile: the device finished on its own, checked after reconnecting."
+        done = sentences(done, _("The connection dropped meanwhile: the device finished on its own, checked after "
+                                 "reconnecting."))
     return done
 
 

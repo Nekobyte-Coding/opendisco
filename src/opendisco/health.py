@@ -39,6 +39,7 @@ from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 from opendisco import core, vulns
+from opendisco.i18n import _, N_, tr
 
 FIRMWARE_FILE = "firmware-latest.json"  # in the app's data folder
 FIRMWARE_TTL = 20 * 3600  # about a day, like the CVE list (vulns.refresh_due): then it's asked again
@@ -212,12 +213,14 @@ def _firmware(d) -> dict | None:
             **fw} if fw else None
 
 
-def firmware_cell(d) -> str:
+def firmware_cell(d, english: bool = False) -> str:
     """The Firmware column: "8.7.11 (latest: 8.7.25)" when a newer release is out (the version
-    compared, without the build number the column shows otherwise), else the version as before."""
+    compared, without the build number the column shows otherwise), else the version as before.
+    english: as the CSV export keeps it."""
     fw = _firmware(d)
     if fw and fw["newer"] and fw["latest"]:
-        return f"{fw['current'] or d.firmware} (latest: {fw['latest']})"
+        return core.shown(N_("{current} (latest: {latest})"), english, current=fw["current"] or d.firmware,
+                          latest=fw["latest"])
     return d.firmware
 
 
@@ -279,8 +282,8 @@ def ping_many(ips: list, count: int, stop=None, how: str = "") -> tuple:
     """Ping each address count times: (how, {ip: [round trip in ms, or None when lost, per ping]}).
     how picks the way (one that worked before); otherwise the first of them the system allows."""
     # Windows has no ICMP datagram sockets, and nothing else has IcmpSendEcho.
-    ways = [("IcmpSendEcho" if core.IS_WINDOWS else "ICMP socket", _ping_windows if core.IS_WINDOWS else _ping_socket),
-            ("ping program", _ping_program)]
+    ways = [("IcmpSendEcho" if core.IS_WINDOWS else N_("ICMP socket"),
+             _ping_windows if core.IS_WINDOWS else _ping_socket), (N_("ping program"), _ping_program)]
     problems = []
     for name, ping in sorted(ways, key=lambda way: way[0] != how):
         try:
@@ -506,16 +509,19 @@ def _latency(d) -> dict | None:
     return lat
 
 
-def latency_cell(d) -> str:
-    """The Latency column: "3 ms", "12 ms, 25% loss", "no reply" ("" when not measured)."""
+def latency_cell(d, english: bool = False) -> str:
+    """The Latency column: "3 ms", "12 ms, 25% loss", "no reply" ("" when not measured).
+    english: as the CSV export keeps it."""
     lat = _latency(d)
     if not lat:
         return ""
     if not lat["received"]:
-        return "no reply"
+        return core.shown(N_("no reply"), english)
     avg = lat["avg_ms"]
     text = "<1 ms" if avg < 1 else f"{avg:.0f} ms"
-    return text + (f", {_loss(lat)}% loss" if lat["received"] < lat["sent"] else "")
+    if lat["received"] < lat["sent"]:
+        return core.shown(N_("{latency}, {loss}% loss"), english, latency=text, loss=_loss(lat))
+    return text
 
 
 def issues(d) -> list:
@@ -529,14 +535,15 @@ def issues(d) -> list:
     lost = sent - got
     if lost * 100 >= LOSS_PERCENT * sent:
         found.append(("warn", "PING-LOSS",
-                      f"{lost} of {sent} pings went unanswered ({_loss(lat)}% loss). On a wired link that points to a "
-                      "bad cable, connector or switch port, or a speed/duplex mismatch; on a wireless hop, to "
-                      "interference, a weak signal or a busy channel; or the device is too busy to answer."))
+                      tr("{lost} of {sent} pings went unanswered ({loss}% loss). On a wired link that points to a "
+                         "bad cable, connector or switch port, or a speed/duplex mismatch; on a wireless hop, to "
+                         "interference, a weak signal or a busy channel; or the device is too busy to answer.",
+                         lost=lost, sent=sent, loss=_loss(lat))))
     if lat["avg_ms"] >= HIGH_LATENCY_MS:
         found.append(("warn", "HIGH-LATENCY",
-                      f"Pings take {lat['avg_ms']:.0f} ms on average ({_ms(lat['min_ms'])}-{_ms(lat['max_ms'])} ms "
-                      f"over {got} replies): a congested link on the way, interference or a weak signal on a "
-                      "wireless hop, or a device short of CPU."))
+                      tr("Pings take {average:.0f} ms on average ({low}-{high} ms over {count} replies): a congested "
+                         "link on the way, interference or a weak signal on a wireless hop, or a device short of CPU.",
+                         average=lat["avg_ms"], low=_ms(lat["min_ms"]), high=_ms(lat["max_ms"]), count=got)))
     return found
 
 
@@ -544,14 +551,19 @@ def summary(devices) -> str:
     """A measurement in a line, for the Log and status bar."""
     if len(devices) == 1:
         d = devices[0]
-        return f"Latency to {d.ip}: {latency_cell(d) or 'not measured'}."
+        return tr("Latency to {ip}: {latency}.", ip=d.ip, latency=latency_cell(d) or _("not measured"))
     lats = [_latency(d) or {} for d in devices]
     flagged = Counter(tag for d in devices for _, tag, _ in issues(d))
-    bits = [f"{sum(1 for lat in lats if lat.get('received'))} of {len(devices)} devices answered"]
-    bits += [f"{flagged[tag]} with {what}" for tag, what in (("PING-LOSS", "packet loss"),
-                                                             ("HIGH-LATENCY", "high latency")) if flagged[tag]]
+    bits = [tr("{answered} of {count} devices answered", answered=sum(1 for lat in lats if lat.get("received")),
+               count=len(devices))]
+    if flagged["PING-LOSS"]:
+        bits.append(tr("{count} with packet loss", count=flagged["PING-LOSS"]))
+    if flagged["HIGH-LATENCY"]:
+        bits.append(tr("{count} with high latency", count=flagged["HIGH-LATENCY"]))
     how = next((lat["how"] for lat in lats if lat.get("how")), "")
-    return "Latency: " + ", ".join(bits) + (f" ({how})." if how else ".")
+    if how:
+        return tr("Latency: {findings} ({method}).", findings=", ".join(bits), method=_(how))
+    return tr("Latency: {findings}.", findings=", ".join(bits))
 
 
 # ---------------------------------------------------------------------------
@@ -559,39 +571,44 @@ def summary(devices) -> str:
 # ---------------------------------------------------------------------------
 
 def detail_rows(d) -> list:
-    """[(label, text)] for Details."""
+    """[(label, text)] for Details: the labels in English (the Site Report looks them up), which
+    Details translates, and the texts in the app's language."""
     rows = []
     fw = _firmware(d)
     if fw:
-        listed = "" if fw["listed"] in ("", _day(time.time())) else f"; Ubiquiti's list of {fw['listed']}"
+        listed = "" if fw["listed"] in ("", _day(time.time())) else "; " + tr("Ubiquiti's list of {date}",
+                                                                             date=fw["listed"])
         if not fw["latest"]:
-            rows.append(("Latest firmware", f"none listed for {fw['platform'] or 'its platform'} on Ubiquiti's "
-                                            f"firmware server{listed}"))
+            rows.append((N_("Latest firmware"), tr("none listed for {platform} on Ubiquiti's firmware server",
+                                                   platform=fw["platform"] or _("its platform")) + listed))
         else:
             if fw["newer"]:
-                state = f"newer than the {fw['current']} it runs"
+                state = tr("newer than the {version} it runs", version=fw["current"])
             elif fw["ahead"]:
-                state = f"it runs {fw['current']}, newer than that"
+                state = tr("it runs {version}, newer than that", version=fw["current"])
             elif fw["current"]:
-                state = "it runs the latest"
+                state = _("it runs the latest")
             else:
-                state = "the version it runs is unknown"
-            released = f" (released {fw['date']})" if fw["date"] else ""
-            rows.append(("Latest firmware", f"{fw['latest']}{released}: {state}{listed}"))
+                state = _("the version it runs is unknown")
+            released = " " + tr("(released {date})", date=fw["date"]) if fw["date"] else ""
+            rows.append((N_("Latest firmware"), f"{fw['latest']}{released}: {state}{listed}"))
     lat = _latency(d)
     if lat:
         when = time.strftime("%H:%M:%S", time.localtime(lat["at"]))
         if lat["received"]:
-            text = (f"{_ms(lat['avg_ms'])} ms on average ({_ms(lat['min_ms'])}-{_ms(lat['max_ms'])} ms), "
-                    f"{lat['received']} of {lat['sent']} replies"
-                    + (f" ({_loss(lat)}% loss)" if lat["received"] < lat["sent"] else "") + f", {when}")
+            text = (tr("{average} ms on average ({low}-{high} ms), {received} of {sent} replies",
+                       average=_ms(lat["avg_ms"]), low=_ms(lat["min_ms"]), high=_ms(lat["max_ms"]),
+                       received=lat["received"], sent=lat["sent"])
+                    + (" " + tr("({loss}% loss)", loss=_loss(lat)) if lat["received"] < lat["sent"] else "")
+                    + f", {when}")
         else:
-            text = f"no reply to {lat['sent']} pings, {when}"
+            text = tr("no reply to {count} pings, {time}", count=lat["sent"], time=when)
             if d.found_by:
-                text += f" (found through {d.found_by.get('ip', 'another device')}: pings from here may not reach it)"
-        rows.append(("Latency", text))
+                text += " " + tr("(found through {device}: pings from here may not reach it)",
+                                 device=d.found_by.get("ip", _("another device")))
+        rows.append((N_("Latency"), text))
     elif d.ip and d.alias and not d.direct:
-        rows.append(("Latency", "not measured: reached through a temporary address, removed after the scan"))
+        rows.append((N_("Latency"), _("not measured: reached through a temporary address, removed after the scan")))
     return rows
 
 
