@@ -1398,10 +1398,11 @@ def scan_from_address(res, login: sshrun.Login, local: set = frozenset()) -> tup
 
 
 # Link health (airMAX): mca-status, airOS's summary of the radio (its mode, channel, noise floor
-# and, on a station, its signal and rates: what the web UI's dashboard shows), and wstalist, its
-# station list, both written to LINK_FILE and brought back by scp like a scan's.
-LINK_COMMAND = (f"sh -c 'echo @@status; mca-status 2>/dev/null; echo @@stations; wstalist 2>/dev/null; "
-                f"echo @@end' >{LINK_FILE} 2>/dev/null")
+# and, on a station, its signal and rates; ubntbox, airOS's multi-call program, runs it where it
+# isn't a command of its own), and wstalist, its station list, both written to LINK_FILE and
+# brought back by scp like a scan's.
+LINK_COMMAND = (f"sh -c 'echo @@status; mca-status 2>/dev/null || ubntbox mca-status 2>/dev/null; echo @@stations; "
+                f"wstalist 2>/dev/null; echo @@end' >{LINK_FILE} 2>/dev/null")
 
 
 def read_link(login: sshrun.Login, stop=None) -> dict:
