@@ -315,10 +315,14 @@ def fit_panel(app, box):
                 hook(app, "watch_keyboard")(app, widget, follow=False)
         elif isinstance(widget, toga.TextInput):  # PasswordInput too
             hook(app, "plain_entry")(widget)
+        elif isinstance(widget, toga.Switch):
+            hook(app, "wrap_switch")(widget)
         elif isinstance(widget, toga.Label) and (named := _this_computer(app, widget.text)) is not None:
             widget.text = named
         elif isinstance(widget, toga.Box):
             fit_panel(app, widget)
+        elif isinstance(widget, toga.ScrollContainer) and isinstance(widget.content, toga.Box):
+            fit_panel(app, widget.content)
     if box.children and isinstance(box.children[-1], toga.Box) and all(
             isinstance(w, toga.Button) for w in box.children[-1].children):  # a row of buttons: at the right
         box.children[-1].insert(0, toga.Box(style=Pack(flex=1)))

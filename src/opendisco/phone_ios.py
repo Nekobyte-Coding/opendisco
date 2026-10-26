@@ -8,11 +8,13 @@ a wide Stage Manager window) the device list stays in a column at the left and t
 beside it, in a split view (_Split). At a compact width the iPad app is the iPhone's: pages are
 pushed over the list. Changing between the two moves the open pages across.
 """
+import math
 from pathlib import Path
 
 import toga
 from toga.style import Pack
 
+from opendisco import i18n
 from opendisco.i18n import _, tr
 
 # SF Symbols for the device page's tabs, in place of Toga's star on every one (by their English titles)
@@ -544,6 +546,32 @@ def _shortened(label):
     impl.rehint = shortening
     impl.native.lineBreakMode = 4  # NSLineBreakByTruncatingTail
     label.refresh()
+
+
+def wrap_switch(switch):
+    """A switch's text in as many lines as it takes: iOS gives it one, and a long one (a
+    translation, say) pushed the switch past the screen's edge. (Toga's Switch keeps a text's
+    first line only, so the lines go to the label itself.)"""
+    from rubicon.objc import CGSize, send_message
+    try:
+        label = switch._impl.native_label
+        text = str(label.text)
+        room = float(_class_value(_objc("UIScreen"), "mainScreen").bounds.size.width) - 110  # (the switch, margins)
+        wide = send_message(label, "intrinsicContentSize", restype=CGSize, argtypes=[]).width
+        if wide <= room or "\n" in text:
+            return
+        label.numberOfLines = 0
+        switch._impl.set_text(i18n.fill(text, max(10, int(i18n.width(text) * room / wide))))
+        impl, rehint = switch._impl, switch._impl.rehint
+
+        def whole_lines():  # (Toga's layout drops a fraction of a point: the second line went to "…")
+            rehint()
+            switch.intrinsic.height = math.ceil(switch.intrinsic.height)
+
+        impl.rehint = whole_lines
+        switch.refresh()
+    except Exception:
+        pass  # cosmetic
 
 
 def style_button(button, kind="filled", color=None):

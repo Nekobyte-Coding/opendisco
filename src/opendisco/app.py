@@ -2509,6 +2509,8 @@ class OpenDiscoApp(toga.App):
                 finish.style.gap = 8
                 for button in reversed(reading):
                     finish.insert(0, button)
+            elif i18n.width(_("Terms of Use") + _("Open-source licenses")) > 34:  # too long side by side (es, pt-BR)
+                options += [toga.Box(style=Pack(direction=ROW), children=[button]) for button in reading]
             else:
                 options.append(toga.Box(style=Pack(direction=ROW, gap=8), children=reading))
         size = (760, 790) if self.caps["aliases"] else (560, 530)
