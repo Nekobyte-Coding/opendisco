@@ -449,16 +449,19 @@ Right-click a device in the table (or select it and use the **Device** menu):
   for the device's platform and says whether it's newer, with its date and size, and whether
   known vulnerabilities make updating advisable.
 - **Update firmware…** (airMAX, UniFi access points and switches, UniFi OS consoles on 2.x and
-  later) downloads that release, checks its size and SHA-256, copies it to the device with
-  scp, starts the family's installer and waits for the device to come back. It asks first,
-  naming the device and both versions. See [Device tools over SSH](#device-tools-over-ssh).
+  later, EdgeRouters) downloads that release, checks its size and SHA-256, copies it to the
+  device with scp, starts the family's installer and waits for the device to come back. It
+  asks first, naming the device and both versions. An EdgeRouter keeps two firmware images:
+  the question says which one stays as the backup (the one it runs now) and which is
+  deleted, and the app restarts it only once EdgeOS lists the new image as the one it boots.
+  See [Device tools over SSH](#device-tools-over-ssh).
 - **Edit config…** (airMAX, airFiber, LTU, GigaBeam, EdgeOS) opens the device's whole
   configuration in an editor: `/tmp/system.cfg` on airOS and the airFiber family,
   `/config/config.boot` on EdgeOS. **Save** writes it for the next reboot (to flash; on EdgeOS,
   as the boot config, once EdgeOS has checked that it loads); **Apply** saves it and applies
   it now, as the web UI's Apply does (EdgeOS: load, commit, save). The config before the edit
   is kept as a backup.
-- **Change login…** (airMAX) sets a new username and password. It won't set a factory
+- **Change login…** (airMAX, EdgeOS) sets a new username and password. It won't set a factory
   password (`ubnt` or `ui`).
 - Whenever a device tool logs in with a factory login (`ubnt`/`ubnt`, `ui`/`ui`, or `root`
   with `ubnt` or `ui`), the app says so once and flags the device `FACTORY-LOGIN` (Status:
@@ -522,7 +525,7 @@ or in the firmware's own scripts:
 |---|---|---|---|---|---|
 | airMAX (airOS 6 and 8: XM, XW, TI, XC, WA, 2XC, 2WA) | `/tmp/fwupdate.bin`, `/sbin/fwupdate -c` to check it, `/sbin/fwupdate -m` to install | `/tmp/system.cfg`; Save: `cfgmtd -w -p /etc/`; Apply: `/usr/etc/rc.d/rc.softrestart save` | `reboot` | No LED command | `users.N.name` and `users.N.password` |
 | airFiber, LTU, GigaBeam | Firmware check only | `/tmp/system.cfg`, as on airMAX; Save and Apply where the device has those commands | `reboot` | No LED command known | Not offered |
-| EdgeRouters (EdgeOS) | Firmware check only | `/config/config.boot`; Save: checked with `load`, then made the boot config; Apply: `load`, `commit`, `save` (`vyatta-cfg-cmd-wrapper`) | `sudo /sbin/reboot`, as EdgeOS's `reboot now` | No LED command | Not yet |
+| EdgeRouters (EdgeOS) | `/tmp/firmware.tar`, `add system image /tmp/firmware.tar` (`vyatta-op-cmd-wrapper`), checked with `show system image`, then restarted | `/config/config.boot`; Save: checked with `load`, then made the boot config; Apply: `load`, `commit`, `save` (`vyatta-cfg-cmd-wrapper`) | `sudo /sbin/reboot`, as EdgeOS's `reboot now` | No LED command | `set system login user … authentication plaintext-password`, `commit`, `save`; a new name: the new login first, then `delete system login user` from it |
 | UniFi access points and switches | `/tmp/fwupdate.bin`, `syswrapper.sh upgrade2` | Set by the UniFi controller | `syswrapper.sh restart` | `syswrapper.sh set-locate`, `unset-locate` | Set by the UniFi controller |
 | UniFi OS consoles (2.x and later) | `/tmp/fwupdate.bin`, `ubnt-systool fwupdate /tmp/fwupdate.bin` | In the console's settings | `reboot` | From its UniFi app | In the console's settings |
 | EdgeSwitch | Firmware check only | In its web UI | In its web UI | Not offered | Not offered |
@@ -574,6 +577,27 @@ hash in the same format as the current one (MD5-crypt, `$1$`, on airOS). Before 
 the app hashes the password just used to log in and checks it matches the stored hash, so it
 never writes a hash the device can't read. It's applied at once, then the app logs in with
 the new login to confirm it, and updates the remembered login.
+
+**On an EdgeRouter** the new login goes in with EdgeOS's own config commands, as Ubiquiti's
+help center gives them ("EdgeRouter - User Accounts"): `set system login user <name>
+authentication plaintext-password <password>`, then `commit` and `save`. EdgeOS hashes the
+password itself (SHA-512) and keeps only the hash. A new password is checked by logging in with
+it. A new name is made first, with the old login's level and settings (its SSH keys
+included); once the app has logged in with it, it deletes the old login, logged in as the new
+one, since deleting a login ends its sessions. If anything fails before then, the old login
+still works. EdgeOS 3 takes only passwords of 12 characters or more with lower and upper case
+letters, a digit and another character, and no EdgeOS takes a `'`: the app says so before
+sending it.
+
+**An EdgeOS firmware update** follows "EdgeRouter - How to Upgrade the EdgeOS Firmware": the
+file goes to `/tmp/firmware.tar` and EdgeOS's `add system image` installs it as the image it
+boots, replacing the backup image; the image it runs now becomes the backup. EdgeOS's
+installer asks its questions with nobody to answer them, so each takes its default, as
+pressing Enter does: it replaces the backup image, stops rather than lose config changes that
+are committed but not saved (the app checks for those first, the way the installer does), and
+deletes the backup image first if there's no room for both. Then the app reads `show system
+image`, and only when the new image is the one it boots does it restart the router and wait
+for it to come back.
 
 ## Quick start (command line)
 

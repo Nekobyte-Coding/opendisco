@@ -139,6 +139,18 @@ async def _update(app, d, check):
                f"OpenDisco downloads it from Ubiquiti ({devicetools.fmt_size(check.size)}), checks it, copies it "
                "to the device and starts the installation. The device restarts to install it and is offline for a "
                "few minutes: don't unplug it or turn it off until it's back.")
+    if devicetools.family(d) == "edgeos":
+        _say(app, f"Reading the firmware images of {d.ip}…")
+        try:
+            note = await _work(app, devicetools.edgeos_update_note, login, check.latest)
+        except (devicetools.ToolError, phonessh.SSHError) as e:
+            _say(app, f"Firmware update of {d.ip}: {e}")
+            return
+        message = (f"Install EdgeOS firmware {check.latest} on {_label(d)}? It runs {check.current} now.\n\n"
+                   f"OpenDisco downloads it from Ubiquiti ({devicetools.fmt_size(check.size)}), checks it, copies it "
+                   "to the router and adds it with EdgeOS's add system image. Once EdgeOS lists it as the image it "
+                   "boots, OpenDisco restarts the router, which is offline for a few minutes: don't unplug it or turn "
+                   f"it off until it's back.\n\n{note}")
     if devicetools.family(d) in ("unifi", "unifi-os"):
         message += ("\n\nUbiquiti's help center describes updating over SSH as a last resort, for when the UniFi app "
                     "can't update the device.")
@@ -168,7 +180,7 @@ async def _update(app, d, check):
                     app._from_worker(no_stop)
                 report(text, percent)
 
-            outcome["offline"] = devicetools.install_firmware(d, login, path, step, stop=stop)
+            outcome["offline"] = devicetools.install_firmware(d, login, path, step, stop=stop, version=check.latest)
         except (devicetools.ToolError, phonessh.SSHError) as e:
             outcome["error"] = str(e)
         except Exception as e:
@@ -361,10 +373,15 @@ async def change_login(app):
     login = await phone.ask_route(app, d, "Log in with its current username and password first.")
     if not login:
         return
+    kind = devicetools.config_kind(d)  # "airos" or "edgeos"
     _say(app, f"Reading the config of {d.ip}…", begins=True)
     try:
-        text, pending = await _work(app, devicetools.read_config, login)
-    except phonessh.SSHError as e:
+        if kind == "edgeos":
+            text, _pending = await _work(app, devicetools.read_device_config, login, kind)
+            pending = await _work(app, devicetools.edgeos_unsaved, login)
+        else:
+            text, pending = await _work(app, devicetools.read_config, login)
+    except (phonessh.SSHError, devicetools.ToolError) as e:
         _say(app, str(e))
         return
     answer = await _new_login_page(app, d, login, text)
@@ -374,11 +391,23 @@ async def change_login(app):
     new_text, new_user, new_password, scheme = answer
     what = (f"the password of {login.user} on {_label(d)}" if new_user == login.user
             else f"the login of {_label(d)} from {login.user} to {new_user} with the new password")
-    message = (f"Change {what}? It's applied right away and saved to flash; the old login stops working.\n\n"
-               f"The password is stored on the device as an {scheme} hash, the format it uses now.")
-    if pending:
-        message += ("\n\nIts config also has changes that aren't applied yet (made in its web UI, or saved without "
-                    "applying): they're applied with it.")
+    if kind == "edgeos":
+        message = (f"Change {what}? EdgeOS commits it right away and saves it to its boot config; the old "
+                   f"{'password' if new_user == login.user else 'login'} stops working.")
+        if new_user != login.user:
+            message += (f"\n\nAs Ubiquiti's help center does it, {new_user} is made first, with {login.user}'s level "
+                        f"and settings, and OpenDisco logs in with it; only then is {login.user} deleted, logged in "
+                        f"as {new_user}.")
+        message += "\n\nEdgeOS hashes the password itself and stores it so, never as plain text."
+        if pending:
+            message += ("\n\nIts config also has changes that are committed but not saved (in its CLI): saving the "
+                        "new login saves them too.")
+    else:
+        message = (f"Change {what}? It's applied right away and saved to flash; the old login stops working.\n\n"
+                   f"The password is stored on the device as an {scheme} hash, the format it uses now.")
+        if pending:
+            message += ("\n\nIts config also has changes that aren't applied yet (made in its web UI, or saved without "
+                        "applying): they're applied with it.")
     message += "\n\n" + terms.risk("login")
     if not await _alert(app, "Change login?", message, question=True):
         _say(app, "The login wasn't changed.")
@@ -389,12 +418,17 @@ async def change_login(app):
     outcome = {}
 
     def work():
+        report = lambda m: app._from_worker(_say, app, m)  # noqa: E731
         try:
-            outcome["said"] = devicetools.write_config(login, new_text, True, new_login=new,
-                                                       report=lambda m: app._from_worker(_say, app, m))
+            if d.mac:  # what it had, kept before it's replaced
+                devicetools.save_backup(d, text, kind, "before login change")
+            if kind == "edgeos":  # new_text: the steps; it logs in with the new login itself
+                outcome["said"] = devicetools.change_edgeos_login(login, new, new_text, report=report)
+                return
+            outcome["said"] = devicetools.write_config(login, new_text, True, new_login=new, report=report)
             app._from_worker(_say, app, "Logging in with the new login…")
             phonessh.check_login(new)
-        except (devicetools.ToolError, phonessh.SSHError) as e:
+        except (devicetools.ToolError, phonessh.SSHError, OSError) as e:
             outcome["error"] = str(e)
 
     try:
@@ -411,7 +445,8 @@ async def change_login(app):
         app.settings.setdefault("device_logins", {})[d.mac] = {"user": new_user, "port": login.port}
     app._save_settings()
     app._rediagnose()
-    _say(app, f"Done: {d.ip} takes the new login ({new_user}), applied and saved to flash.")
+    _say(app, f"Done: {d.ip} takes the new login ({new_user}). {outcome['said']}" if kind == "edgeos"
+         else f"Done: {d.ip} takes the new login ({new_user}), applied and saved to flash.")
 
 
 async def _new_login_page(app, d, login, text):
@@ -438,8 +473,7 @@ async def _new_login_page(app, d, login, text):
             trouble.text = "The new password is empty."
             return
         try:
-            new_text, scheme = devicetools.change_login(text, login.user, login.password, user.value.strip(),
-                                                        first.value)
+            new_text, scheme = devicetools.new_login(d, login, text, user.value.strip(), first.value)
         except devicetools.ToolError as e:
             trouble.text = app._wrap(str(e))
             return
@@ -450,12 +484,13 @@ async def _new_login_page(app, d, login, text):
         close()
         finish(None)
 
+    note = (devicetools.new_login_note(d) if devicetools.config_kind(d) == "edgeos" else
+            "The new password is stored on the device hashed the way it hashes the current one, never as plain text.")
     go = toga.Button("Change", on_press=change)
     second.on_confirm = change
     first.on_confirm = lambda widget, **kwargs: second.focus()
     content = toga.Box(style=Pack(direction=COLUMN, margin=14, gap=10), children=[
-        toga.Label(app._wrap(f"{_label(d)}\nThe new password is stored on the device hashed the way it hashes the "
-                             "current one, never as plain text.")),
+        toga.Label(app._wrap(f"{_label(d)}\n{note}")),
         toga.Box(style=row, children=[toga.Label("Username", style=label), user]),
         toga.Box(style=row, children=[toga.Label("New password", style=label), first]),
         toga.Box(style=row, children=[toga.Label("Again", style=label), second]),
