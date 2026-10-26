@@ -363,8 +363,12 @@ with tabs along the bottom: **Details**, **Packets**, **Tools**, **Notes** and *
   device** and **Link health** (airMAX);
 - **Firmware** (check and update), **Config** (the config editor) and **Login**, as on the
   desktop;
-- **Backups** (back up now, the backups kept, restoring one, uploading a file, with what
-  changes shown first), **Reboot** and **Locate**;
+- **Backups** (back up now, the backups kept, comparing one with another or with the config
+  the device has now, restoring one, uploading a file, with what changes shown first) and
+  **Back up all** (as on the desktop, every device in the list with the login typed for it
+  since the app opened: phones keep passwords only while the app runs; **Stop** while it
+  runs);
+- **Reboot** and **Locate**;
 - **Note** and **Export device**;
 - **Copy IP** and **Copy MAC**.
 
@@ -472,8 +476,22 @@ Right-click a device in the table (or select it and use the **Device** menu):
   outlives rescans and restarts.
 - **Back up config** (airMAX, airFiber, LTU, GigaBeam, EdgeOS) reads the device's config and
   keeps a copy in the app's data folder, filed under its MAC address with the date, its
-  address, model and firmware. **Config backups…** lists them, with **Restore…**, **Save a
-  copy…**, **Delete…**, **Back up now** and **Show folder**.
+  address, model and firmware. **Config backups…** lists them, with **Compare…**,
+  **Restore…**, **Save a copy…**, **Delete…**, **Back up now** and **Show folder**.
+  **Compare** shows what differs, line by line: with two backups selected (⌘-click, or
+  Ctrl-click on Windows and Linux), between them, the older first; with one, between it and
+  the config the device has now, read over SSH, which can then be kept as a backup too.
+- **Back up all configs…** (the Device menu, with or without a device selected) backs up
+  every device in the table that keeps a config (airMAX, airFiber, LTU, GigaBeam, EdgeOS;
+  while a search is typed, the devices it shows), with the login remembered for each. A
+  device found through another goes through the remembered logins of the devices on the
+  way, unless it answers from here. It runs in the background, three devices at a time and
+  never two SSH sessions on one device, with a line for each: backed up, unchanged since its
+  last backup (no second copy is kept), or failed and why. Devices without a remembered
+  login are skipped and listed at the end; once the run is over, each of them, and each that
+  failed, has its own **Back up…** button, which asks for the login. **Stop** starts no more
+  and cancels those under way. Closing the window leaves the run going (the status line
+  follows it), and the menu item shows it again.
 - **Upload config…** sends a config file from this computer (Restore… sends a backup). It
   must be that device's kind of file and from the same model; one from another device of
   that model is asked about first, since its address, name and logins come with it. The app
@@ -537,7 +555,8 @@ device named after its MAC address, with a `.json` beside each copy saying when 
 from which address, model and firmware, and why (a backup, or before an upload, an edit or a
 login change). A backup is the device's whole config file, its logins' password hashes and
 any keys or shared secrets included, so the folder and the backups .zip need the same care as
-the device's own login.
+the device's own login. Back up all keeps a new copy only of a config that differs from the
+device's last backup; Back up config and Back up now always keep one.
 
 **A connection that breaks while saving or applying a config** can't leave the device half
 changed, and the app says what happened. The config is copied to a file of its own and checked

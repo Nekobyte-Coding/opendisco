@@ -9,10 +9,10 @@ Packets, Tools, Notes and Log. Tools pings the device (core.ping: the app's own 
 SSH session to it (phonessh: the app's own SSH), finds its ports, opens its web UI, rescans it,
 reads what it sees of its neighbours (Scan from device, as on the desktop: devicetools), checks
 and updates its firmware, edits its config, keeps backups of it and uploads one, changes its
-login, reboots it, blinks its LED, reads an airMAX radio's link health (phonetools), keeps a note
-on it, exports its own report and copies its addresses, with what they find, and the SSH session,
-in a console underneath. The title bar's + scans from a device given by its address (one the scan
-didn't find). On a tablet
+login, reboots it, blinks its LED, reads an airMAX radio's link health (phonetools), backs up
+every device's config (Back up all), keeps a note on it, exports its own report and copies its
+addresses, with what they find, and the SSH session, in a console underneath. The title bar's +
+scans from a device given by its address (one the scan didn't find). On a tablet
 (wide), the device's page sits beside the list instead of over it, turned either way.
 
 This module is what both phones share. What each does natively is in phone_<platform>.py
@@ -213,8 +213,8 @@ def fit(app):
     ui.fit(app, export=lambda: app.loop.create_task(app.on_export(None)), notes=lambda: show_scan(app),
            settings=app.preferences)
     for button in (app.ping_button, app.ssh_button, app.web_button, app.rescan_button, app.scan_from_button,
-                   app.firmware_button, app.config_button, app.login_button, app.backups_button, app.reboot_button,
-                   app.locate_button, app.link_button, app.find_button):
+                   app.firmware_button, app.config_button, app.login_button, app.backups_button,
+                   app.backup_all_button, app.reboot_button, app.locate_button, app.link_button, app.find_button):
         ui.style_button(button, "tinted")
     for button in (app.note_button, app.export_device_button, app.copy_ip_button, app.copy_mac_button,
                    *app.ssh_row.children[1:]):
@@ -405,6 +405,7 @@ def tools(app) -> toga.Box:
     app.config_button = toga.Button("Config", on_press=tool("config"), style=grow)
     app.login_button = toga.Button("Login", on_press=tool("change_login"), style=grow)
     app.backups_button = toga.Button("Backups", on_press=tool("backups"), style=grow)
+    app.backup_all_button = toga.Button("Back up all", on_press=tool("back_up_all"), style=grow)
     app.reboot_button = toga.Button("Reboot", on_press=tool("reboot"), style=grow)
     app.locate_button = toga.Button("Locate", on_press=tool("locate"), style=grow)
     app.link_button = toga.Button("Link health", on_press=tool("link"), style=grow)
@@ -438,7 +439,8 @@ def tools(app) -> toga.Box:
         toga.Box(style=row, children=[app.ping_button, app.ssh_button, app.web_button]),
         toga.Box(style=row, children=[app.rescan_button, app.scan_from_button, app.link_button]),
         toga.Box(style=row, children=[app.firmware_button, app.config_button, app.login_button]),
-        toga.Box(style=row, children=[app.backups_button, app.reboot_button, app.locate_button]),
+        toga.Box(style=row, children=[app.backups_button, app.backup_all_button]),
+        toga.Box(style=row, children=[app.reboot_button, app.locate_button]),
         toga.Box(style=Pack(direction=ROW, align_items="center", gap=8), children=[
             toga.Label("Find port", style=Pack(font_weight="bold", margin_left=2)), app.port_picker.widget,
             app.find_button]),
@@ -546,7 +548,7 @@ def update_tools(app):
         phonetools.update_buttons(app, d)
     else:
         for button in (app.firmware_button, app.config_button, app.login_button, app.backups_button,
-                       app.reboot_button, app.locate_button, app.link_button):
+                       app.backup_all_button, app.reboot_button, app.locate_button, app.link_button):
             button.enabled = False
 
 

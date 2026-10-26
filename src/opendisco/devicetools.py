@@ -23,7 +23,9 @@ here runs in a worker thread.
   config file, kept in the app's data folder by MAC with the time it was taken, and uploaded
   again (Restore) only to the same model. airMAX, airFiber and LTU keep theirs in
   /tmp/system.cfg; EdgeRouters in /config/config.boot, which is loaded and committed through
-  EdgeOS's own config commands.
+  EdgeOS's own config commands. Back up all backs up every device with a saved login, a few at
+  a time (back_up_all); two backups, or a backup and the config now, are compared line by line
+  (config_diff).
 - Reboot, Locate (the LED blinks: UniFi access points and switches only), and Scan from a
   device given by its address, for devices the app hasn't found itself (over a VPN).
 - Link health (airMAX): the radio's mca-status and wstalist, which linkhealth reads.
@@ -40,9 +42,10 @@ import ssl
 import subprocess
 import sys
 import tempfile
+import threading
 import time
 import urllib.request
-from dataclasses import dataclass
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 
 from opendisco import core, linkhealth
@@ -147,6 +150,7 @@ LOCATE = {"unifi": ("syswrapper.sh set-locate", "syswrapper.sh unset-locate")}
 LOCATE_STATE = "/proc/ubnthal/status/IsLocated"
 BACKUP_FOLDER = "config-backups"
 BACKUP_ROOT = None  # the backups' folder: the GUI sets it to <its data folder>/config-backups
+BACKUP_AT_ONCE = 3  # devices Back up all backs up at the same time
 # The EdgeSwitch family (by its firmware platform), whose CLI isn't a shell: its config travels
 # only through its web UI or a TFTP/FTP server ("EdgeSwitch & EdgeSwitch X - Backup and Restore
 # the Configuration", UISP Help Center).
@@ -1306,12 +1310,192 @@ def _kind_name(kind: str) -> str:
     return {"airos": "airOS", "isp": "the device", "edgeos": "EdgeOS"}.get(kind, "the device")
 
 
-def config_diff(old: str, new: str) -> tuple:
-    """(a unified diff from the device's config to the new one, how many lines change)."""
+def config_diff(old: str, new: str, old_name: str = "on the device", new_name: str = "to upload") -> tuple:
+    """(a unified diff from one config to the other, how many lines change): by default from
+    the device's config to one to upload; a comparison names its two (a backup's date, "on the
+    device now")."""
     import difflib
     a, b = old.replace("\r", "").splitlines(), new.replace("\r", "").splitlines()
-    diff = "\n".join(difflib.unified_diff(a, b, "on the device", "to upload", n=2, lineterm=""))
+    diff = "\n".join(difflib.unified_diff(a, b, old_name, new_name, n=2, lineterm=""))
     return diff, lines_changed(old, new)
+
+
+def read_current(login: sshrun.Login, kind: str, stop=None) -> str:
+    """The config the device has now, as a backup of it keeps it (read_device_config)."""
+    return read_device_config(login, kind, stop)[0]
+
+
+def back_up(login: sshrun.Login, d, kind: str, stop=None) -> tuple:
+    """Read the device's config and keep it, unless it's the same as its last backup: Back up
+    all, run again, doesn't keep copy after copy of a config that hasn't changed. Returns
+    ("backed up", the new Backup) or ("unchanged", the last one)."""
+    text = read_current(login, kind, stop)
+    kept = list_backups(d.mac) if d.mac else []
+    try:
+        if kept and kept[0].path.read_bytes() == text.encode("utf-8"):
+            return "unchanged", kept[0]
+    except OSError:
+        pass
+    return "backed up", save_backup(d, text, kind, "backup")
+
+
+# -- backing up every device -------------------------------------------------------------
+
+@dataclass
+class BackupJob:
+    """One device in a Back up all run: its saved login, reaching it through the devices on its
+    route (login.via), and how it went."""
+    d: object
+    kind: str
+    login: object = None  # None: no saved login (skipped)
+    hops: list = field(default_factory=list)  # the devices on its route, the nearest first
+    missing: str = ""  # a device on its route has no saved login: it's backed up only if it answers directly
+    state: str = "waiting"  # waiting, backing up, backed up, unchanged, failed, skipped, stopped
+    said: str = ""  # why it failed or was skipped
+    backup: Backup | None = None  # the new one (backed up), or the last one (unchanged)
+
+    @property
+    def keys(self) -> set:
+        """The devices its SSH sessions log in to: itself, and the ones on its route."""
+        return {self.d.key, *(h.key for h in self.hops if self.login is not None and self.login.via)}
+
+    @property
+    def text(self) -> str:
+        """How it went, for its line in the report."""
+        if self.state == "backed up":
+            return f"backed up ({self.backup.date})"
+        if self.state == "unchanged":
+            return f"unchanged since its last backup ({self.backup.date})"
+        if self.state in ("failed", "skipped"):
+            return f"{self.state}: {self.said}"
+        if self.state == "stopped":
+            return "not backed up: stopped"
+        return f"{self.state}…" if self.state == "backing up" else self.state
+
+    @property
+    def can_retry(self) -> bool:
+        """Its own Back up button (which asks for the login) helps: it has an address and a MAC."""
+        return self.state in ("skipped", "failed", "stopped") and bool(self.d.ip and self.d.mac)
+
+
+def backup_jobs(devices, saved_login, route, none: str = "no saved login") -> list:
+    """A BackupJob for each device that keeps a config (config_kind). saved_login(d, via) is its
+    saved login, reaching it through the logins via (None: there's none); route(d) the devices on
+    the way to it, the nearest first. The ones that can't be backed up as they are come last,
+    skipped: no saved login (none says so: the phones keep a password only while the app runs),
+    no address, no MAC to file the backup under."""
+    jobs, skipped = [], []
+    for d in devices:
+        kind = config_kind(d)
+        if not kind:
+            continue
+        job = BackupJob(d, kind)
+        if not d.ip or not d.mac:
+            job.state, job.said = "skipped", "no IP address" if not d.ip else "no MAC address to file it under"
+            skipped.append(job)
+            continue
+        via = ()
+        for hop in route(d):
+            login = saved_login(hop, via)
+            if login is None:
+                job.missing = f"{none} for {hop.ip or hop.mac}, on the way to it"
+                via = ()
+                break
+            via += (login,)
+            job.hops.append(hop)
+        job.login = saved_login(d, via)
+        if job.login is None:
+            job.state, job.said = "skipped", none
+            skipped.append(job)
+        else:
+            jobs.append(job)
+    return jobs + skipped
+
+
+def back_up_all(jobs: list, report=None, stop: threading.Event | None = None, at_once: int = BACKUP_AT_ONCE,
+                busy: dict | None = None) -> None:
+    """Back up each waiting job's device (back_up), at_once at a time, each in a thread of its own;
+    returns when all are done. A job holds its device and the ones on its route while it runs, so
+    no device ever has two of its SSH sessions at once. busy: device key -> what else is running
+    on it, shared with the other tools (the desktop's): a job's devices are marked "backing up"
+    while it runs, and one busy with something else waits its turn, failing if it's still busy
+    when nothing else is left. report(job) from a worker thread whenever a job changes. stop: none
+    starts after it's set, and those running are cancelled."""
+    say = report or (lambda job: None)
+    busy = {} if busy is None else busy
+    pending = [job for job in jobs if job.state == "waiting"]
+    held, running = set(), [0]
+    changed = threading.Condition()
+
+    def run(job, keys):
+        try:
+            _back_up_job(job, stop)
+        except Exception as e:  # a bug, not the device: it fails alone
+            job.state, job.said = "failed", f"{type(e).__name__}: {e}"
+        finally:
+            with changed:
+                held.difference_update(keys)
+                for key in keys:
+                    if busy.get(key) in ("backing up", "a backup through it"):
+                        busy.pop(key, None)
+                running[0] -= 1
+                changed.notify_all()
+            say(job)
+
+    with changed:
+        while pending and not (stop is not None and stop.is_set()):
+            ready = next((job for job in pending if not job.keys & held and not any(busy.get(k) for k in job.keys)),
+                         None)
+            if ready is None and not running[0]:  # the rest wait on devices busy with another tool
+                for job in pending:
+                    what = next((busy[k] for k in job.keys if busy.get(k)), "another tool")
+                    job.state, job.said = "failed", f"busy ({what})"
+                    say(job)
+                pending = []
+                break
+            if ready is None or running[0] >= at_once:
+                changed.wait(1)
+                continue
+            pending.remove(ready)
+            keys = ready.keys
+            held.update(keys)
+            for key in keys:
+                busy[key] = "backing up" if key == ready.d.key else "a backup through it"
+            running[0] += 1
+            ready.state = "backing up"
+            say(ready)
+            threading.Thread(target=run, args=(ready, keys), daemon=True).start()
+        while running[0]:
+            changed.wait(1)
+    for job in pending:  # stopped before their turn
+        job.state = "stopped"
+        say(job)
+
+
+def _back_up_job(job: BackupJob, stop) -> None:
+    """One device's backup, reaching it directly when it answers from here (as logging in to it
+    by hand does: devicegui.ask_route), else through the devices on its route."""
+    login = job.login
+    if (login.via or job.missing) and answers(login.ip, login.port, 2):
+        login = replace(login, via=())
+    elif job.missing:
+        job.state, job.said = "skipped", job.missing
+        return
+    try:
+        job.state, job.backup = back_up(login, job.d, job.kind, stop)
+    except sshrun.SSHError as e:
+        job.state, job.said = ("stopped", "") if e.kind == "cancelled" else ("failed", str(e))
+    except (ToolError, OSError) as e:
+        job.state, job.said = "failed", str(e)
+
+
+def backup_summary(jobs: list) -> str:
+    """"3 backed up, 2 unchanged, 1 failed, 4 skipped": how many of each, the ones there are."""
+    counts = {}
+    for job in jobs:
+        counts[job.state] = counts.get(job.state, 0) + 1
+    order = ("backed up", "unchanged", "failed", "skipped", "stopped", "backing up", "waiting")
+    return ", ".join(f"{counts[s]} {s}" for s in order if counts.get(s)) or "no devices that keep a config"
 
 
 # ---------------------------------------------------------------------------
