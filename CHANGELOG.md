@@ -6,6 +6,124 @@ when it came out. The Linux packages of 1.1.0 to 1.3.1 were added then too; thos
 never released for Linux. README.md's "Versions and platforms" lists each version's platforms
 and known issues.
 
+## 1.7.0 (2026-10-26)
+
+**Demo network**
+- A sixth scan mode lists a made-up WISP tower (the README pictures' one) at once, sending
+  nothing on the network, for trying the app without any gear. Help › Try the demo network opens
+  it on computers; phones and tablets have Try the demo network over the empty list and in
+  Settings, and a scan that finds nothing suggests it. `opendisco --demo` prints it on the
+  command line.
+- Its device tools work, on simulated devices: firmware check and update (the release and the
+  file are simulated too; the EdgeRouter goes from EdgeOS 2.0.9 to 3.0.1), Edit config, Change
+  login, Link health (one sector has a weak station), config backups, Back up all, Compare,
+  Restore and Upload, Reboot, Scan from device (with a station only its sector reaches), SSH and
+  ping, latency, Rescan and the port search. Log in as demo / demo; the bench spare takes its
+  factory login (ubnt / ubnt) and shows FACTORY-LOGIN.
+- Kept apart and labelled: the demo's notes, backups, SSH host keys, remembered logins, hidden
+  devices, link readings and factory-login flags live in a temporary folder and in memory,
+  deleted when it ends (a real scan, or quitting), never in the app's data or settings. The
+  title says Demo, and every export from it is named opendisco-demo-… and stamped "Demo network:
+  made-up devices".
+
+**Site Report and exports**
+- **Site Report:** Export's scan report is now the Site Report, one page that opens on any phone
+  or computer and prints cleanly (or saves as a PDF): the site's name (typed in Export, kept for
+  next time), when and how it was scanned and the networks covered; a summary of issues by level,
+  devices by vendor and family and the devices needing attention first; every device with its
+  firmware and the latest firmware; then known CVEs with their NVD pages, factory logins and
+  factory defaults, firmware updates, latency, airMAX link health, every other issue and the
+  devices' notes.
+- **Scan data…** saves the device table as CSV or JSON (the scan report's CSV and JSON before).
+- Phones ask for the site's name before sharing the Site Report, and offer Scan data (CSV).
+- Command line: `--export FILE.html` writes the Site Report; `--site NAME` names the site.
+
+**Config backups**
+- **Back up all configs** (Device menu; **Back up all** on the phones' Tools): every device in
+  the table that keeps a config (airMAX, airFiber, LTU, GigaBeam, EdgeOS), with its remembered
+  login, three at a time in the background and never two SSH sessions on one device; devices
+  behind others go through the logins of the devices on the way. Each says backed up, unchanged
+  since its last backup (no second copy kept), or failed and why. Devices without a saved login
+  are skipped and listed at the end, each with its own Back up… button that asks for the login.
+  Stop cancels the rest.
+- **Compare** (Config backups) shows what differs, line by line, between two backups or between
+  one and the device's config now, which can then be kept as a backup. On desktops select two
+  (or one); on phones pick the other from a list.
+- Fixed: Config backups' Close button left the window remembered, so the menu item later tried
+  to show the closed window.
+
+**Link health (airMAX)**
+- Device > **Link health…** (a phone's Tools: **Link health**) logs in to an airMAX radio
+  (airOS 8 on AC, airOS 5 and 6 on M) and reads its wireless link from airOS's own `mca-status`
+  and `wstalist`. For each link (each station on an access point, the AP on a station) it shows
+  the signal at both ends with each chain's, the noise floor, SNR and CINR, the capacity down and
+  up against what airOS expects (airOS 8) or the rates with airMAX Quality and Capacity (airMAX
+  M), airtime, distance and latency. Details shows it in a Link section, the JSON export as each
+  device's `link`, and the Site Report in its airMAX link health section. It lasts while the app
+  is open: Rescan device and new scans keep it.
+- Weak links are flagged with Ubiquiti's own figures (UISP Help Center): `WEAK-SIGNAL` (weaker
+  than −65 dBm), `HOT-SIGNAL` (−40 dBm or stronger) and `CHAIN-IMBALANCE` (chains 4 dB apart) as
+  notes; `LOW-SNR` (under 25 dB), `LOW-CAPACITY` (under half the expected capacity, or airMAX
+  Capacity under 50%) and `LOW-QUALITY` (airMAX Quality under 80%) as warnings. An access point's
+  issue names its stations.
+
+**EdgeRouters**
+- **Firmware updates:** Update firmware… (Firmware on phones) installs the latest EdgeOS release
+  from Ubiquiti's firmware server the way Ubiquiti's help center gives it for the command line:
+  checked (size and SHA-256), copied to the router and added with EdgeOS's `add system image`;
+  the router is restarted only once EdgeOS lists the new image as the one it boots. The question
+  says which of EdgeOS's two images stays as the backup and which is deleted. An update is
+  refused while the router has config changes committed but not saved, which EdgeOS's installer
+  would stop for.
+- **Change login:** a new password, or a new username and password, through EdgeOS's own config
+  commands (`set system login user … plaintext-password`, `commit`, `save`); EdgeOS hashes the
+  password itself. A new name is made first, with the old login's level and settings, and the old
+  login is deleted only once the app has logged in with the new one. EdgeOS 3's password rules
+  are checked before anything is sent.
+- Phones keep a config backup before a login change, as desktops do.
+
+**Factory logins**
+- When a device tool logs in with a factory login (ubnt/ubnt, ui/ui, root/ubnt or root/ui),
+  OpenDisco says so once and flags the device `FACTORY-LOGIN` (Status: Factory login), on
+  desktops and phones. The flag is kept by MAC address, so rescans and restarts keep it, until
+  the login changes. Change login no longer takes a factory password.
+- A device that reports factory defaults over discovery (`DEFAULT`) is a warning now (a note on
+  UniFi OS consoles): until it's set up or adopted it takes its factory login, so anyone who can
+  reach it can log in.
+
+**Languages**
+- The app speaks Spanish, Brazilian Portuguese and Japanese besides English: windows, menus,
+  dialogs, the status line, issue messages and Status labels, Details, link health, the device
+  tools' confirmations and errors, the Site Report and the demo network. It follows the system's
+  language; Settings > Language (System, English, Español, Português (Brasil), 日本語) picks
+  another, from the next start. The command line, the Log tab's scan lines, the Packets tab and
+  CSV/JSON field names, Status values and tags stay English.
+- **Terms of use in each language:** TERMS.es.md, TERMS.pt-BR.md and TERMS.ja.md, each saying
+  that the English TERMS.md binds and controls. The terms window shows the app's language with a
+  switch to the English original; the English text is still what's accepted and hashed (TERMS.md
+  is unchanged).
+
+**Linux**
+- On a system without `ssh` and `scp`, the AppImage and the portable version use the app's own
+  SSH client (asyncssh, as on phones) for Open SSH… and the device tools, where Open SSH… did
+  nothing and the tools said they needed ssh and scp. Sessions stay in the Terminal tab with the
+  same host keys; a password not given, or not taken, is asked for in the terminal, as ssh asks.
+  SSH, Ping and Open Web UI through other devices work the same way. With no SSH client at all,
+  Open SSH… says "(needs ssh)".
+- The AppImage brings asyncssh 2.23.1 with cryptography 47.0.0 and cffi 2.1.1 (listed in
+  THIRD-PARTY-NOTICES.md), and the portable version's first run installs asyncssh into its
+  environment (into an earlier version's too).
+- The AppImage updates itself: the new AppImage replaces it under its own name. (1.6.2's
+  AppImage can't, and points to the release page.) Its Help > Visit homepage and About work.
+- Forget SSH key works where `ssh-keygen` isn't installed.
+
+**Command line**
+- The terms message names the command that runs that copy: the AppImage file, the portable
+  version's `opendisco` launcher, `opendisco.cmd` on Windows, `opendisco` from the .deb and .rpm;
+  on macOS it says to accept them in the app. It always said `opendisco`.
+- A target name too long to look up says it can't be resolved, where the command line ended
+  with a Python traceback.
+
 ## 1.6.2 (2026-10-25)
 
 - Linux: the .deb and the .rpm name the project's homepage,
