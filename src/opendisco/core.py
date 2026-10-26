@@ -4254,8 +4254,8 @@ def damage_summary(d: Device, found: dict) -> list:
 def factory_login_text(user: str, password: str) -> str:
     """The FACTORY-LOGIN issue, which the device tools also show when the login works."""
     return (f"Takes its factory login ({user}/{password}): anyone who can reach it can log in and change its "
-            "settings. Give it a new password: Change login does that on airMAX gear, its web UI on the rest, "
-            "and adopting a UniFi device gives it its own.")
+            "settings. Give it a new password: Change login does that on airMAX gear and EdgeRouters, its web UI "
+            "on the rest, and adopting a UniFi device gives it its own.")
 
 
 def diagnose(inv: Inventory, all_ifaces, scan_nets, opts, alias_used=(), skipped=(), probed_links=()) -> None:
