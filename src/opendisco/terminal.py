@@ -106,7 +106,7 @@ def ssh_argv(ip: str, port: int, user: str, alias: str, known_hosts: Path) -> li
     argv = [ssh_program(), "-p", str(port),  # quoted: ssh splits this option on spaces ("Application Support")
             "-o", f'UserKnownHostsFile="{known_hosts}"', "-o", "StrictHostKeyChecking=accept-new",
             "-o", f"HostKeyAlias={alias}", "-o", "ConnectTimeout=10", "-o", "ServerAliveInterval=15",
-            *legacy_ssh_options()]
+            "-o", "ControlMaster=no", "-o", "ControlPath=none", *legacy_ssh_options()]  # (no connection shared)
     if user:
         argv += ["-l", user]
     return argv + [ip]

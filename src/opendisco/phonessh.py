@@ -32,8 +32,8 @@ from pathlib import Path
 
 from opendisco import core
 from opendisco.i18n import _, tr
-from opendisco.sshcommon import (ANSI, Login, Result, SSHError, last_hop,
-                                 nested_command, route_text)  # (shared with sshrun)
+from opendisco.sshcommon import (ANSI, CLIENT_NOISE, Login, Result, SSHError, last_hop, nested_command,
+                                 nested_failure, route_text)  # (shared with sshrun)
 
 PASSWORD_PROMPT = re.compile(r"(?i)pass(word|code)[^\r\n]{0,60}:\s*$")
 # Allowed after asyncssh's own choices, for airOS 5/6, old EdgeOS and other old firmware.
@@ -47,10 +47,6 @@ HERE = "this phone" if core.platform_name() in ("ios", "android") else "this com
 # asyncssh asks getpass for this device's own user name before every connection, and an iOS
 # app has none (getpass raises): every login failed with "Unknown local username" there.
 os.environ.setdefault("LOGNAME", "opendisco")
-# What a hop's own SSH client says about the connection, not the command's output: "Host '…' key
-# accepted unconditionally." and the fingerprint under it (Dropbear), "Warning: Permanently added…"
-CLIENT_NOISE = re.compile(r"dbclient:\s*$|(dbclient: )?Host '|\(\S+ fingerprint |Warning: Permanently added"
-                          r"|Connection to ")
 
 
 def available() -> bool:
@@ -365,8 +361,8 @@ def _run_nested(login: Login, command: str | None, timeout: float, stop) -> Resu
 
     code, text = _call(work, timeout + CONNECT_TIMEOUT * 4 * len(login.via), stop)
     code = code if code is not None and code >= 0 else 255
-    failure = _nested_failure(text, login)
-    if failure and (code == 255 or failure.kind in ("key", "auth")):
+    failure = nested_failure(text, login)
+    if failure:  # (it's about reaching the device, not what the command printed)
         raise failure
     lines = [line for line in text.split("\n")
              if not PASSWORD_PROMPT.search(line + " ") and not CLIENT_NOISE.match(line)]
@@ -397,29 +393,11 @@ class _PasswordTyper:
             self.unanswered = True
 
 
-def _nested_failure(text: str, login: Login) -> SSHError | None:
-    """What a hop's own SSH client printed, as an SSHError, if it failed."""
-    t = text.lower()
-    if "host key mismatch" in t or "remote host identification has changed" in t:
-        return SSHError(tr("The SSH key of {ip} changed since {route} last connected to it. If that's expected, "
-                           "remove it from that device's known hosts, then try again.", ip=login.ip,
-                           route=route_text(login)), "key")
-    if "permission denied" in t or "authentication failed" in t or "exited: no auth methods" in t:
-        return SSHError(tr("{device} didn't accept the username and password.", device=login.where), "auth")
-    if "connection refused" in t:
-        return SSHError(tr("Nothing accepts SSH connections on {device}.", device=login.where), "refused")
-    if "timed out" in t:
-        return SSHError(tr("No SSH answer from {device} (timed out).", device=login.where), "timeout")
-    if "no route to host" in t or "network is unreachable" in t or "host is unreachable" in t:
-        return SSHError(tr("{ip} can't be reached from {hop}.", ip=login.ip, hop=login.via[-1].ip), "unreachable")
-    return None
-
-
 def check_login(login: Login, stop: threading.Event | None = None) -> None:
     """Log in and out again: raises SSHError if that doesn't work."""
     result = run(login, "true", timeout=40, stop=stop)
     if result.code:
-        raise _nested_failure(result.err, login) or SSHError(
+        raise nested_failure(result.err, login) or SSHError(
             tr("Logging in to {device} worked, but the device didn't run a command (exit code {code}).",
                device=login.where, code=result.code))
 

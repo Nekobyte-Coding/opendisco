@@ -10,6 +10,12 @@ from pathlib import Path
 from opendisco.i18n import tr
 
 ANSI = re.compile(r"\x1b\[[0-9;?]*[ -/]*[@-~]|\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)|\x1b[()][0-9A-Za-z]|\x1b[=>]")
+# What a hop's own SSH client says about the connection, not the command's output: "Host '…' key
+# accepted unconditionally." and the fingerprint under it (Dropbear), "Warning: Permanently added…"
+CLIENT_NOISE = re.compile(r"dbclient:\s*$|(dbclient: )?Host '|\(\S+ fingerprint |Warning: Permanently added"
+                          r"|Connection to ")
+# The lines in which a hop's own client (Dropbear's dbclient, or ssh) speaks of reaching the device
+CLIENT_SAYS = re.compile(r"(?i)^(?:dbclient|ssh)\b|exited:|permission denied \(|host key|remote host identification")
 
 
 class SSHError(Exception):
@@ -80,3 +86,22 @@ def nested_command(login: Login, command: str | None) -> str:
 def _as_dict(login: Login) -> dict:
     passwords = login.passwords
     return passwords if isinstance(passwords, dict) else {login.alias: passwords, login.ip: passwords}
+
+
+def nested_failure(text: str, login: Login) -> SSHError | None:
+    """What the last hop's own SSH client printed about reaching the device, as an SSHError; None
+    when it got there. Only the client's own lines count, not what the command printed."""
+    t = "\n".join(line for line in text.split("\n") if CLIENT_SAYS.search(line)).lower()
+    if "host key mismatch" in t or "remote host identification has changed" in t:
+        return SSHError(tr("The SSH key of {ip} changed since {route} last connected to it. If that's expected, "
+                           "remove it from that device's known hosts, then try again.", ip=login.ip,
+                           route=route_text(login)), "key")
+    if "permission denied" in t or "authentication failed" in t or "exited: no auth methods" in t:
+        return SSHError(tr("{device} didn't accept the username and password.", device=login.where), "auth")
+    if "connection refused" in t:
+        return SSHError(tr("Nothing accepts SSH connections on {device}.", device=login.where), "refused")
+    if "timed out" in t:
+        return SSHError(tr("No SSH answer from {device} (timed out).", device=login.where), "timeout")
+    if "no route to host" in t or "network is unreachable" in t or "host is unreachable" in t:
+        return SSHError(tr("{ip} can't be reached from {hop}.", ip=login.ip, hop=login.via[-1].ip), "unreachable")
+    return None

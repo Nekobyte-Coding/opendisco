@@ -478,7 +478,8 @@ def download_release(release: dict, folder: Path, progress=None, stop=None) -> P
         if progress:
             progress(size, size)
         return path
-    part = path.with_suffix(path.suffix + ".part")
+    # A file of its own while it downloads: two devices of one model can be updated at once
+    part = path.with_name(f"{path.name}.{secrets.token_hex(4)}.part")
     digest, done = hashlib.sha256(), 0
     try:
         with _open(url, timeout=60) as reply, open(part, "wb") as out:
@@ -564,7 +565,14 @@ def install_firmware(d, login: sshrun.Login, path: Path, report, stop=None, vers
             raise ToolError(tr("It has {free} free in /tmp, too little for the {size} firmware file, so nothing was "
                                "copied.", free=fmt_size(int(free[-1]) * 1024), size=fmt_size(path.stat().st_size)))
     report(tr("Copying the firmware to {path}…", path=target), 0)
-    sshrun.upload(login, path, target, progress=lambda p: report(None, p), stop=stop)
+    try:
+        sshrun.upload(login, path, target, progress=lambda p: report(None, p), stop=stop)
+    except BaseException:  # cancelled, dropped or out of space: what was copied goes (its /tmp is memory)
+        try:
+            sshrun.run(login, f"rm -f {target}", timeout=30)
+        except Exception:
+            pass
+        raise
 
     report(_("Checking the copy on the device…"), None)
     copied = _said_md5(sshrun.run(login, _ARRIVED.format(path=target), stop=stop).out)
@@ -587,23 +595,32 @@ def install_firmware(d, login: sshrun.Login, path: Path, report, stop=None, vers
 
     if stop is not None and stop.is_set():
         raise ToolError(_("Cancelled."))
+    before = _uptime(login, stop) if login.via else None  # (behind other devices: its uptime shows the restart)
+
+    def wait(up, within, what):
+        if login.via:  # this computer can't reach it directly: ask it its uptime through the devices on the way
+            return _wait_uptime(login, before, up, within, report, what)
+        return wait_for(login.ip, login.port, up=up, within=within, report=report, what=what)
+
+    def installer_log() -> str:
+        try:
+            return sshrun.run(login, f"cat {UPDATE_LOG}").out.strip()
+        except sshrun.SSHError:
+            return ""
+
     report(_(INSTALL_STARTS[0]), None)
     sshrun.run(login, detached(steps["install"], UPDATE_LOG), timeout=60)
-    went_down = wait_for(login.ip, login.port, up=False, within=300, report=report,
-                         what=_("Installing: waiting for the device to restart…"))
+    what = _("Installing: waiting for the device to restart…")
+    went_down = wait(False, 300, what)
+    if not went_down and "opendisco-exit=" not in installer_log():  # the installer is still at it
+        went_down = wait(False, 900, what)
     if not went_down:
-        said = ""
-        try:
-            said = sshrun.run(login, f"cat {UPDATE_LOG}").out.strip()
-        except sshrun.SSHError:
-            pass
-        said = re.sub(r"opendisco-exit=\d+\s*", "", said).strip()
+        said = re.sub(r"opendisco-exit=\d+\s*", "", installer_log()).strip()
         raise ToolError(tr("The device didn't restart, so the firmware wasn't installed. It said: {said}", said=said)
                         if said else _("The device didn't restart, so the firmware wasn't installed."))
     started = time.monotonic()
     within = max(900, upgrade_time * 3)
-    if not wait_for(login.ip, login.port, up=True, within=within, report=report,
-                    what=_("Installing: the device is offline while it writes the firmware…")):
+    if not wait(True, within, _("Installing: the device is offline while it writes the firmware…")):
         raise ToolError(tr("The device hasn't come back after {minutes} minutes. It may still be installing: give it "
                            "a few more minutes before power-cycling it.", minutes=within // 60))
     return time.monotonic() - started
@@ -790,6 +807,23 @@ def wait_for(ip: str, port: int, up: bool, within: float, report=None, what: str
     return False
 
 
+def _wait_uptime(login: sshrun.Login, before: float | None, up: bool, within: float, report=None,
+                 what: str = "") -> bool:
+    """wait_for for a device reached through others, which this computer can't connect to itself:
+    asked its uptime over SSH, it has gone down (not up) when it doesn't answer or its uptime
+    started again, and is back (up) when it answers after that."""
+    start = time.monotonic()
+    while time.monotonic() - start < within:
+        now = _uptime(login)
+        restarted = now is not None and before is not None and 0 <= now < before
+        if (now is None or restarted) if not up else (now is not None and (now < 0 or before is None or now < before)):
+            return True
+        if report:
+            report(f"{what} {time.monotonic() - start:.0f}s", None)
+        time.sleep(5)
+    return False
+
+
 # ---------------------------------------------------------------------------
 # airOS config
 # ---------------------------------------------------------------------------
@@ -973,6 +1007,9 @@ def _run_staged(login: sshrun.Login, command: str, staged: str, what: str, apply
     as needed). Returns (exit code, what it said, whether the start went through, whether the
     connection dropped); LostConnection when it never started or the app can't tell."""
     run = secrets.token_hex(6)
+    if "$(id -u)" in log and len(logins) > 1:  # (the other login reading it is another user: name this one's)
+        uid = sshrun.run(login, "id -u", timeout=30, stop=stop).out.strip()
+        log = log.replace("$(id -u)", uid) if uid.isdigit() else log
     sent = True
     try:
         sshrun.run(login, detached(command, log, run), timeout=60, stop=stop)
@@ -1632,9 +1669,10 @@ def reboot(login: sshrun.Login, d, report=None, stop=None, within: float = 600) 
         elapsed = time.monotonic() - start
         if now is None:
             down = True
-        elif down or 0 <= now < before:
+        elif 0 <= now < before or (down and now < 0):  # its uptime started again (unread: it was down)
             return elapsed
-        else:  # still up: the command may have failed (no sudo, say), or not taken
+        else:  # still up (an answer missed was a lost one): the command may have failed (no sudo, say), or not taken
+            down = False
             try:
                 said = sshrun.run(login, f"cat {REBOOT_LOG} 2>/dev/null", timeout=25).out
             except sshrun.SSHError:
