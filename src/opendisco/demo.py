@@ -556,7 +556,7 @@ class Demo:
             if not app.caps["mobile"]:
                 for window in list(app.windows):  # the device tools' windows, its notes, its hidden devices
                     if window is not app.main_window and window.title != _("Settings"):
-                        window.close()
+                        window.on_close()  # as if closed by hand: each window's own clean-up runs
             demossh.NETWORK = None
             for target, name, value in reversed(self.patches):
                 if isinstance(target, dict):

@@ -575,6 +575,9 @@ async def routed_find(app, d, kind: str):
     if not hops:
         app._find(d, kind)
         return
+    if app.running or app.rescanning or app.finding or not app.result:  # (started while it asked)
+        app.status.text = _("Works once the scan has finished.")
+        return
     last, result = hops[-1], app.result
     name = _(core.SERVICE_NAMES[kind])  # ("services"; protocol names stay)
     ports = core.search_order(kind, result.devices if result else ())
@@ -592,8 +595,13 @@ async def routed_find(app, d, kind: str):
             if core.STOP.is_set():
                 break
             chunk = " ".join(map(str, ports[start:start + 600]))
-            out = sshrun.run(last, f"for p in {chunk}; do nc -z -w1 {d.ip} $p 2>/dev/null && echo $p; done",
-                             timeout=900).out
+            try:  # (Stop ends the chunk too: one can take ten minutes)
+                out = sshrun.run(last, f"for p in {chunk}; do nc -z -w1 {d.ip} $p 2>/dev/null && echo $p; done",
+                                 timeout=900, stop=core.STOP).out
+            except sshrun.SSHError as e:
+                if e.kind == "cancelled":
+                    break
+                raise
             for port in (int(p) for p in out.split() if p.isdigit()):
                 banner = sshrun.run(last, f"printf 'HEAD / HTTP/1.0\\r\\n\\r\\n' | nc -w2 {d.ip} {port} 2>/dev/null "
                                           "| head -c 80").out
@@ -615,8 +623,9 @@ async def routed_find(app, d, kind: str):
         error = str(e)
     finally:
         app.finding = False
-        app.spinner.stop()
-        app.start_button.enabled, app.stop_button.enabled = True, False
+        if not app.running:  # (a scan started meanwhile keeps its Stop)
+            app.spinner.stop()
+            app.start_button.enabled, app.stop_button.enabled = True, False
     if error:
         app.status.text = tr("Port search on {ip}: {error}", ip=d.ip, error=error)
         return
@@ -831,7 +840,7 @@ class ConfigEditor:
         self.window.content = toga.Box(style=Pack(direction=COLUMN, margin=12, gap=8), children=[
             toga.Label(_fill(about, 118)), self.box,
             toga.Box(style=Pack(direction=ROW, align_items="center", gap=8), children=[
-                self.state, *self.buttons, toga.Button(_("Close"), on_press=lambda w: self.window.close())])])
+                self.state, *self.buttons, toga.Button(_("Close"), on_press=lambda w: self.window.on_close())])])  # (asks about edits)
         self._pending(pending)
         self._enable(True)
         app._show_over_main(self.window)
@@ -1341,11 +1350,12 @@ def _saved_login(app, d, via: tuple = ()) -> sshrun.Login | None:
 
 async def back_up_all(app):
     """Device > Back up all configs…: every device in the table that keeps a config, with the
-    login remembered for it (BackupAllWindow). While a run goes on, its window shows again; one
-    that's over makes way for a new run."""
+    login remembered for it (BackupAllWindow). While a run goes on, its window shows again, and
+    so does one that finished hidden (the status line says so): its results come first. One that's
+    over and showing makes way for a new run."""
     last = _backup_all
     if last is not None and not last.window.closed:
-        if last.running:
+        if last.running or not last.window.visible:
             last.window.show()
             return
         last.closing(last.window) and last.window.close()
