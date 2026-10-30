@@ -10,6 +10,8 @@ own SSH client instead (OwnSession, over phonessh), in a pseudo-terminal on the 
 The terminal itself is xterm.js in a web view. The web view has no way to call Python, so the
 pane polls it for keystrokes and sends output back in batches.
 """
+from __future__ import annotations
+
 import asyncio
 import base64
 import html

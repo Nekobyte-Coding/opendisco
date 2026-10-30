@@ -9,6 +9,8 @@ so files always travel by scp.
 Every failure is an SSHError whose text says what went wrong in terms of the device: a changed
 host key, a wrong password, no answer, an SSH server that only speaks retired algorithms.
 """
+from __future__ import annotations
+
 import atexit
 import hashlib
 import os

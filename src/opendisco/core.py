@@ -45,6 +45,7 @@ import urllib.parse
 import urllib.request
 import uuid
 import threading
+import weakref
 import xml.etree.ElementTree as ET
 from collections import Counter
 from concurrent.futures import ThreadPoolExecutor
@@ -701,15 +702,16 @@ class Device:
         as the web UI: a UniFi Express sends 0x0001 with 443, while a UCG Fiber sends 0x0000 with
         7080, which nothing outside answers on."""
         webui = self.info.get("webui")
-        if isinstance(webui, dict) and webui.get("port") and webui.get("flags", 0) & 1:
-            return webui["port"]
+        port = webui.get("port") if isinstance(webui, dict) else None
+        if isinstance(port, int) and 0 < port < 65536 and webui.get("flags", 0) & 1:
+            return port
         return None
 
     @property
     def reported_ssh_port(self) -> int | None:
         """The SSH port the device reports in UBNT discovery."""
         port = self.info.get("ssh_port")
-        return port if isinstance(port, int) and port else None
+        return port if isinstance(port, int) and 0 < port < 65536 else None  # (as sent: any size)
 
     def said_ports(self, kind: str) -> dict:
         """What the device says its "https", "http" or "ssh" port is, {source: port}, best
@@ -1385,15 +1387,19 @@ def os_vlan_map() -> dict:
             m = re.search(r"vlan: (\d+) parent interface: (\S+)", line)
             if m and name:
                 out[name] = (int(m.group(1)), m.group(2))
-    elif os.path.exists("/proc/net/vlan/config"):
+    elif sys.platform.startswith("linux"):
         try:
             with open("/proc/net/vlan/config") as f:
                 for line in f.read().splitlines()[2:]:
                     parts = [p.strip() for p in line.split("|")]
                     if len(parts) == 3 and parts[1].isdigit():
                         out[parts[0]] = (int(parts[1]), parts[2])
-        except OSError:
-            pass
+        except OSError:  # missing, or (as it's made) root's only: ip lists them for anyone
+            for line in _run(["ip", "-d", "-o", "link", "show", "type", "vlan"]).splitlines():
+                m = re.match(r"\d+:\s+([^@:\s]+)@([^:\s]+):", line)
+                vid = re.search(r"\bvlan protocol \S+ id (\d+)", line)
+                if m and vid:
+                    out[m.group(1)] = (int(vid.group(1)), m.group(2))
     return out
 
 
@@ -1705,6 +1711,11 @@ def _insecure_ctx() -> ssl.SSLContext:
         _INSECURE_CTX = ssl.create_default_context()
         _INSECURE_CTX.check_hostname = False
         _INSECURE_CTX.verify_mode = ssl.CERT_NONE
+        try:  # and old gear's TLS too (airOS 5, ToughSwitch: TLS 1.0, small keys), refused by default since 3.10
+            _INSECURE_CTX.minimum_version = ssl.TLSVersion.TLSv1
+            _INSECURE_CTX.set_ciphers("DEFAULT:@SECLEVEL=0")
+        except (ValueError, ssl.SSLError, AttributeError):
+            pass
     return _INSECURE_CTX
 
 
@@ -1779,10 +1790,10 @@ class SsdpBrowser:
         r = self.responders[ip]
         out = {"server": r["server"]} if r["server"] else {}
         for loc in sorted(r["locations"])[:3]:
-            u = urllib.parse.urlparse(loc)
-            if u.scheme != "http" or u.hostname != ip:  # only fetch from the responder itself
-                continue
-            try:
+            try:  # (a LOCATION that isn't a URL raised ValueError, which ended the scan)
+                u = urllib.parse.urlparse(loc)
+                if u.scheme != "http" or u.hostname != ip:  # only fetch from the responder itself
+                    continue
                 fields = parse_upnp_description(_http_get(loc, 2.0))
             except Exception:
                 continue
@@ -2863,7 +2874,7 @@ class Trunk:
                 kind = "STP/LLC"
             else:
                 kind = f"0x{etype:04x}"
-        except (struct.error, ValueError, OSError):
+        except Exception:  # (anything on the wire can be made up: a crafted frame mustn't end the scan)
             return
         seen["kinds"].add(kind)
         if kind not in nb.samples and kind != "UBNT" and len(nb.samples) < 6:  # what it was found from
@@ -2964,11 +2975,14 @@ def capture_frames(names, seconds: float, sudo, log, on_frames=None, stop=None, 
                     log(f"  couldn't save {path}: {e.strerror or e}")
         return got
     running = {}
+    # A process group of its own (same terminal, so sudo's ticket still counts): sudo 1.9.12 and
+    # earlier, without a pty, drop a signal sent from their own group, so tcpdump wasn't stopped.
+    own_group = {"process_group": 0} if sys.version_info >= (3, 11) else {"preexec_fn": os.setpgrp}
     for name in names:
         r = {"proc": None, "buf": bytearray(), "pos": 0, "reader": CaptureReader(), "frames": [], "err": ""}
         try:
             r["proc"] = subprocess.Popen(sudo + [find_tool("tcpdump") or "tcpdump", "-i", name] + TCPDUMP_ARGS,
-                                         stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+                                         stdout=subprocess.PIPE, stderr=subprocess.PIPE, **own_group)
             r["pump"] = threading.Thread(target=_pump, args=(r["proc"].stdout, r["buf"]), daemon=True)
             r["pump"].start()
         except OSError as e:
@@ -3588,6 +3602,7 @@ class AliasManager:
         self.log = log
         # ("alias", iface, ip, prefix) / ("vlan", iface, parent, vid) / ("coexist", iface, was, 0), in order made
         self.active: list = []
+        _MANAGERS.add(self)
         self.used: set = set()  # (iface, ip) for every alias taken during this run
         self.prepared: set = set()  # Windows adapters checked for DHCP/static coexistence
         if IS_WINDOWS or os.geteuid() == 0:
@@ -3658,6 +3673,7 @@ class AliasManager:
             subprocess.run(["sudo", "-n", "-v"], capture_output=True)
 
     def _load_state(self) -> list:
+        """[(entry, the process that made it)] as written down (no process: an older version's)."""
         try:
             with open(ALIAS_STATE_FILE, encoding="utf-8") as f:
                 raw = json.load(f)
@@ -3666,9 +3682,9 @@ class AliasManager:
         entries = []
         for e in raw if isinstance(raw, list) else []:
             if isinstance(e, list) and len(e) == 3:  # older format: alias only
-                entries.append(("alias",) + tuple(e))
-            elif isinstance(e, list) and len(e) == 4 and e[0] in ("alias", "vlan", "coexist"):
-                entries.append(tuple(e))
+                entries.append((("alias",) + tuple(e), None))
+            elif isinstance(e, list) and len(e) in (4, 5) and e[0] in ("alias", "vlan", "coexist"):
+                entries.append((tuple(e[:4]), e[4] if len(e) == 5 and isinstance(e[4], int) else None))
         return entries
 
     def _save_state(self, entries) -> None:
@@ -3676,7 +3692,7 @@ class AliasManager:
             if entries:
                 tmp = ALIAS_STATE_FILE + ".tmp"
                 with open(tmp, "w", encoding="utf-8") as f:
-                    json.dump([list(e) for e in entries], f)
+                    json.dump([list(e) + ([pid] if pid else []) for e, pid in entries], f)
                 os.replace(tmp, ALIAS_STATE_FILE)
             elif os.path.exists(ALIAS_STATE_FILE):
                 os.remove(ALIAS_STATE_FILE)
@@ -3684,10 +3700,11 @@ class AliasManager:
             pass
 
     def _remember(self, entry) -> None:
-        self._save_state(self._load_state() + [entry])
+        self._save_state(self._load_state() + [(entry, os.getpid())])
 
     def _forget(self, keep) -> None:
-        self._save_state([e for e in self._load_state() if keep(e)])
+        """Strike this run's entries that keep() turns down; another run's stay."""
+        self._save_state([(e, pid) for e, pid in self._load_state() if pid != os.getpid() or keep(e)])
 
     def _run(self, cmd) -> str | None:
         try:
@@ -3798,22 +3815,69 @@ class AliasManager:
                 self.destroy_vlan(*entry[1:])
 
     def cleanup_leftovers(self) -> int:
-        leftovers = self._load_state()
-        for kind, iface, a, b in reversed(leftovers):
+        """Remove what a run that died left behind, and return how many. What another OpenDisco
+        still running holds (Keep addresses, --hold) stays, and so does what couldn't be removed
+        (no administrator rights, say), still written down for the next try."""
+        kept, removed = [], 0
+        for (kind, iface, a, b), pid in reversed(self._load_state()):
+            if pid and pid != os.getpid() and _process_alive(pid):
+                kept.append(((kind, iface, a, b), pid))
+                continue
             if kind == "alias":
                 self.log(f"Removing leftover alias {a}/{b} from {iface}")
-                self._run(self.command(iface, a, b, False))
+                error = self._run(self.command(iface, a, b, False))
+                there = bool(error) and any(i.ip == a for i in local_interfaces() if i.name == iface)
             elif kind == "coexist":
-                self._run(["netsh", "interface", "ipv4", "set", "interface", iface, f"dhcpstaticipcoexistence={a}"])
+                error = self._run(["netsh", "interface", "ipv4", "set", "interface", iface,
+                                   f"dhcpstaticipcoexistence={a}"])
+                there = bool(error)
             else:
                 self.log(f"Removing leftover VLAN {b} interface {iface} (on {a})")
-                for cmd in self.vlan_commands(iface, a, b, False):
-                    self._run(cmd)
-        self._save_state([])
-        return len(leftovers)
+                errors = [e for e in (self._run(cmd) for cmd in self.vlan_commands(iface, a, b, False)) if e]
+                error, there = (errors[-1] if errors else None), bool(errors) and iface in os_vlan_map()
+            if there:
+                self.log(f"  couldn't remove it ({error}): it's kept on the list for the next try")
+                kept.append(((kind, iface, a, b), None))
+            else:
+                removed += 1
+        self._save_state(list(reversed(kept)))
+        return removed
 
 
-def run_alias_rounds(sc: Scanner, inv: Inventory, mgr: AliasManager, plans, opts, log) -> dict:
+_MANAGERS: weakref.WeakSet = weakref.WeakSet()  # every AliasManager of this process
+
+
+def release_aliases() -> None:
+    """Remove every temporary address and VLAN interface this process holds: the app was told to
+    end (a signal), so its scans' and Keep addresses' own clean-ups won't run."""
+    for mgr in list(_MANAGERS):
+        mgr.remove_all()
+
+
+def _process_alive(pid: int) -> bool:
+    """Whether the process is still running. (Windows' os.kill would end it: asked another way.)"""
+    if IS_WINDOWS:
+        import ctypes
+        kernel = ctypes.windll.kernel32
+        handle = kernel.OpenProcess(0x1000, False, pid)  # PROCESS_QUERY_LIMITED_INFORMATION
+        if not handle:
+            return False
+        code = ctypes.c_ulong()
+        ok = kernel.GetExitCodeProcess(handle, ctypes.byref(code))
+        kernel.CloseHandle(handle)
+        return bool(ok) and code.value == 259  # STILL_ACTIVE
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        return True
+    except OSError:
+        return False
+    return True
+
+
+def run_alias_rounds(sc: Scanner, inv: Inventory, mgr: AliasManager, plans, opts, log, result=None) -> dict:
     """Probe each plan's networks from temporary addresses on its link, one link at a time
     (two interfaces holding the same subnet would make routing ambiguous). A plan for a VLAN
     first creates a tagged interface on the parent port and destroys it afterwards.
@@ -3823,7 +3887,9 @@ def run_alias_rounds(sc: Scanner, inv: Inventory, mgr: AliasManager, plans, opts
              so a point-to-point pair isn't disturbed. Blocks with no free address are skipped.
     Round 3  blocks that stayed silent, from their other address: a lone device sitting on
              the address round 2 borrowed would have ignored us."""
-    result = {"arp": {}, "ctx": {}, "skipped": [], "tftp": set()}
+    # result: filled as the rounds go, so a run stopped halfway keeps what the rounds before found
+    result = {} if result is None else result
+    result.update(arp={}, ctx={}, skipped=[], tftp=set())
 
     def occupied(seen) -> set:
         # Our own earlier aliases don't count as taken; anything that answered does.
@@ -3888,6 +3954,7 @@ def run_alias_rounds(sc: Scanner, inv: Inventory, mgr: AliasManager, plans, opts
                 ip = pick(t, busy)
                 if ip:
                     plan.append((t, ip))
+                    busy = busy | {ip}  # (overlapping targets, a /22 and the /24 at its top: one address each)
                 else:
                     log(f"  {link.tag}: no free alias address in {t.network}, skipped")
             probe(link, plan, "subnets")
@@ -3897,6 +3964,7 @@ def run_alias_rounds(sc: Scanner, inv: Inventory, mgr: AliasManager, plans, opts
                 ip = pick(t, busy)
                 if ip:
                     plan2.append((t, ip))
+                    busy = busy | {ip}
                 elif t.network not in result["skipped"]:
                     result["skipped"].append(t.network)
             probe(link, plan2, "small blocks")
@@ -3907,6 +3975,7 @@ def run_alias_rounds(sc: Scanner, inv: Inventory, mgr: AliasManager, plans, opts
                     ip = pick(t, busy | {used})
                     if ip:
                         plan3.append((t, ip))
+                        busy = busy | {ip}
             probe(link, plan3, "silent blocks, other address")
         finally:
             if made:
@@ -3962,6 +4031,7 @@ def hold_start(mgr: AliasManager, inv: Inventory, log) -> list:
         if not mgr.add(iface, ip, prefix):
             continue
         held.add(net)
+        busy.add(ip)
         lines.append(f"  {ip}/{prefix} on " + (f"VLAN {vid} ({iface} on {parent})" if vid else parent))
         for d in devs:
             lines.append(f"    {d.ip or '-':<15}  {_trunc(d.model or '?', 22):<22}  {web_url(d) or 'ssh ' + (d.ip or '?')}")
@@ -5585,7 +5655,8 @@ def run_scan(opts, log, progress=None, on_inventory=None):
             vlans = sorted({p["link"].vlan for p in plans if p["link"].vlan and p["targets"]})
             log("Probing through temporary aliases on " + ", ".join(str(l) for l in (ports if opts.direct else links))
                 + (f", and tagged VLAN {', '.join(map(str, vlans))}" if vlans else ""))
-            alias_result = run_alias_rounds(sc, inv, mgr, plans, opts, log)
+            alias_result = {}  # (kept when Stop ends the rounds early)
+            run_alias_rounds(sc, inv, mgr, plans, opts, log, alias_result)
     except KeyboardInterrupt:
         clear_progress()
         interrupted = True

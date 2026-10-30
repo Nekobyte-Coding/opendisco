@@ -18,6 +18,8 @@ address in it is invented, and nothing is sent on the network while it shows.
   settings.json. The window's title says Demo, and every export made from it is stamped STAMP
   (stamp_file, stamp_bytes).
 """
+from __future__ import annotations
+
 import atexit
 import json
 import re

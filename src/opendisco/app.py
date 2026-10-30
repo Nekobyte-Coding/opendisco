@@ -8,7 +8,9 @@ Windows can't capture traffic, add addresses or tag VLANs. The iOS app doesn't u
 import asyncio
 import json
 import math
+import os
 import shutil
+import signal
 import textwrap
 import threading
 import time
@@ -260,6 +262,12 @@ class OpenDiscoApp(toga.App):
             offered.update(listen=True, vlans=self.caps["aliases"])
         self.modes = [m for m in MODES if m[3] is None or offered.get(m[3])]
         self.offers_listening = offered["listen"]
+        if not self.caps["mobile"] and self.caps["platform"] != "windows":
+            for name in ("SIGTERM", "SIGHUP"):  # killed, logged out, its terminal closed
+                try:
+                    self.loop.add_signal_handler(getattr(signal, name), self._ended_by_signal, getattr(signal, name))
+                except (NotImplementedError, RuntimeError, ValueError):
+                    pass
         self.result = None  # the last finished scan
         self.demo = None  # demo.Demo while the demo network shows
         self.live_inv = None  # the inventory of the scan that's running
@@ -2882,6 +2890,14 @@ class OpenDiscoApp(toga.App):
         intent.setDataAndType(uri, "application/vnd.android.package-archive")
         intent.addFlags(intent_class.FLAG_GRANT_READ_URI_PERMISSION | intent_class.FLAG_ACTIVITY_NEW_TASK)
         activity.startActivity(intent)
+
+    def _ended_by_signal(self, signum):
+        """Told to end: no temporary address or VLAN interface is left behind, nor the demo's folder."""
+        core.STOP.set()
+        core.release_aliases()
+        if self.demo is not None:
+            self.demo.end(quitting=True)
+        os._exit(128 + signum)
 
     def handle_exit(self, app, **kwargs):
         core.STOP.set()

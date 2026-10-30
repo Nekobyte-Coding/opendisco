@@ -18,6 +18,8 @@ Every call blocks, like sshrun's: call them from a worker thread. They run on an
 their own, on a thread of their own, never on the UI's. Every failure is an SSHError whose text
 says what went wrong in terms of the device.
 """
+from __future__ import annotations
+
 import asyncio
 import base64
 import concurrent.futures

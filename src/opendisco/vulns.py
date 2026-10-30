@@ -69,7 +69,7 @@ def default_data_dir() -> Path:
 # Versions
 # ---------------------------------------------------------------------------
 
-_VERSION = re.compile(r"v?(\d+(?:\.\d+)*)(?:-hotfix\.?(\d+))?")
+_VERSION = re.compile(r"v?(\d{1,9}(?:\.\d{1,9})*)(?:-hotfix\.?(\d{1,9}))?")  # (digits a device sends: bounded)
 # "XC.qca955x.v8.7.11.46972.220614.0419", "e50.v2.0.9-hotfix.7.5622731.230615.0857": the platform,
 # its chip, then the version, a build number (or commit) and the build's date and time.
 _FIRMWARE = re.compile(r"[A-Za-z0-9-]+(?:\.[A-Za-z0-9_-]+)?\.v(\d[\w.+-]*)$")

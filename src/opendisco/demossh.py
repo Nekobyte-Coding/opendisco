@@ -30,6 +30,8 @@ Terminal tab's sessions (session_factory; own_session_factory for a computer wit
 the phones' console (Shell's stand-in, Console).
 Delays are like the real ones, only shorter where the real ones take minutes (DELAYS).
 """
+from __future__ import annotations
+
 import difflib
 import fnmatch
 import hashlib

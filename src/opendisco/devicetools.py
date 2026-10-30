@@ -30,6 +30,8 @@ here runs in a worker thread.
   device given by its address, for devices the app hasn't found itself (over a VPN).
 - Link health (airMAX): the radio's mca-status and wstalist, which linkhealth reads.
 """
+from __future__ import annotations
+
 import hashlib
 import json
 import os
@@ -285,7 +287,7 @@ def release_version(item: dict) -> str:
 
 
 def version_key(text: str) -> tuple:
-    m = re.match(r"v?(\d+(?:\.\d+)*)(?:-hotfix\.(\d+))?", text or "")
+    m = re.match(r"v?(\d{1,9}(?:\.\d{1,9})*)(?:-hotfix\.(\d{1,9}))?", text or "")
     if not m:
         return ()
     numbers = [int(n) for n in m.group(1).split(".")]
