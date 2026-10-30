@@ -1256,6 +1256,8 @@ def backup_root(root=None) -> Path:
 
 
 def backup_folder(mac: str, root=None) -> Path:
+    if not core.valid_mac(mac):  # (a name a device made up could point anywhere)
+        raise ToolError(tr("{mac} isn't a MAC address, so no backups are kept under it.", mac=mac))
     return backup_root(root) / core.norm_mac(mac).replace(":", "-")
 
 
@@ -1300,7 +1302,7 @@ def list_backups(mac: str | None = None, root=None) -> list:
     """Saved configs, the newest first, as Backups (.path, .when, .date, .reason, .meta): one
     device's (by its MAC), or with mac None every device's."""
     if mac:
-        folders = [backup_folder(mac, root)]
+        folders = [backup_folder(mac, root)] if core.valid_mac(mac) else []
     else:
         top = backup_root(root)
         folders = [f for f in top.iterdir() if f.is_dir()] if top.is_dir() else []
@@ -1781,7 +1783,7 @@ def _lldp_sightings(lines) -> list:
         if key == "via" or current is None:
             current = Sighting("lldp", port=port)
             found.append(current)
-        if key == "chassis.mac" or (key == "chassis.id" and _MAC.fullmatch(value)):
+        if key in ("chassis.mac", "chassis.id") and _MAC.fullmatch(value):  # (a MAC names folders and host keys)
             current.mac = current.mac or value.lower()
         elif key == "chassis.name":
             current.name = value
@@ -1894,11 +1896,15 @@ def merge_scan(res, finder, sightings: list, local: set = frozenset()) -> tuple:
     order = {"stations": 0, "lldp": 1, "arp": 2}  # the most telling first
     seen, new = [], []
     for s in sorted(sightings, key=lambda s: order[s.how]):
-        mac = core.norm_mac(s.mac) if s.mac else None
+        mac = core.norm_mac(s.mac) if core.valid_mac(s.mac) else None
         ip = s.ip if s.ip and core._usable_ip(s.ip) else ""
         if (not mac and not ip) or mac in local or mac == finder.mac or (ip and ip in finder.ips):
             continue
-        dev = (res.inv.find(mac=mac) if mac else None) or (res.inv.find(ip=ip) if ip else None)
+        dev = res.inv.find(mac=mac) if mac else None
+        if dev is None and ip:
+            dev = res.inv.find(ip=ip)
+            if dev is not None and mac and dev.mac and dev.mac != mac:  # another device's address (a station's
+                dev, ip = None, ""  # last IP can be a router's behind it): this one is a device of its own
         known = dev is not None and bool(dev.via - {FROM_DEVICE})
         if dev is None:
             dev = res.inv.lookup(mac=mac, ip=ip or None)

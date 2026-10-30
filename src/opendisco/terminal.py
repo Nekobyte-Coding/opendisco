@@ -97,7 +97,9 @@ def host_key_alias(mac: str | None, ip: str) -> str:
     """The name ssh files a device's host key under: its MAC, so a different radio at the same
     factory address isn't mistaken for the last one, while a changed key on the same device is
     still caught."""
-    return "ubnt-" + mac.replace(":", "") if mac else ip
+    mac = (mac or "").lower()
+    valid = re.fullmatch(r"(?:[0-9a-f]{2}:){5}[0-9a-f]{2}", mac)  # (anything else could be a known_hosts pattern)
+    return "ubnt-" + mac.replace(":", "") if valid else ip
 
 
 def ssh_argv(ip: str, port: int, user: str, alias: str, known_hosts: Path) -> list:
@@ -151,6 +153,21 @@ def prompt_password(passwords, prompt: bytes) -> tuple:
     return host, passwords.get(host)
 
 
+def may_type(passwords, who, typed: dict, limit: int) -> bool:
+    """Whether to type who's password now: at most limit times for one name, and never for a device
+    before one already answered on the route. The devices log in in route order, so a prompt
+    naming an earlier one can only be printed by a device further along, fishing for its password
+    (unless it's the same password, which that device has already)."""
+    if typed.get(who, 0) >= limit:
+        return False
+    answered = [name for name in typed if name in passwords] if isinstance(passwords, dict) else []
+    if not answered:
+        return True
+    names = list(passwords)  # (Login.passwords: in route order, the nearest first)
+    last = max(answered, key=names.index)
+    return names.index(who) >= names.index(last) or passwords[who] == passwords[last]
+
+
 def _take_terminal():  # runs in the child between fork and exec, so nothing that imports or allocates
     fcntl.ioctl(0, termios.TIOCSCTTY, 0)  # so ssh can read the password from its terminal
 
@@ -174,7 +191,7 @@ class Session:
 
     # -- running ---------------------------------------------------------
     def start(self) -> None:
-        self.typed, self.tail = set(), b""
+        self.typed, self.tail = {}, b""
         env = dict(os.environ, TERM="xterm-256color")
         rows, cols = self.size
         if IS_WINDOWS:
@@ -221,8 +238,8 @@ class Session:
         shown = plain(self.tail)
         if self.password and PASSWORD_PROMPT.search(shown):
             who, password = prompt_password(self.password, shown)
-            if password and who not in self.typed:
-                self.typed.add(who)
+            if password and may_type(self.password, who, self.typed, 1):
+                self.typed[who] = 1
                 self.tail = b""
                 self.write((password + "\r").encode())
 

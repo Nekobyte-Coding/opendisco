@@ -108,7 +108,8 @@ FALLBACKS = {"Picker": _SelectionPicker, "watch_keyboard": _nothing, "plain_entr
              "end_editing": _nothing, "done_bar": _nothing, "wide": lambda app: False,
              "side_by_side": lambda app: False, "clear_selection": _nothing, "search_field": _nothing,
              "export_menu": _nothing, "here": lambda app: _("this phone"), "text_box": _nothing,
-             "menu_button": _nothing, "bar_button": _nothing, "open_file": None}
+             "menu_button": _nothing, "bar_button": _nothing, "open_file": None,
+             "wrap_switch": _nothing}  # (Android's switch wraps its own text)
 
 
 def hook(app, name: str):

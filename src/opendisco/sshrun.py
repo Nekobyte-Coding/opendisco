@@ -324,7 +324,7 @@ class _Watcher:
         if terminal.PASSWORD_PROMPT.search(shown):
             who, password = terminal.prompt_password(self.password, shown)
             self.tail = b""
-            if password and self.typed.get(who, 0) < 2:
+            if password and terminal.may_type(self.password, who, self.typed, 2):
                 self.typed[who] = self.typed.get(who, 0) + 1
                 self.write((password + "\r").encode("utf-8"))
             else:

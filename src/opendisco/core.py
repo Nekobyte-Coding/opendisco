@@ -579,6 +579,12 @@ def norm_mac(mac: str) -> str:
     return ":".join(p.zfill(2) for p in re.split(r"[:-]", mac.strip())).lower()
 
 
+def valid_mac(mac: str | None) -> bool:
+    """Whether it's a MAC address (in any case, with : or -): what a device says it is can be
+    anything, and a MAC names files, folders and host keys."""
+    return bool(mac) and re.fullmatch(r"(?:[0-9a-f]{2}:){5}[0-9a-f]{2}", norm_mac(mac)) is not None
+
+
 def is_ubnt_mac(mac: str | None) -> bool:
     return bool(mac) and norm_mac(mac).replace(":", "")[:6].upper() in UBNT_OUIS
 
@@ -870,9 +876,12 @@ class Inventory:
         return chain
 
     def lookup(self, mac: str | None = None, ip: str | None = None) -> Device:
-        """Return the device for this MAC/IP, creating or re-keying records as needed."""
+        """Return the device for this MAC/IP, creating or re-keying records as needed. A MAC that
+        isn't one (valid_mac) is left out."""
+        mac = norm_mac(mac) if valid_mac(mac) else None
+        if not mac and not ip:
+            raise ValueError("a device needs a MAC address or an IP address")
         if mac:
-            mac = norm_mac(mac)
             dev = self.find(mac=mac)
             orphan = next((d for d in self.devices.values() if d.mac is None and ip in d.ips), None) if ip else None
             if dev is None and orphan is not None:
@@ -893,8 +902,10 @@ class Inventory:
         return dev
 
     def attach(self, ip: str, mac: str | None, via: str) -> Device:
-        """Attach a sighting from a non-UBNT source (ARP, mDNS, SSDP) by IP first."""
-        dev = self.find(ip=ip)
+        """Attach a sighting from a non-UBNT source (ARP, mDNS, SSDP) to the device with that MAC,
+        else by IP. (By IP first, two devices sharing an address got linked to each other.)"""
+        mac = mac if valid_mac(mac) else None
+        dev = (self.find(mac=mac) if mac else None) or self.find(ip=ip)
         if dev is None or (dev.mac is None and mac):
             dev = self.lookup(mac=mac, ip=ip)
         elif mac and dev.mac and norm_mac(mac) != dev.mac:

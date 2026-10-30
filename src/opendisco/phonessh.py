@@ -32,7 +32,7 @@ from pathlib import Path
 
 from opendisco import core
 from opendisco.i18n import _, tr
-from opendisco.sshcommon import (ANSI, Login, Result, SSHError, _as_dict, last_hop,
+from opendisco.sshcommon import (ANSI, Login, Result, SSHError, last_hop,
                                  nested_command, route_text)  # (shared with sshrun)
 
 PASSWORD_PROMPT = re.compile(r"(?i)pass(word|code)[^\r\n]{0,60}:\s*$")
@@ -72,7 +72,9 @@ def host_key_alias(mac: str | None, ip: str) -> str:
     """The name a device's host key is filed under: its MAC, so a different radio at the same
     factory address isn't mistaken for the last one, while a changed key on the same device is
     still caught. (The same as terminal.host_key_alias, which phones don't have.)"""
-    return "ubnt-" + mac.replace(":", "") if mac else ip
+    mac = (mac or "").lower()
+    valid = re.fullmatch(r"(?:[0-9a-f]{2}:){5}[0-9a-f]{2}", mac)  # (anything else could be a known_hosts pattern)
+    return "ubnt-" + mac.replace(":", "") if valid else ip
 
 
 def _names(line: str) -> list:
@@ -339,7 +341,7 @@ def _run_nested(login: Login, command: str | None, timeout: float, stop) -> Resu
         try:
             process = await conns[-1].create_process(nested_command(login, command), term_type="dumb",
                                                      term_size=(200, 50), encoding="utf-8", errors="replace")
-            typer = _PasswordTyper({**_as_dict(hop), login.ip: login.password}, process.stdin.write)
+            typer = _PasswordTyper(login, process.stdin.write)
             text = []
             while True:
                 data = await asyncio.wait_for(process.stdout.read(65536), timeout)
@@ -372,13 +374,14 @@ def _run_nested(login: Login, command: str | None, timeout: float, stop) -> Resu
 
 
 class _PasswordTyper:
-    """Types the password when a hop's own SSH client asks for it ("ubnt@10.0.0.5's password:"),
-    at most twice for each device."""
+    """Types the device's password when the last hop's own SSH client asks for it ("ubnt@10.0.0.5's
+    password:"), at most twice. Only that prompt: the hops log in through asyncssh, so a prompt
+    naming anything else (or nothing) comes from the device itself and gets no password."""
     ASKER = re.compile(r"([^\s@']+)@([^\s@']+)'s password")
 
-    def __init__(self, passwords: dict, write):
-        self.passwords, self.write = passwords, write
-        self.tail, self.typed, self.unanswered = "", {}, False
+    def __init__(self, login: Login, write):
+        self.ip, self.password, self.write = login.ip, login.password, write
+        self.tail, self.typed, self.unanswered = "", 0, False
 
     def feed(self, data: str) -> None:
         self.tail = (self.tail + data)[-400:]
@@ -386,11 +389,10 @@ class _PasswordTyper:
             return
         asker = self.ASKER.findall(self.tail)
         who = asker[-1][1] if asker else None
-        password = self.passwords.get(who) if who else next(iter(self.passwords.values()), None)
         self.tail = ""
-        if password and self.typed.get(who, 0) < 2:
-            self.typed[who] = self.typed.get(who, 0) + 1
-            self.write(password + "\r")
+        if who == self.ip and self.password and self.typed < 2:
+            self.typed += 1
+            self.write(self.password + "\r")
         else:
             self.unanswered = True
 
@@ -516,7 +518,7 @@ class Shell:
             if self.process is None:  # through the last hop's own client, which asks for the password
                 hop = last_hop(self.login)
                 self.process = await self._start(hop, nested_command(self.login, self.command))
-                typer = _PasswordTyper({**_as_dict(hop), self.login.ip: self.login.password}, self.process.stdin.write)
+                typer = _PasswordTyper(self.login, self.process.stdin.write)
             while True:
                 data = await self.process.stdout.read(65536)
                 if not data:
