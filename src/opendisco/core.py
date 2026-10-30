@@ -859,6 +859,16 @@ class Inventory:
                     return d
         return None
 
+    def route(self, d: Device) -> list:
+        """The devices on the way to d, the nearest to this computer first: the devices it was found
+        through (found_by), each through the one before. Empty for a device found directly."""
+        chain, seen, current = [], {d.key}, d
+        while current.found_by.get("key") in self.devices and current.found_by["key"] not in seen:
+            current = self.devices[current.found_by["key"]]
+            seen.add(current.key)
+            chain.insert(0, current)
+        return chain
+
     def lookup(self, mac: str | None = None, ip: str | None = None) -> Device:
         """Return the device for this MAC/IP, creating or re-keying records as needed."""
         if mac:
@@ -1864,11 +1874,6 @@ def identify_service(ip: str, port: int, timeout: float = 1.5) -> tuple:
     return "open", ""
 
 
-def probe_service(ip: str, port: int, timeout: float = 1.5) -> str | None:
-    """What answers on one TCP port: identify_service's kind alone."""
-    return identify_service(ip, port, timeout)[0]
-
-
 def web_redirect_port(ip: str, timeout: float = 2.0) -> int | None:
     """The HTTPS port a device's plain-HTTP page sends browsers to, as curl -I would show:
     airOS, EdgeOS and UniFi OS redirect http://ip/ to https://ip:<port>/. None when it doesn't
@@ -2682,6 +2687,7 @@ class Scanner:
         if self.sweep_hosts:
             self.sweep_pass, self.sweep_i, self.sweep_last, self.sweep_pause_until = 1, 0, start, 0.0
         socks = list(self.handlers)
+        told = 0.0  # when progress was last called: its seconds count needs a few calls a second, not 50
         while True:
             now = time.monotonic()
             if STOP.is_set():
@@ -2704,8 +2710,9 @@ class Scanner:
                 continue
             for s in readable:
                 self._drain(s)
-            if progress:
-                progress(time.monotonic() - start, duration)
+            if progress and time.monotonic() - told >= 0.25:
+                told = time.monotonic()
+                progress(told - start, duration)
 
     def finish_notes(self) -> None:
         if not self.opts.listen and self.bcast_errors and self.bcast_ok == 0:
@@ -3056,11 +3063,6 @@ class CaptureReader:
         return frames
 
 
-def parse_capture(data: bytes) -> list:
-    """Ethernet frames from a complete pcap or pcapng byte string."""
-    return CaptureReader().feed(data)
-
-
 def parse_frame(frame: bytes):
     """(source MAC, outer VLAN id or 0, ethertype, payload) for an Ethernet frame."""
     if len(frame) < 14:
@@ -3199,15 +3201,6 @@ def _usable_ip(ip: str) -> bool:
 def _tag_vlan(dev: Device, vid: int, parent: str) -> None:
     if dev.vlan is None:
         dev.vlan, dev.vlan_parent = vid, parent
-
-
-def analyze_capture(link: Link, frames, seconds: float, inv: Inventory, local_ips, local_macs=(),
-                    sniff_all: bool = False) -> Trunk:
-    trunk = Trunk(link, seconds)
-    for frame in frames:
-        trunk.add(frame, inv, local_ips, local_macs, sniff_all)
-    trunk.finish(inv, sniff_all)
-    return trunk
 
 
 def _covering(ips) -> ipaddress.IPv4Network:

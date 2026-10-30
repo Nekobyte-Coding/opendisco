@@ -569,7 +569,8 @@ class TerminalPane:
             asyncio.get_event_loop().create_task(self._pump())
 
     async def _pump(self) -> None:
-        """Every 30 ms: keystrokes and terminal sizes from the page, output to it."""
+        """Every 30 ms: keystrokes and terminal sizes from the page, output to it. Twice a second
+        once no session is running and nothing moved: ended sessions only stay until closed."""
         try:
             while self.sessions or self.pending:
                 if not self.ready:
@@ -582,7 +583,8 @@ class TerminalPane:
                         await asyncio.sleep(0.1)
                         continue
                 raw = await self.view.evaluate_javascript("take()")
-                for item in json.loads(str(raw) if raw else "[]"):
+                items = json.loads(str(raw) if raw else "[]")
+                for item in items:
                     session = self.sessions.get(item[0])
                     if session is None:
                         continue
@@ -597,6 +599,7 @@ class TerminalPane:
                         batch[sid] = base64.b64encode(data).decode()
                 if batch:
                     self.view.evaluate_javascript(f"write({json.dumps(batch)})")
-                await asyncio.sleep(0.03)
+                busy = items or batch or any(getattr(s, "alive", True) for s in self.sessions.values())
+                await asyncio.sleep(0.03 if busy else 0.5)
         finally:
             self.pumping = False

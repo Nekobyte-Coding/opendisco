@@ -821,7 +821,6 @@
  "The new login works; {user} wasn't deleted, so both work now.": "新しいログイン情報は機能します。{user}は削除されなかったため、現在は両方が機能します。",
  "Committed and saved: {new} logs in (checked), and {old} is deleted.": "コミットして保存しました：{new}でログインでき（確認済み）、{old}は削除されました。",
  "Committed and saved: {user} takes the new password (checked by logging in with it).": "コミットして保存しました：{user}は新しいパスワードを使用します（そのパスワードでログインして確認済み）。",
- "not for EdgeOS here": "EdgeOSはここでは非対応",
  "The latest release for {platform} is {latest} ({date}); the version it runs is unknown.": "{platform}の最新リリースは{latest}（{date}）です。実行中のバージョンは不明です。",
  "The release found isn't for a UniFi access point or switch.": "見つかったリリースはUniFiのアクセスポイントまたはスイッチ用ではありません。",
  "{platform} firmware needs extra steps the app doesn't do.": "{platform}のファームウェアには、アプリが行わない追加の手順が必要です。",

@@ -222,20 +222,9 @@ async def _update(app, d, check):
 
 
 async def _reread(app, d) -> str | None:
-    """Rescan the device for the firmware it reports now; None when a scan is busy."""
-    result = app.result
-    if not result or app.running or app.rescanning or app.finding:
-        return None
-    app.rescanning = True
-    app.spinner.start()
-    error = None
-    try:
-        dev, answered = await _work(app, core.rescan_device, result, d,
-                                    lambda m: app._from_worker(app._append_log, m))
-    except Exception as e:
-        dev, answered, error = d, False, f"{type(e).__name__}: {e}"
-    app._rescanned(result, dev, answered, error)
-    return devicetools.device_version(dev) if answered else None
+    """Rescan the device for the firmware it reports now; None when a scan is busy or it didn't answer."""
+    found = await app.reread(d)
+    return devicetools.device_version(found[0]) if found and found[1] else None
 
 
 # -- the config editor -----------------------------------------------------------------
@@ -660,10 +649,7 @@ class BackupsPage:
                   "them are in both, for context.", first=names[0], second=names[1])
         buttons = [(_("Done"), None, True, "gray")]
         if other == "now":  # the config now can be kept, unless the last backup has it already
-            try:
-                same = bool(self.backups) and self.backups[0].path.read_bytes() == new.encode("utf-8")
-            except OSError:
-                same = False
+            same = bool(self.backups) and self.backups[0].holds(new)
             buttons.append((_("Same as last backup") if same else _("Keep as a backup"), "keep", not same, "filled"))
         if await _diff_page(app, _("Compare configs"), heading, diff, note, buttons) != "keep":
             return
@@ -736,16 +722,9 @@ class BackupsPage:
         phone.update_tools(self.app)
 
 
-class _FirmwareOf:
-    """A backup's firmware string where device_version() looks for it."""
-
-    def __init__(self, meta):
-        self.info, self.firmware = {"firmware": str(meta.get("firmware") or "")}, ""
-
-
 def _backup_row(b) -> dict:
     """A backup's row in a list: when it was taken; why, the firmware it ran and its size."""
-    version = devicetools.device_version(_FirmwareOf(b.meta)) or b.meta.get("firmware", "")
+    version = b.version
     size = b.path.stat().st_size if b.path.exists() else 0
     reason = _(b.reason) if b.reason else _("backup")  # (kept in English: "before edit"...)
     return {"title": b.date, "subtitle": "  ·  ".join(x for x in (reason, version, tr("{size:,} bytes", size=size))

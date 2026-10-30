@@ -162,7 +162,6 @@ _NO_CONFIG = {"unifi": N_("set by its UniFi controller"), "unifi-os": N_("UniFi 
               "edgeswitch": N_("EdgeSwitch: in its web UI"), "": N_("not for this device")}
 NOT_OFFERED = {
     "update": {"": N_("not for this device")},
-    "config": dict(_NO_CONFIG, edgeos=N_("not for EdgeOS here")),
     "edit": _NO_CONFIG, "backup": _NO_CONFIG, "upload": _NO_CONFIG,
     "login": {"unifi": N_("set by its UniFi controller"), "unifi-os": N_("UniFi OS: in its own settings"),
               "isp": N_("airMAX and EdgeOS only"), "": N_("not for this device")},
@@ -241,16 +240,13 @@ def _kind(d) -> str:
 
 
 def offers(d, action: str) -> tuple:
-    """(offered, why not) for "update", "config" (the airOS editor: system.cfg), "edit" (the
-    config editor for every kind), "backup", "upload", "login", "scan", "reboot", "locate" or
-    "link" (link health)."""
+    """(offered, why not) for "update", "edit" (the config editor for every kind), "backup",
+    "upload", "login", "scan", "reboot", "locate" or "link" (link health)."""
     fam, kind = family(d), config_kind(d)
     if action == "update":
         ok = fam in UPDATE_STEPS
     elif action == "scan":
         ok = fam in SCAN_FAMILIES
-    elif action == "config":
-        ok = kind in ("airos", "isp")
     elif action in ("edit", "backup", "upload"):
         ok = bool(kind)
     elif action == "reboot":
@@ -272,10 +268,14 @@ def device_version(d) -> str:
     """The version a device runs, from its firmware string: "8.7.11" from
     XC.qca955x.v8.7.11.46972..., "2.0.9-hotfix.7" from e50.v2.0.9-hotfix.7..., "5.60.1" from
     BZ.mt7621_5.60.1+12923..., or a plain "5.2.10"."""
-    raw = d.info.get("firmware") or ""
+    return firmware_version(d.info.get("firmware") or "", d.firmware or "")
+
+
+def firmware_version(raw: str, plain: str = "") -> str:
+    """device_version's reading of a firmware string (raw), else of a plain version string."""
     version = r"(\d+\.\d+(?:\.\d+)?)"  # what follows is the build number and date
     m = (re.search(rf"\.v{version}(-hotfix\.\d+)?", raw) or re.search(rf"_{version}", raw)
-         or re.match(rf"v?{version}", raw) or re.match(rf"v?{version}", d.firmware or ""))
+         or re.match(rf"v?{version}", raw) or re.match(rf"v?{version}", plain))
     return "".join(g for g in m.groups() if g) if m else ""
 
 
@@ -1228,8 +1228,21 @@ class Backup:
     def reason(self) -> str:
         return str(self.meta.get("reason") or "")
 
+    @property
+    def version(self) -> str:
+        """The version its device ran when it was taken, else the firmware string kept with it."""
+        raw = str(self.meta.get("firmware") or "")
+        return firmware_version(raw) or raw
+
     def text(self) -> str:
         return self.path.read_bytes().decode("utf-8", "replace")
+
+    def holds(self, text: str) -> bool:
+        """Whether it's exactly this config (False when it can't be read)."""
+        try:
+            return self.path.read_bytes() == text.encode("utf-8")
+        except OSError:
+            return False
 
 
 def backup_root(root=None) -> Path:
@@ -1403,11 +1416,8 @@ def back_up(login: sshrun.Login, d, kind: str, stop=None) -> tuple:
     ("backed up", the new Backup) or ("unchanged", the last one)."""
     text = read_current(login, kind, stop)
     kept = list_backups(d.mac) if d.mac else []
-    try:
-        if kept and kept[0].path.read_bytes() == text.encode("utf-8"):
-            return "unchanged", kept[0]
-    except OSError:
-        pass
+    if kept and kept[0].holds(text):
+        return "unchanged", kept[0]
     return "backed up", save_backup(d, text, kind, "backup")
 
 
@@ -2207,7 +2217,6 @@ def change_edgeos_login(login: sshrun.Login, new: sshrun.Login, steps: list, rep
 # because Python 3.13 dropped the crypt module. airOS reads MD5-crypt only; matching the
 # device's current hash keeps it that way.
 _ITOA64 = "./0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz"
-_SALT = re.compile(r"[./0-9A-Za-z]*")
 
 
 def hash_scheme(stored: str) -> str:

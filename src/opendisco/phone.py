@@ -506,7 +506,25 @@ def _copy_items(app) -> list:
 
 def say(app, text: str):
     """Add lines to the console."""
+    _flush(app)  # after the SSH output that came before them
     _append(app, text.rstrip("\n") + "\n")
+
+
+def _stream(app, text: str):
+    """SSH output as it arrives, often a few bytes at a time: gathered for a tenth of a second and
+    added at once, so the console's whole text isn't rewritten for every chunk."""
+    pending = app.__dict__.setdefault("console_pending", [])
+    pending.append(text)
+    if len(pending) == 1:
+        app.loop.call_later(0.1, _flush, app)
+
+
+def _flush(app):
+    pending = getattr(app, "console_pending", None)
+    if pending:
+        text = "".join(pending)
+        pending.clear()
+        _append(app, text)
 
 
 def _append(app, text: str):
@@ -603,15 +621,8 @@ async def _work(app, fn, *args):
 
 
 def route(app, d) -> list:
-    """The devices on the way to d, the nearest first: the ones it was found through (as
-    devicegui.route on the desktop). Empty for a device found directly."""
-    devices = app.result.inv.devices if app.result else {}
-    chain, seen, current = [], {d.key}, d
-    while current.found_by.get("key") in devices and current.found_by["key"] not in seen:
-        current = devices[current.found_by["key"]]
-        seen.add(current.key)
-        chain.insert(0, current)
-    return chain
+    """The devices on the way to d, the nearest first (Inventory.route)."""
+    return app.result.inv.route(d) if app.result else []
 
 
 async def ask_route(app, d, purpose: str):
@@ -740,7 +751,7 @@ async def toggle_ssh(app):
     key = d.key
     app._tool_said(tr("SSH to {where} as {user}…", where=login.where, user=login.user), begins=True)
     # It starts in the background; a failure arrives as the reason it closed.
-    session = phonessh.Shell(login, lambda text: app._from_worker(_append, app, phonessh.plain(text)),
+    session = phonessh.Shell(login, lambda text: app._from_worker(_stream, app, phonessh.plain(text)),
                              lambda reason: app._from_worker(_ssh_ended, app, key, reason), cols=SHELL_COLUMNS)
     app.ssh = (key, session)
     app.tools_box.insert(len(app.tools_box.children) - 1, app.ssh_row)

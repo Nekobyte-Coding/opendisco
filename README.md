@@ -1339,7 +1339,7 @@ Linux one inside containers, so nothing big ends up in iCloud. Finished installe
 | `src/opendisco/phone.py`, `phone_android.py`, `phone_ios.py` | The phone screens, shared by Android and iPhone/iPad, and each one's native parts |
 | `src/opendisco/terminal.py` | The Terminal tab: SSH and ping sessions |
 | `src/opendisco/devicetools.py`, `devicegui.py`, `phonetools.py` | The device tools over SSH (firmware, config backups and uploads, Reboot, Locate, login, Scan from device) and their windows on desktops and phones |
-| `src/opendisco/sshrun.py`, `phonessh.py`, `credstore.py` | SSH for the device tools (the computer's `ssh` and `scp`; asyncssh on phones and on a Linux system without them) and remembered logins in the system's credential store |
+| `src/opendisco/sshrun.py`, `phonessh.py`, `sshcommon.py`, `credstore.py` | SSH for the device tools (the computer's `ssh` and `scp`; asyncssh on phones and on a Linux system without them; what both share: the login, result and error) and remembered logins in the system's credential store |
 | `src/opendisco/vulns.py` | The CVE check and its updates from the NVD and Ubiquiti's advisories |
 | `src/opendisco/health.py` | Each device's latest firmware, and latency |
 | `src/opendisco/linkhealth.py` | airMAX link health: airOS's `mca-status` and `wstalist` read, the weak links flagged, Details' Link section and the exports' part |

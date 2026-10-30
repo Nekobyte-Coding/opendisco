@@ -73,7 +73,6 @@ PORT_SEARCH_WARNING = N_("A port search connects to {ip}'s TCP ports: all 65,535
                           "a usual one. Intrusion prevention on the network (UniFi's IPS / Threat Management, a "
                           "firewall's port-scan detection) can take that for a port scan from this computer: it may "
                           "raise an alert, a false alarm here, or block this computer for a while.")
-NO_SESSION = "Right-click a device to get started: Open SSH or Ping."
 SITE_EXAMPLE = N_("Tower 1, Main office…")  # the Site Report's site name, before one is typed
 # The Settings window's checkboxes: settings.json key -> text. All are on until turned off.
 SETTINGS = {"check_app_updates": N_("Check for OpenDisco updates when opening"),
@@ -1627,21 +1626,26 @@ class OpenDiscoApp(toga.App):
 
     # -- rescanning one device -------------------------------------------------------
     def _rescan(self, d):
+        self._tool_said(tr("Rescanning {ip}…", ip=d.ip), begins=True)
+        asyncio.create_task(self.reread(d))
+
+    async def reread(self, d):
+        """Rescan d as a device tool's last step (after a firmware update, say): (the device as found
+        again, whether it answered discovery). None when a scan, a rescan or a port search is busy."""
+        result = self.result
+        if not result or self.running or self.rescanning or self.finding:
+            return None
         self.rescanning = True
         self._update_find_buttons()
         self.spinner.start()
-        self._tool_said(tr("Rescanning {ip}…", ip=d.ip), begins=True)
-        result = self.result
-
-        def work():
-            error = None
-            try:
-                dev, answered = core.rescan_device(result, d, lambda m: self._from_worker(self._append_log, m))
-            except Exception as e:
-                dev, answered, error = d, False, f"{type(e).__name__}: {e}"
-            self._from_worker(self._rescanned, result, dev, answered, error)
-
-        threading.Thread(target=work, daemon=True).start()
+        error = None
+        try:
+            dev, answered = await self.loop.run_in_executor(
+                None, core.rescan_device, result, d, lambda m: self._from_worker(self._append_log, m))
+        except Exception as e:
+            dev, answered, error = d, False, f"{type(e).__name__}: {e}"
+        self._rescanned(result, dev, answered, error)
+        return dev, answered
 
     def _rescanned(self, result, d, answered, error):
         self.rescanning = False

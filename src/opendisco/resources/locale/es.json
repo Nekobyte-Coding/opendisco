@@ -821,7 +821,6 @@
  "The new login works; {user} wasn't deleted, so both work now.": "Las nuevas credenciales funcionan; {user} no se eliminó, así que ahora funcionan ambas.",
  "Committed and saved: {new} logs in (checked), and {old} is deleted.": "Confirmado y guardado: {new} inicia sesión (comprobado) y {old} se eliminó.",
  "Committed and saved: {user} takes the new password (checked by logging in with it).": "Confirmado y guardado: {user} acepta la nueva contraseña (comprobado iniciando sesión con ella).",
- "not for EdgeOS here": "no disponible aquí para EdgeOS",
  "The latest release for {platform} is {latest} ({date}); the version it runs is unknown.": "La versión más reciente para {platform} es {latest} ({date}); se desconoce la versión que ejecuta.",
  "The release found isn't for a UniFi access point or switch.": "La versión encontrada no es para un punto de acceso o switch UniFi.",
  "{platform} firmware needs extra steps the app doesn't do.": "El firmware de {platform} necesita pasos adicionales que la aplicación no realiza.",

@@ -32,7 +32,6 @@ from opendisco import FULL_NAME, __version__, core, demossh, devicetools, health
 from opendisco.i18n import N_, _, tr
 
 MODE = N_("Demo network")
-MODE_HELP = N_("Made-up WISP gear, for trying the app without any.")
 STAMP = records.DEMO_STAMP  # "Demo network: made-up devices"
 NOTE = (f"{STAMP}. Nothing was sent on the network: the device tools work on simulated gear. Log in as demo / demo "
         "(the bench spare: ubnt / ubnt).")
@@ -410,8 +409,6 @@ def _tidy(mobile: bool) -> None:
         except OSError:
             pass
 
-KEPT_APART = ("hidden", "ssh_user", "device_logins", "factory_logins")  # settings.json's, and the demo's own
-
 
 class Credentials:
     """credstore's stand-in while the demo shows: the made-up devices' passwords, in memory."""
@@ -438,11 +435,11 @@ class Credentials:
 
 class Demo:
     """The demo network in the app, from its first scan to end(). It gives the app what the demo
-    keeps apart (KEPT_APART, the notes, known_hosts, backups, the firmware lookup) and the device
-    tools demossh in place of the network, and puts all of it back when it ends. demossh stays as
-    the modules' sshrun after that: it hands a real login to the real module, and refuses a
-    login made for the demo, so a tool still finishing on a made-up device can't reach the
-    network."""
+    keeps apart (settings.json's hidden devices, SSH user and logins, the notes, known_hosts,
+    backups, the firmware lookup) and the device tools demossh in place of the network, and puts
+    all of it back when it ends. demossh stays as the modules' sshrun after that: it hands a real
+    login to the real module, and refuses a login made for the demo, so a tool still finishing on
+    a made-up device can't reach the network."""
 
     def __init__(self, app):
         self.app = app
