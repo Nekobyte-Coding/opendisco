@@ -6,6 +6,8 @@ Packet capture needs Npcap (npcap.com; Wireshark installs it too). Its default i
 any user capture, so sniffing doesn't need administrator rights. Temporary addresses do: netsh
 changes adapters, so those modes ask Windows (UAC) to run the scan as administrator.
 """
+from __future__ import annotations
+
 import ctypes
 import json
 import os
@@ -22,9 +24,13 @@ _ADAPTERS = {"at": 0.0, "rows": []}
 
 def powershell_json(command: str) -> list:
     try:
+        # In UTF-8: Windows PowerShell writes redirected output in the console's code page otherwise,
+        # which garbled an adapter named in another script ("Беспроводная сеть", "Réseau").
         r = subprocess.run(["powershell", "-NoProfile", "-NonInteractive", "-Command",
+                            "[Console]::OutputEncoding = [System.Text.Encoding]::UTF8; "
                             f"{command} | ConvertTo-Json -Depth 3"],
-                           capture_output=True, text=True, timeout=30, errors="replace", creationflags=CREATE_NO_WINDOW)
+                           capture_output=True, encoding="utf-8", timeout=30, errors="replace",
+                           creationflags=CREATE_NO_WINDOW)
         data = json.loads(r.stdout) if r.stdout.strip() else []
     except (OSError, subprocess.SubprocessError, ValueError):
         return []
@@ -228,15 +234,19 @@ def capture(names, seconds: float, on_frames=None, stop=None, snaplen: int = 160
 def wifi_association(name: str) -> dict:
     """SSID and BSSID of the access point a Wi-Fi adapter is joined to (netsh wlan)."""
     try:
-        out = subprocess.run(["netsh", "wlan", "show", "interfaces"], capture_output=True, text=True, timeout=10,
-                             errors="replace", creationflags=CREATE_NO_WINDOW).stdout
+        out = subprocess.run(["netsh", "wlan", "show", "interfaces"], capture_output=True, timeout=10,
+                             encoding="oem", errors="replace",  # (the console's code page, as netsh writes)
+                             creationflags=CREATE_NO_WINDOW).stdout
     except (OSError, subprocess.SubprocessError):
         return {}
-    info, current = {}, None
+    info, current, block = {}, None, True
     for line in out.splitlines():
+        if not line.strip():
+            block = True
+            continue
         key, _, value = (part.strip() for part in line.partition(":"))
-        if key.lower() == "name":
-            current = value
+        if block and value:  # each adapter's lines start with its name: "Name", "Nombre", "名前"… as Windows speaks
+            current, block = value, False
         elif current == name and key.upper() in ("BSSID", "AP BSSID") and value:  # "AP BSSID" on Windows 11
             info["bssid"] = value.split()[0].lower()
         elif current == name and key.upper() == "SSID" and value:

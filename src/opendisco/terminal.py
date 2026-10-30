@@ -10,6 +10,8 @@ own SSH client instead (OwnSession, over phonessh), in a pseudo-terminal on the 
 The terminal itself is xterm.js in a web view. The web view has no way to call Python, so the
 pane polls it for keystrokes and sends output back in batches.
 """
+from __future__ import annotations
+
 import asyncio
 import base64
 import html
@@ -97,14 +99,16 @@ def host_key_alias(mac: str | None, ip: str) -> str:
     """The name ssh files a device's host key under: its MAC, so a different radio at the same
     factory address isn't mistaken for the last one, while a changed key on the same device is
     still caught."""
-    return "ubnt-" + mac.replace(":", "") if mac else ip
+    mac = (mac or "").lower()
+    valid = re.fullmatch(r"(?:[0-9a-f]{2}:){5}[0-9a-f]{2}", mac)  # (anything else could be a known_hosts pattern)
+    return "ubnt-" + mac.replace(":", "") if valid else ip
 
 
 def ssh_argv(ip: str, port: int, user: str, alias: str, known_hosts: Path) -> list:
     argv = [ssh_program(), "-p", str(port),  # quoted: ssh splits this option on spaces ("Application Support")
             "-o", f'UserKnownHostsFile="{known_hosts}"', "-o", "StrictHostKeyChecking=accept-new",
             "-o", f"HostKeyAlias={alias}", "-o", "ConnectTimeout=10", "-o", "ServerAliveInterval=15",
-            *legacy_ssh_options()]
+            "-o", "ControlMaster=no", "-o", "ControlPath=none", *legacy_ssh_options()]  # (no connection shared)
     if user:
         argv += ["-l", user]
     return argv + [ip]
@@ -151,6 +155,21 @@ def prompt_password(passwords, prompt: bytes) -> tuple:
     return host, passwords.get(host)
 
 
+def may_type(passwords, who, typed: dict, limit: int) -> bool:
+    """Whether to type who's password now: at most limit times for one name, and never for a device
+    before one already answered on the route. The devices log in in route order, so a prompt
+    naming an earlier one can only be printed by a device further along, fishing for its password
+    (unless it's the same password, which that device has already)."""
+    if typed.get(who, 0) >= limit:
+        return False
+    answered = [name for name in typed if name in passwords] if isinstance(passwords, dict) else []
+    if not answered:
+        return True
+    names = list(passwords)  # (Login.passwords: in route order, the nearest first)
+    last = max(answered, key=names.index)
+    return names.index(who) >= names.index(last) or passwords[who] == passwords[last]
+
+
 def _take_terminal():  # runs in the child between fork and exec, so nothing that imports or allocates
     fcntl.ioctl(0, termios.TIOCSCTTY, 0)  # so ssh can read the password from its terminal
 
@@ -174,7 +193,7 @@ class Session:
 
     # -- running ---------------------------------------------------------
     def start(self) -> None:
-        self.typed, self.tail = set(), b""
+        self.typed, self.tail = {}, b""
         env = dict(os.environ, TERM="xterm-256color")
         rows, cols = self.size
         if IS_WINDOWS:
@@ -221,8 +240,8 @@ class Session:
         shown = plain(self.tail)
         if self.password and PASSWORD_PROMPT.search(shown):
             who, password = prompt_password(self.password, shown)
-            if password and who not in self.typed:
-                self.typed.add(who)
+            if password and may_type(self.password, who, self.typed, 1):
+                self.typed[who] = 1
                 self.tail = b""
                 self.write((password + "\r").encode())
 
@@ -569,7 +588,8 @@ class TerminalPane:
             asyncio.get_event_loop().create_task(self._pump())
 
     async def _pump(self) -> None:
-        """Every 30 ms: keystrokes and terminal sizes from the page, output to it."""
+        """Every 30 ms: keystrokes and terminal sizes from the page, output to it. Twice a second
+        once no session is running and nothing moved: ended sessions only stay until closed."""
         try:
             while self.sessions or self.pending:
                 if not self.ready:
@@ -582,7 +602,8 @@ class TerminalPane:
                         await asyncio.sleep(0.1)
                         continue
                 raw = await self.view.evaluate_javascript("take()")
-                for item in json.loads(str(raw) if raw else "[]"):
+                items = json.loads(str(raw) if raw else "[]")
+                for item in items:
                     session = self.sessions.get(item[0])
                     if session is None:
                         continue
@@ -597,6 +618,7 @@ class TerminalPane:
                         batch[sid] = base64.b64encode(data).decode()
                 if batch:
                     self.view.evaluate_javascript(f"write({json.dumps(batch)})")
-                await asyncio.sleep(0.03)
+                busy = items or batch or any(getattr(s, "alive", True) for s in self.sessions.values())
+                await asyncio.sleep(0.03 if busy else 0.5)
         finally:
             self.pumping = False

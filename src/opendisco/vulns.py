@@ -45,7 +45,8 @@ NVD_LIMIT = (5, 30.0)
 SOURCES = ["NVD (https://nvd.nist.gov)", "Ubiquiti Security Advisory Bulletins (https://community.ui.com/releases)"]
 
 
-# The NVD's terms of use ask apps that use its API to say this, prominently.
+# The NVD's terms of use ask apps that use its API to say this, prominently. It stays in English, as
+# the NVD words it: no catalog has it, so _() leaves it as it is.
 NVD_NOTICE = "This product uses the NVD API but is not endorsed or certified by the NVD."
 
 
@@ -69,7 +70,7 @@ def default_data_dir() -> Path:
 # Versions
 # ---------------------------------------------------------------------------
 
-_VERSION = re.compile(r"v?(\d+(?:\.\d+)*)(?:-hotfix\.?(\d+))?")
+_VERSION = re.compile(r"v?(\d{1,9}(?:\.\d{1,9})*)(?:-hotfix\.?(\d{1,9}))?")  # (digits a device sends: bounded)
 # "XC.qca955x.v8.7.11.46972.220614.0419", "e50.v2.0.9-hotfix.7.5622731.230615.0857": the platform,
 # its chip, then the version, a build number (or commit) and the build's date and time.
 _FIRMWARE = re.compile(r"[A-Za-z0-9-]+(?:\.[A-Za-z0-9_-]+)?\.v(\d[\w.+-]*)$")
@@ -1087,7 +1088,7 @@ def refresh(cache_dir, log=None, timeout: float = 60.0) -> bool:
     started = time.monotonic()
     try:
         nvd = fetch_nvd(timeout=timeout)
-    except (OSError, ValueError, TimeoutError) as e:
+    except Exception as e:  # (a page cut short is http.client's IncompleteRead, no OSError; a changed shape, TypeError)
         say(f"Couldn't update the CVE list from the NVD: {e}")
         return False
     advisories, carried = [], []
@@ -1095,7 +1096,7 @@ def refresh(cache_dir, log=None, timeout: float = 60.0) -> bool:
         advisories, skipped = fetch_bulletins(timeout=max(10.0, timeout - (time.monotonic() - started)))
         for ids, why, title in skipped:
             say(f"Left out {', '.join(ids)} ({title}): {why}")
-    except (OSError, ValueError, KeyError, TimeoutError) as e:
+    except Exception as e:  # (as above: what was read from the NVD is kept either way)
         before = _read(Path(cache_dir) / CACHE_NAME) or current()[0]  # what the last refresh read from them
         carried = [c for c in before["cves"] if c.get("source") == "advisory"]
         say(f"Couldn't read Ubiquiti's security advisories ({e}); keeping the {len(carried)} CVE(s) read from "

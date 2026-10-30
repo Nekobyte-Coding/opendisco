@@ -9,6 +9,8 @@ so files always travel by scp.
 Every failure is an SSHError whose text says what went wrong in terms of the device: a changed
 host key, a wrong password, no answer, an SSH server that only speaks retired algorithms.
 """
+from __future__ import annotations
+
 import atexit
 import hashlib
 import os
@@ -19,16 +21,16 @@ import signal
 import subprocess
 import threading
 import time
-from dataclasses import dataclass
 from pathlib import Path
 
 from opendisco import terminal
 from opendisco.i18n import _, tr
+from opendisco.sshcommon import (ANSI, CLIENT_NOISE, Login, Result, SSHError, _as_dict, last_hop,
+                                 nested_command, nested_failure, route_text)  # (shared with phonessh)
 
 IS_WINDOWS = terminal.IS_WINDOWS
 PASSPHRASE_PROMPT = re.compile(rb"(?i)passphrase for key[^\r\n]{0,200}:\s*$")
 PROGRESS = re.compile(rb"(\d{1,3})%")
-ANSI = re.compile(r"\x1b\[[0-9;?]*[ -/]*[@-~]|\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)|\x1b[()][0-9A-Za-z]|\x1b[=>]")
 # Windows' console (ConPTY) paints what it shows: a line can start with a cursor move to its row
 # instead of a line break, and spaces can be cursor moves to the right.
 ROW_MOVE = re.compile(r"\x1b\[\d*(?:;\d*)?[Hf]")
@@ -36,52 +38,6 @@ RIGHT_MOVE = re.compile(r"\x1b\[(\d*)C")
 
 if not IS_WINDOWS:
     import pty
-
-
-class SSHError(Exception):
-    """kind: "key" (host key changed), "auth", "refused", "timeout", "unreachable",
-    "algorithms", "space", "cancelled" or "other"."""
-
-    def __init__(self, message: str, kind: str = "other"):
-        super().__init__(message)
-        self.kind = kind
-
-
-@dataclass
-class Login:
-    ip: str
-    port: int
-    user: str
-    password: str
-    alias: str  # the name its host key is filed under (terminal.host_key_alias)
-    known_hosts: Path
-    via: tuple = ()  # the logins of the devices on the way to it, the nearest to this computer first
-    nested: bool = False  # a device on the way refused to forward: run commands on the last hop instead
-
-    @property
-    def where(self) -> str:
-        if self.via:
-            return tr("{ip} port {port} (via {route})", ip=self.ip, port=self.port, route=route_text(self))
-        return tr("{ip} port {port}", ip=self.ip, port=self.port)
-
-    @property
-    def passwords(self):
-        """The password to type, or one per device on the way, by the name its prompt shows: its
-        host key alias for ssh, its address for a hop's own client."""
-        if not self.via:
-            return self.password
-        return {**{hop.alias: hop.password for hop in self.via}, self.alias: self.password, self.ip: self.password}
-
-
-def route_text(login: Login) -> str:
-    return " → ".join(hop.ip for hop in login.via)
-
-
-@dataclass
-class Result:
-    code: int
-    out: str  # what the command printed (on Windows, mixed with what ssh printed)
-    err: str  # what it and ssh printed to the terminal
 
 
 def available() -> bool:
@@ -112,11 +68,18 @@ def scp_legacy_flag() -> list:
     return _SCP_LEGACY
 
 
+# The login given and nothing else: not a connection shared through ~/.ssh/config (ControlMaster),
+# which logs in without the password, so a wrong or new one would pass unchecked, and not this
+# account's keys, which can use up a device's login attempts before the password is tried.
+OWN_LOGIN = ["-o", "ControlMaster=no", "-o", "ControlPath=none", "-o", "PubkeyAuthentication=no"]
+
+
 def _options(login: Login) -> list:
     # One password prompt per attempt, so a wrong one fails at once instead of asking again.
     return ["-o", f'UserKnownHostsFile="{login.known_hosts}"', "-o", "StrictHostKeyChecking=accept-new",
             "-o", f"HostKeyAlias={login.alias}", "-o", "ConnectTimeout=10", "-o", "ServerAliveInterval=15",
-            "-o", "ServerAliveCountMax=3", "-o", "NumberOfPasswordPrompts=1", *terminal.legacy_ssh_options()]
+            "-o", "ServerAliveCountMax=3", "-o", "NumberOfPasswordPrompts=1", *OWN_LOGIN,
+            *terminal.legacy_ssh_options()]
 
 
 def ssh_command(login: Login, command: str | None, *extra) -> list:
@@ -151,7 +114,7 @@ def _hop_entry(name: str, login: Login, jump: str | None) -> str:
              f"  HostKeyAlias {login.alias}", f'  UserKnownHostsFile "{login.known_hosts}"',
              "  StrictHostKeyChecking accept-new", "  ConnectTimeout 10", "  ServerAliveInterval 15",
              "  ServerAliveCountMax 3", "  NumberOfPasswordPrompts 1"]
-    options = terminal.legacy_ssh_options()
+    options = OWN_LOGIN + terminal.legacy_ssh_options()
     lines += [f"  {o.replace('=', ' ', 1)}" for o in options[1::2]]
     if jump:
         lines.append(f"  ProxyJump {jump}")
@@ -182,29 +145,6 @@ def route_config(login: Login, upto: int | None = None) -> Path:
         path.chmod(0o600)
     return path
 
-
-def last_hop(login: Login) -> Login:
-    """The device just before this one on its route, reached through the ones before it."""
-    *before, hop = login.via
-    return Login(hop.ip, hop.port, hop.user, hop.password, hop.alias, hop.known_hosts, tuple(before))
-
-
-def _quote(text: str) -> str:
-    return "'" + text.replace("'", "'\\''") + "'"
-
-
-def nested_command(login: Login, command: str | None) -> str:
-    """Run command (None: a shell) on the device through the last hop's own SSH client (Dropbear's
-    dbclient, or ssh), for a hop that refuses to forward connections. That hop checks the
-    device's host key."""
-    target = f"-p {login.port} -l {_quote(login.user)} {login.ip}" + (f" {_quote(command)}" if command else "")
-    return (f"if command -v dbclient >/dev/null 2>&1; then dbclient -y {target}; "
-            f"else ssh -o StrictHostKeyChecking=accept-new {target}; fi")
-
-
-# ---------------------------------------------------------------------------
-# Running
-# ---------------------------------------------------------------------------
 
 def run(login: Login, command: str, timeout: float = 60, stop: threading.Event | None = None) -> Result:
     """Run a command on the device. Raises SSHError when ssh couldn't connect or log in;
@@ -237,17 +177,13 @@ def _run_nested(login: Login, command: str, timeout: float, stop) -> Result:
     code, _out, text = _spawn(ssh_command(hop, nested_command(login, command), "-tt"),
                               {**_as_dict(hop), login.ip: login.password}, timeout, timeout, stop=stop)
     lines = [l for l in text.split("\n") if not terminal.PASSWORD_PROMPT.search(l.encode() + b" ")
-             and not l.startswith(("Warning: Permanently added", "Connection to ", "Host '"))]
-    failure = _failure(text, code, login)
-    if failure and (code == 255 or failure.kind in ("key", "auth")):
+             and not CLIENT_NOISE.match(l)]
+    # The ssh to the hop failing (255), else the hop's own client failing to reach the device
+    failure = (_failure(text, code, login) if code == 255 else None) or nested_failure(text, login)
+    if failure:
         raise failure
     out = "\n".join(lines).strip("\n") + "\n"
     return Result(code, out, text)
-
-
-def _as_dict(login: Login) -> dict:
-    passwords = login.passwords
-    return passwords if isinstance(passwords, dict) else {login.alias: passwords, login.ip: passwords}
 
 
 def check_login(login: Login, stop: threading.Event | None = None) -> None:
@@ -398,7 +334,7 @@ class _Watcher:
         if terminal.PASSWORD_PROMPT.search(shown):
             who, password = terminal.prompt_password(self.password, shown)
             self.tail = b""
-            if password and self.typed.get(who, 0) < 2:
+            if password and terminal.may_type(self.password, who, self.typed, 2):
                 self.typed[who] = self.typed.get(who, 0) + 1
                 self.write((password + "\r").encode("utf-8"))
             else:

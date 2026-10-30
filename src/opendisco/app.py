@@ -8,7 +8,9 @@ Windows can't capture traffic, add addresses or tag VLANs. The iOS app doesn't u
 import asyncio
 import json
 import math
+import os
 import shutil
+import signal
 import textwrap
 import threading
 import time
@@ -73,7 +75,6 @@ PORT_SEARCH_WARNING = N_("A port search connects to {ip}'s TCP ports: all 65,535
                           "a usual one. Intrusion prevention on the network (UniFi's IPS / Threat Management, a "
                           "firewall's port-scan detection) can take that for a port scan from this computer: it may "
                           "raise an alert, a false alarm here, or block this computer for a while.")
-NO_SESSION = "Right-click a device to get started: Open SSH or Ping."
 SITE_EXAMPLE = N_("Tower 1, Main office…")  # the Site Report's site name, before one is typed
 # The Settings window's checkboxes: settings.json key -> text. All are on until turned off.
 SETTINGS = {"check_app_updates": N_("Check for OpenDisco updates when opening"),
@@ -261,6 +262,12 @@ class OpenDiscoApp(toga.App):
             offered.update(listen=True, vlans=self.caps["aliases"])
         self.modes = [m for m in MODES if m[3] is None or offered.get(m[3])]
         self.offers_listening = offered["listen"]
+        if not self.caps["mobile"] and self.caps["platform"] != "windows":
+            for name in ("SIGTERM", "SIGHUP"):  # killed, logged out, its terminal closed
+                try:
+                    self.loop.add_signal_handler(getattr(signal, name), self._ended_by_signal, getattr(signal, name))
+                except (NotImplementedError, RuntimeError, ValueError):
+                    pass
         self.result = None  # the last finished scan
         self.demo = None  # demo.Demo while the demo network shows
         self.live_inv = None  # the inventory of the scan that's running
@@ -273,6 +280,7 @@ class OpenDiscoApp(toga.App):
         self.cancel_port_warning = None
         self.port_warning_accepted = False  # phones: asked once per run
         self.updating = False  # checking for, downloading or installing an update
+        self.starting = False  # Start was clicked and is waiting (Npcap, administrator rights, Keep addresses)
         self.update_cancel = None  # stops a download
         self.close_settings = None
         self._panels = []  # Android: (page, what Back does, title, subtitle) over the device list, newest last
@@ -539,16 +547,30 @@ class OpenDiscoApp(toga.App):
     # -- set-up helpers -----------------------------------------------------
     def _load_settings(self) -> dict:
         try:
-            return json.loads(self.settings_path.read_text(encoding="utf-8"))
-        except (OSError, ValueError):
+            text = self.settings_path.read_text(encoding="utf-8")
+        except OSError:
             return {}
+        try:
+            settings = json.loads(text)
+        except ValueError:
+            settings = None
+        if not isinstance(settings, dict):  # damaged: kept aside, not overwritten by the next save
+            try:
+                os.replace(self.settings_path, self.settings_path.with_name("settings.json.unreadable"))
+            except OSError:
+                pass
+            return {}
+        return settings
 
     def _save_settings(self):
         try:
             self.settings_path.parent.mkdir(parents=True, exist_ok=True)
             settings = self.demo.saved_settings(self.settings) if self.demo else self.settings  # never the demo's
-            self.settings_path.write_text(json.dumps({k: v for k, v in settings.items()
-                                                      if k in SAVED_SETTINGS}, indent=1), encoding="utf-8")
+            # Written beside it, then swapped in: a full disk or a crash mid-write can't leave it half there
+            tmp = self.settings_path.with_name("settings.json.tmp")
+            tmp.write_text(json.dumps({k: v for k, v in settings.items() if k in SAVED_SETTINGS}, indent=1),
+                           encoding="utf-8")
+            os.replace(tmp, self.settings_path)
         except OSError:
             pass
 
@@ -984,7 +1006,7 @@ class OpenDiscoApp(toga.App):
         return True
 
     async def on_start(self, widget, **kwargs):
-        if self.running:
+        if self.running or self.starting:
             return
         if "--demo" in self._selected_mode()[2]:
             await self._show_demo()
@@ -995,16 +1017,21 @@ class OpenDiscoApp(toga.App):
                 self.status.text = tr("The demo network's {task} is still running: scan once it has finished.",
                                       task=busy)
                 return
-            self.demo.end()
-            self.demo = None
-        if self.caps["platform"] == "windows" and not await self._windows_ready():
-            return
+        self.starting = True  # (a second click while this one waits starts nothing)
         try:
-            opts = core.parse_args(self._args())
-        except SystemExit as e:
-            await self.main_window.dialog(toga.ErrorDialog(_("Can't start"), str(e.code)))
-            return
-        await self._release_hold()
+            if self.caps["platform"] == "windows" and not await self._windows_ready():
+                return
+            try:
+                opts = core.parse_args(self._args())
+            except SystemExit as e:
+                await self.main_window.dialog(toga.ErrorDialog(_("Can't start"), str(e.code)))
+                return
+            if self.demo is not None:  # only now, when nothing can call the scan off: the demo's devices go
+                self.demo.end()
+                self.demo = None
+            await self._release_hold()
+        finally:
+            self.starting = False
         self.running, self.result, self.live_inv = True, None, None
         self.shown_packets = None
         self.table.data = []
@@ -1021,15 +1048,36 @@ class OpenDiscoApp(toga.App):
         """The demo network (demo.py): made-up gear, listed at once, with nothing sent on the network.
         Starting it again lists the made-up devices as they are now."""
         from opendisco import demo
+        if self.demo is None:  # it stands in for the device tools' parts: not while real ones use them
+            busy = self._real_tools_busy()
+            if busy:
+                self.status.text = tr("The demo network opens once {what} has finished or is closed.", what=busy)
+                return
         await self._release_hold()
         if self.demo is None:
             self.demo = demo.Demo(self)
         self.result = self.live_inv = self.shown_packets = None
         self.table.data = []
         self.details.value = self.packets.value = self.wire.value = self.notes.value = ""
-        self.log.value = f"{time.strftime('%H:%M:%S')}  {demo.MODE}: {demo.NOTE}\n"
+        self.log.value = f"{time.strftime('%H:%M:%S')}  {_(demo.MODE)}: {demo.note()}\n"
         self._finished(self.demo.scan(), None)
         self.status.text = self.demo.status(self.result)
+
+    def _real_tools_busy(self) -> str:
+        """What's running or open on real devices (the demo's stand-ins would take their place)."""
+        job = getattr(self, "device_job", None)
+        if job:  # (the phones' device tools)
+            from opendisco import demo
+            return _(demo.PHONE_JOBS.get(job["name"], job["name"]))
+        if not self.caps["mobile"]:
+            from opendisco import devicegui
+            if devicegui._busy:
+                return ", ".join(sorted({_(doing) for doing in devicegui._busy.values()}))
+            others = [w for w in self.windows if w is not self.main_window and not w.closed
+                      and w.title != _("Settings")]
+            if others:
+                return tr("the {title} window", title=others[0].title)
+        return ""
 
     def try_demo(self, *args, **kwargs):
         """Help > Try the demo network (phones: Settings, or the button over an empty list)."""
@@ -1110,11 +1158,33 @@ class OpenDiscoApp(toga.App):
                         setattr(row, attr, value)
         else:
             self.table.data = [dict(values, key=key) for key, values in rows]
+            if not self.caps["mobile"]:
+                self._reselect(selected)
             self._columns_sized = None  # Linux: new columns, to be sized again
         if self.caps["platform"] in ("windows", "linux"):
             self._size_columns()  # to what the rows hold now
         if self.phone_ui:  # iOS forgets the tapped row whenever a row changes
             phone.keep_selection(self, selected)
+
+    def _reselect(self, key):
+        """After the rows were replaced: the device that was selected, selected again (or none).
+        macOS's table keeps the selected row's position, which can be another device by now, while
+        Details still showed the first: the Device menu would have acted on the other one."""
+        if getattr(self.table.selection, "key", None) == key:
+            return
+        index = next((i for i, row in enumerate(self.table.data) if getattr(row, "key", None) == key), None)
+        native = getattr(self.table._impl, "native_table", None)
+        if self.caps["platform"] == "macos" and native is not None:
+            try:
+                if index is None:
+                    native.deselectAll(None)
+                else:
+                    from rubicon.objc import ObjCClass
+                    native.selectRowIndexes(ObjCClass("NSIndexSet").indexSetWithIndex(index), byExtendingSelection=False)
+            except Exception:
+                pass
+        if getattr(self.table.selection, "key", None) != key:  # where it can't be: Details follows what's selected
+            self.on_select(self.table)
 
     def on_search(self, widget, **kwargs):
         self._show_devices(self._all_devices())
@@ -1627,21 +1697,26 @@ class OpenDiscoApp(toga.App):
 
     # -- rescanning one device -------------------------------------------------------
     def _rescan(self, d):
+        self._tool_said(tr("Rescanning {ip}…", ip=d.ip), begins=True)
+        asyncio.create_task(self.reread(d))
+
+    async def reread(self, d):
+        """Rescan d as a device tool's last step (after a firmware update, say): (the device as found
+        again, whether it answered discovery). None when a scan, a rescan or a port search is busy."""
+        result = self.result
+        if not result or self.running or self.rescanning or self.finding:
+            return None
         self.rescanning = True
         self._update_find_buttons()
         self.spinner.start()
-        self._tool_said(tr("Rescanning {ip}…", ip=d.ip), begins=True)
-        result = self.result
-
-        def work():
-            error = None
-            try:
-                dev, answered = core.rescan_device(result, d, lambda m: self._from_worker(self._append_log, m))
-            except Exception as e:
-                dev, answered, error = d, False, f"{type(e).__name__}: {e}"
-            self._from_worker(self._rescanned, result, dev, answered, error)
-
-        threading.Thread(target=work, daemon=True).start()
+        error = None
+        try:
+            dev, answered = await self.loop.run_in_executor(
+                None, core.rescan_device, result, d, lambda m: self._from_worker(self._append_log, m))
+        except Exception as e:
+            dev, answered, error = d, False, f"{type(e).__name__}: {e}"
+        self._rescanned(result, dev, answered, error)
+        return dev, answered
 
     def _rescanned(self, result, d, answered, error):
         self.rescanning = False
@@ -1781,6 +1856,10 @@ class OpenDiscoApp(toga.App):
     def _find(self, d, kind):
         """Look for one device's SSH, HTTPS or HTTP port, or every open port ("all"): the deep
         check, then all 65535 TCP ports until it turns up. Stop ends it."""
+        if self.running or self.rescanning or self.finding or self.result is None \
+                or self.result.inv.devices.get(d.key) is not d:  # (started while the warning was up)
+            self.status.text = _("Works once the scan has finished.")
+            return
         self.finding = True
         self.start_button.enabled, self.stop_button.enabled = False, True
         self._update_find_buttons()
@@ -1807,10 +1886,11 @@ class OpenDiscoApp(toga.App):
 
     def _found_ports(self, result, d, kind, ports, error):
         self.finding = False
-        self.spinner.stop()
-        self.start_button.enabled, self.stop_button.enabled = True, False
+        if not self.running:  # (a scan started meanwhile keeps its Stop)
+            self.spinner.stop()
+            self.start_button.enabled, self.stop_button.enabled = True, False
         self._update_find_buttons()
-        if result is not self.result:
+        if result is None or result is not self.result:
             return
         self._show_devices(result.devices)
         if self._selected_device() is d:
@@ -2318,6 +2398,7 @@ class OpenDiscoApp(toga.App):
         window.content = content
         self._show_over_main(window)
         self._fit_window(window)
+        close.window = window  # (to bring it to the front)
         return close
 
     def _push_page(self, page, title, subtitle="", on_back=None):
@@ -2392,6 +2473,10 @@ class OpenDiscoApp(toga.App):
         where temporary addresses work, the networks probed through them. Toga's standard Settings…
         command calls this."""
         if self.close_settings:  # open already: bring it back to the front
+            window = getattr(self.close_settings, "window", None)
+            if window is not None and not window.closed:
+                window.show()  # (closing it lost what was typed and not saved yet)
+                return
             self.close_settings()
         mono = Pack(flex=1, font_family="monospace", font_size=12 if self.caps["mobile"] else 11)
         sweep = toga.MultilineTextInput(value="\n".join(map(str, self.settings.get(records.SWEEP_KEY) or [])),
@@ -2878,6 +2963,14 @@ class OpenDiscoApp(toga.App):
         intent.setDataAndType(uri, "application/vnd.android.package-archive")
         intent.addFlags(intent_class.FLAG_GRANT_READ_URI_PERMISSION | intent_class.FLAG_ACTIVITY_NEW_TASK)
         activity.startActivity(intent)
+
+    def _ended_by_signal(self, signum):
+        """Told to end: no temporary address or VLAN interface is left behind, nor the demo's folder."""
+        core.STOP.set()
+        core.release_aliases()
+        if self.demo is not None:
+            self.demo.end(quitting=True)
+        os._exit(128 + signum)
 
     def handle_exit(self, app, **kwargs):
         core.STOP.set()

@@ -6,6 +6,76 @@ when it came out. The Linux packages of 1.1.0 to 1.3.1 were added then too; thos
 never released for Linux. README.md's "Versions and platforms" lists each version's platforms
 and known issues.
 
+## 1.7.1 (2026-10-30)
+
+Fixes from a review of all the code.
+
+**Phones and tablets**
+- Android: Settings opens again, and so do the terms of use in Spanish, Portuguese and Japanese
+  (1.7.0 stopped at a switch Android has no line-wrapping step for).
+- One device job at a time, for real: a second tap during a firmware check could start a second
+  install on the same radio. Config Save and Apply and Back up now count as the job too, so
+  Reboot and Firmware wait for them.
+- An SSH session closed while it was still connecting stays closed (a command typed on another
+  device's page went to the first one).
+- Stop locating with a login that changed asks for it again instead of staying stuck; Upload a
+  file says why a file couldn't be opened; Scan from an address no longer lists the phone itself.
+
+**Device tools**
+- Through other devices, a password is typed only for the device that asks for it, in route
+  order: a device further along that printed a hop's prompt was typed the hop's password (and on
+  the phone console, `passwd` could set a device's password to its hop's).
+- The tools log in with the username and password given only: not over a connection shared
+  through `~/.ssh/config` (ControlMaster), which skipped the password so a changed one passed
+  unchecked, and not with this account's SSH keys, which could use up a device's login attempts.
+- A firmware update of a device behind others always ended "hasn't come back after 15 minutes":
+  its restart is now read from its uptime, through the devices on the way. An installer still at
+  work after 5 minutes is waited for.
+- Reboot reported a restart that didn't happen (one lost answer counted as "went down").
+- Two radios of one model updated at once could get a damaged firmware copy; a copy that fails is
+  removed from the device's memory.
+- Through a hop's own SSH client (Dropbear), its messages no longer spoil what a command printed,
+  and a changed key, a refused login or a device that's down are told as such.
+- An EdgeOS rename could say the config wasn't changed although it was.
+- A MAC address a device reports is checked before it names a backup folder or a host key.
+
+**Scans and the command line**
+- One malformed SSDP reply on the network ended every Full scan and lost its results; so could
+  a crafted discovery reply or frame. Each is now ignored.
+- The command line runs on Python 3.8 and 3.9 again (Windows, and `--demo` everywhere).
+- Linux: existing VLAN interfaces are found without root; tcpdump stops when a capture ends with
+  older sudo.
+- Temporary addresses: a clean-up that fails keeps them on record; another running OpenDisco's
+  are left alone; the app removes them when told to end; Stop keeps what earlier rounds found.
+- Old gear's HTTPS (TLS 1.0) is recognised again.
+- Windows: adapters named in other scripts, and Wi-Fi access points when Windows speaks another
+  language, are read right.
+
+**Desktop**
+- macOS: the selection stays with its device when the list changes (the Device menu could act on
+  the device that moved into the selected row).
+- The demo network doesn't start while a device tool works on real gear (a Back up all's backups
+  went to the demo's folder and were deleted with it); declining Npcap or administrator rights
+  no longer leaves the demo's devices on the real network's tools.
+- The config editor's Close asks about unsaved edits; Settings… while it's open brings it to the
+  front; a port search waits for a scan that started meanwhile, and Stop ends one run from another
+  device sooner; a Back up all that finished hidden shows its results.
+- settings.json and terms.json can't be left half-written by a crash or a full disk.
+- Faster and lighter: the scan's progress, the Terminal tab once its sessions end, the phone
+  console's output, and the keychain asked off the window's thread (a locked keychain froze it).
+
+**Reports and exports**
+- The CVE fix named for a UniFi console is its firmware's, not the UniFi Network application's;
+  the Site Report's CVE table lists each model's fix.
+- CSV exports: a device name a spreadsheet would run as a formula starts with '.
+- The Site Report's latency note, its file name in other scripts, and the CVE list's refresh
+  failures are fixed; the demo's note and store name are translated.
+
+**Installers**
+- Windows: installs only into a folder of its own (typed as the Programs folder, it removed other
+  programs' `python` and `app` folders). Linux portable version: set up again after the system's
+  Python changes version.
+
 ## 1.7.0 (2026-10-26)
 
 **Demo network**

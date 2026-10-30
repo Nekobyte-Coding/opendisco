@@ -821,7 +821,6 @@
  "The new login works; {user} wasn't deleted, so both work now.": "新しいログイン情報は機能します。{user}は削除されなかったため、現在は両方が機能します。",
  "Committed and saved: {new} logs in (checked), and {old} is deleted.": "コミットして保存しました：{new}でログインでき（確認済み）、{old}は削除されました。",
  "Committed and saved: {user} takes the new password (checked by logging in with it).": "コミットして保存しました：{user}は新しいパスワードを使用します（そのパスワードでログインして確認済み）。",
- "not for EdgeOS here": "EdgeOSはここでは非対応",
  "The latest release for {platform} is {latest} ({date}); the version it runs is unknown.": "{platform}の最新リリースは{latest}（{date}）です。実行中のバージョンは不明です。",
  "The release found isn't for a UniFi access point or switch.": "見つかったリリースはUniFiのアクセスポイントまたはスイッチ用ではありません。",
  "{platform} firmware needs extra steps the app doesn't do.": "{platform}のファームウェアには、アプリが行わない追加の手順が必要です。",
@@ -1459,5 +1458,15 @@
  "The demo network has ended: its made-up devices are gone.": "デモネットワークは終了しました：架空のデバイスはなくなりました。",
  "error": "エラー",
  "warning": "警告",
- "notice": "注意"
+ "notice": "注意",
+ "The demo network opens once {what} has finished or is closed.": "デモネットワークは、{what}が終了するか閉じられると開きます。",
+ "the {title} window": "「{title}」ウィンドウ",
+ "{stamp}. Nothing was sent on the network: the device tools work on simulated gear. Log in as demo / demo (the bench spare: ubnt / ubnt).": "{stamp}。ネットワークには何も送信されていません：デバイスツールはシミュレートした機器で動作します。demo / demoでログインできます（予備機はubnt / ubnt）。",
+ "the demo's memory": "デモのメモリ",
+ "{mac} isn't a MAC address, so no backups are kept under it.": "{mac}はMACアドレスではないため、その名前でバックアップは保存されません。",
+ "{ip} is no longer in the list: scan again.": "{ip}はリストにありません：もう一度スキャンしてください。",
+ "{device}: wait for what's running to finish.": "{device}：実行中の処理が終わるまでお待ちください。",
+ "Back up all: wait for what's running to finish.": "すべてバックアップ：実行中の処理が終わるまでお待ちください。",
+ "Couldn't open the file: {error}": "ファイルを開けませんでした：{error}",
+ "Log in to stop its LED blinking.": "ログインしてLEDの点滅を止めます。"
 }

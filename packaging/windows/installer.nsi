@@ -32,6 +32,7 @@ VIAddVersionKey "LegalCopyright" "Copyright 2026 ${PUBLISHER}. Apache License 2.
 !include "MUI2.nsh"
 !include "LogicLib.nsh"
 !include "Sections.nsh"
+!include "FileFunc.nsh"
 !define MUI_ICON "${ICON}"
 !define MUI_UNICON "${ICON}"
 !define MUI_WELCOMEPAGE_TEXT "This installs ${APPNAME} ${VERSION}, the ${FULLNAME}, which finds and diagnoses Ubiquiti and other WISP gear.$\r$\n$\r$\nNo administrator rights are needed. The first time it scans, Windows Firewall may ask about Python: allow it on private networks so devices' replies get through."
@@ -74,9 +75,12 @@ Section "${APPNAME}" SecApp
   SectionIn RO
   !insertmacro RemoveEarlierInstall "UBNT Discovery Reloaded"
   !insertmacro RemoveEarlierInstall "UBNT Discover"
-  ; An upgrade replaces the bundled Python and app, so no stale files are left behind.
-  RMDir /r "$INSTDIR\python"
-  RMDir /r "$INSTDIR\app"
+  ; An upgrade replaces the bundled Python and app, so no stale files are left behind: only in a
+  ; folder an earlier OpenDisco was installed in (its opendisco.cmd there), never someone else's.
+  ${If} ${FileExists} "$INSTDIR\opendisco.cmd"
+    RMDir /r "$INSTDIR\python"
+    RMDir /r "$INSTDIR\app"
+  ${EndIf}
   SetOutPath "$INSTDIR"
   File /r "${STAGE}/*"
   WriteUninstaller "$INSTDIR\Uninstall.exe"
@@ -128,11 +132,24 @@ Function .onInit
   ${EndIf}
 FunctionEnd
 
+; The folder it goes in is one of its own, named OpenDisco (or one an OpenDisco is in already): a
+; folder typed without it (the Programs folder, say, where other programs live) would get
+; OpenDisco's python and app folders mixed in with theirs.
+Function .onVerifyInstDir
+  ${GetFileName} "$INSTDIR" $R0
+  StrCmp $R0 "${APPNAME}" own
+  IfFileExists "$INSTDIR\opendisco.cmd" own
+    Abort
+  own:
+FunctionEnd
+
 Section "Uninstall"
   Delete "$SMPROGRAMS\${APPNAME}.lnk"
   Delete "$DESKTOP\${APPNAME}.lnk"
-  RMDir /r "$INSTDIR\python"
-  RMDir /r "$INSTDIR\app"
+  ${If} ${FileExists} "$INSTDIR\opendisco.cmd"  ; (an OpenDisco folder: its own python and app go)
+    RMDir /r "$INSTDIR\python"
+    RMDir /r "$INSTDIR\app"
+  ${EndIf}
   Delete "$INSTDIR\opendisco.cmd"
   Delete "$INSTDIR\LICENSE.txt"
   Delete "$INSTDIR\NOTICE.txt"

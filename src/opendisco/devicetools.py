@@ -30,6 +30,8 @@ here runs in a worker thread.
   device given by its address, for devices the app hasn't found itself (over a VPN).
 - Link health (airMAX): the radio's mca-status and wstalist, which linkhealth reads.
 """
+from __future__ import annotations
+
 import hashlib
 import json
 import os
@@ -162,7 +164,6 @@ _NO_CONFIG = {"unifi": N_("set by its UniFi controller"), "unifi-os": N_("UniFi 
               "edgeswitch": N_("EdgeSwitch: in its web UI"), "": N_("not for this device")}
 NOT_OFFERED = {
     "update": {"": N_("not for this device")},
-    "config": dict(_NO_CONFIG, edgeos=N_("not for EdgeOS here")),
     "edit": _NO_CONFIG, "backup": _NO_CONFIG, "upload": _NO_CONFIG,
     "login": {"unifi": N_("set by its UniFi controller"), "unifi-os": N_("UniFi OS: in its own settings"),
               "isp": N_("airMAX and EdgeOS only"), "": N_("not for this device")},
@@ -241,16 +242,13 @@ def _kind(d) -> str:
 
 
 def offers(d, action: str) -> tuple:
-    """(offered, why not) for "update", "config" (the airOS editor: system.cfg), "edit" (the
-    config editor for every kind), "backup", "upload", "login", "scan", "reboot", "locate" or
-    "link" (link health)."""
+    """(offered, why not) for "update", "edit" (the config editor for every kind), "backup",
+    "upload", "login", "scan", "reboot", "locate" or "link" (link health)."""
     fam, kind = family(d), config_kind(d)
     if action == "update":
         ok = fam in UPDATE_STEPS
     elif action == "scan":
         ok = fam in SCAN_FAMILIES
-    elif action == "config":
-        ok = kind in ("airos", "isp")
     elif action in ("edit", "backup", "upload"):
         ok = bool(kind)
     elif action == "reboot":
@@ -272,10 +270,14 @@ def device_version(d) -> str:
     """The version a device runs, from its firmware string: "8.7.11" from
     XC.qca955x.v8.7.11.46972..., "2.0.9-hotfix.7" from e50.v2.0.9-hotfix.7..., "5.60.1" from
     BZ.mt7621_5.60.1+12923..., or a plain "5.2.10"."""
-    raw = d.info.get("firmware") or ""
+    return firmware_version(d.info.get("firmware") or "", d.firmware or "")
+
+
+def firmware_version(raw: str, plain: str = "") -> str:
+    """device_version's reading of a firmware string (raw), else of a plain version string."""
     version = r"(\d+\.\d+(?:\.\d+)?)"  # what follows is the build number and date
     m = (re.search(rf"\.v{version}(-hotfix\.\d+)?", raw) or re.search(rf"_{version}", raw)
-         or re.match(rf"v?{version}", raw) or re.match(rf"v?{version}", d.firmware or ""))
+         or re.match(rf"v?{version}", raw) or re.match(rf"v?{version}", plain))
     return "".join(g for g in m.groups() if g) if m else ""
 
 
@@ -285,7 +287,7 @@ def release_version(item: dict) -> str:
 
 
 def version_key(text: str) -> tuple:
-    m = re.match(r"v?(\d+(?:\.\d+)*)(?:-hotfix\.(\d+))?", text or "")
+    m = re.match(r"v?(\d{1,9}(?:\.\d{1,9})*)(?:-hotfix\.(\d{1,9}))?", text or "")
     if not m:
         return ()
     numbers = [int(n) for n in m.group(1).split(".")]
@@ -478,7 +480,8 @@ def download_release(release: dict, folder: Path, progress=None, stop=None) -> P
         if progress:
             progress(size, size)
         return path
-    part = path.with_suffix(path.suffix + ".part")
+    # A file of its own while it downloads: two devices of one model can be updated at once
+    part = path.with_name(f"{path.name}.{secrets.token_hex(4)}.part")
     digest, done = hashlib.sha256(), 0
     try:
         with _open(url, timeout=60) as reply, open(part, "wb") as out:
@@ -564,7 +567,14 @@ def install_firmware(d, login: sshrun.Login, path: Path, report, stop=None, vers
             raise ToolError(tr("It has {free} free in /tmp, too little for the {size} firmware file, so nothing was "
                                "copied.", free=fmt_size(int(free[-1]) * 1024), size=fmt_size(path.stat().st_size)))
     report(tr("Copying the firmware to {path}…", path=target), 0)
-    sshrun.upload(login, path, target, progress=lambda p: report(None, p), stop=stop)
+    try:
+        sshrun.upload(login, path, target, progress=lambda p: report(None, p), stop=stop)
+    except BaseException:  # cancelled, dropped or out of space: what was copied goes (its /tmp is memory)
+        try:
+            sshrun.run(login, f"rm -f {target}", timeout=30)
+        except Exception:
+            pass
+        raise
 
     report(_("Checking the copy on the device…"), None)
     copied = _said_md5(sshrun.run(login, _ARRIVED.format(path=target), stop=stop).out)
@@ -587,23 +597,32 @@ def install_firmware(d, login: sshrun.Login, path: Path, report, stop=None, vers
 
     if stop is not None and stop.is_set():
         raise ToolError(_("Cancelled."))
+    before = _uptime(login, stop) if login.via else None  # (behind other devices: its uptime shows the restart)
+
+    def wait(up, within, what):
+        if login.via:  # this computer can't reach it directly: ask it its uptime through the devices on the way
+            return _wait_uptime(login, before, up, within, report, what)
+        return wait_for(login.ip, login.port, up=up, within=within, report=report, what=what)
+
+    def installer_log() -> str:
+        try:
+            return sshrun.run(login, f"cat {UPDATE_LOG}").out.strip()
+        except sshrun.SSHError:
+            return ""
+
     report(_(INSTALL_STARTS[0]), None)
     sshrun.run(login, detached(steps["install"], UPDATE_LOG), timeout=60)
-    went_down = wait_for(login.ip, login.port, up=False, within=300, report=report,
-                         what=_("Installing: waiting for the device to restart…"))
+    what = _("Installing: waiting for the device to restart…")
+    went_down = wait(False, 300, what)
+    if not went_down and "opendisco-exit=" not in installer_log():  # the installer is still at it
+        went_down = wait(False, 900, what)
     if not went_down:
-        said = ""
-        try:
-            said = sshrun.run(login, f"cat {UPDATE_LOG}").out.strip()
-        except sshrun.SSHError:
-            pass
-        said = re.sub(r"opendisco-exit=\d+\s*", "", said).strip()
+        said = re.sub(r"opendisco-exit=\d+\s*", "", installer_log()).strip()
         raise ToolError(tr("The device didn't restart, so the firmware wasn't installed. It said: {said}", said=said)
                         if said else _("The device didn't restart, so the firmware wasn't installed."))
     started = time.monotonic()
     within = max(900, upgrade_time * 3)
-    if not wait_for(login.ip, login.port, up=True, within=within, report=report,
-                    what=_("Installing: the device is offline while it writes the firmware…")):
+    if not wait(True, within, _("Installing: the device is offline while it writes the firmware…")):
         raise ToolError(tr("The device hasn't come back after {minutes} minutes. It may still be installing: give it "
                            "a few more minutes before power-cycling it.", minutes=within // 60))
     return time.monotonic() - started
@@ -790,6 +809,23 @@ def wait_for(ip: str, port: int, up: bool, within: float, report=None, what: str
     return False
 
 
+def _wait_uptime(login: sshrun.Login, before: float | None, up: bool, within: float, report=None,
+                 what: str = "") -> bool:
+    """wait_for for a device reached through others, which this computer can't connect to itself:
+    asked its uptime over SSH, it has gone down (not up) when it doesn't answer or its uptime
+    started again, and is back (up) when it answers after that."""
+    start = time.monotonic()
+    while time.monotonic() - start < within:
+        now = _uptime(login)
+        restarted = now is not None and before is not None and 0 <= now < before
+        if (now is None or restarted) if not up else (now is not None and (now < 0 or before is None or now < before)):
+            return True
+        if report:
+            report(f"{what} {time.monotonic() - start:.0f}s", None)
+        time.sleep(5)
+    return False
+
+
 # ---------------------------------------------------------------------------
 # airOS config
 # ---------------------------------------------------------------------------
@@ -973,6 +1009,9 @@ def _run_staged(login: sshrun.Login, command: str, staged: str, what: str, apply
     as needed). Returns (exit code, what it said, whether the start went through, whether the
     connection dropped); LostConnection when it never started or the app can't tell."""
     run = secrets.token_hex(6)
+    if "$(id -u)" in log and len(logins) > 1:  # (the other login reading it is another user: name this one's)
+        uid = sshrun.run(login, "id -u", timeout=30, stop=stop).out.strip()
+        log = log.replace("$(id -u)", uid) if uid.isdigit() else log
     sent = True
     try:
         sshrun.run(login, detached(command, log, run), timeout=60, stop=stop)
@@ -1228,8 +1267,21 @@ class Backup:
     def reason(self) -> str:
         return str(self.meta.get("reason") or "")
 
+    @property
+    def version(self) -> str:
+        """The version its device ran when it was taken, else the firmware string kept with it."""
+        raw = str(self.meta.get("firmware") or "")
+        return firmware_version(raw) or raw
+
     def text(self) -> str:
         return self.path.read_bytes().decode("utf-8", "replace")
+
+    def holds(self, text: str) -> bool:
+        """Whether it's exactly this config (False when it can't be read)."""
+        try:
+            return self.path.read_bytes() == text.encode("utf-8")
+        except OSError:
+            return False
 
 
 def backup_root(root=None) -> Path:
@@ -1243,6 +1295,8 @@ def backup_root(root=None) -> Path:
 
 
 def backup_folder(mac: str, root=None) -> Path:
+    if not core.valid_mac(mac):  # (a name a device made up could point anywhere)
+        raise ToolError(tr("{mac} isn't a MAC address, so no backups are kept under it.", mac=mac))
     return backup_root(root) / core.norm_mac(mac).replace(":", "-")
 
 
@@ -1287,7 +1341,7 @@ def list_backups(mac: str | None = None, root=None) -> list:
     """Saved configs, the newest first, as Backups (.path, .when, .date, .reason, .meta): one
     device's (by its MAC), or with mac None every device's."""
     if mac:
-        folders = [backup_folder(mac, root)]
+        folders = [backup_folder(mac, root)] if core.valid_mac(mac) else []
     else:
         top = backup_root(root)
         folders = [f for f in top.iterdir() if f.is_dir()] if top.is_dir() else []
@@ -1403,11 +1457,8 @@ def back_up(login: sshrun.Login, d, kind: str, stop=None) -> tuple:
     ("backed up", the new Backup) or ("unchanged", the last one)."""
     text = read_current(login, kind, stop)
     kept = list_backups(d.mac) if d.mac else []
-    try:
-        if kept and kept[0].path.read_bytes() == text.encode("utf-8"):
-            return "unchanged", kept[0]
-    except OSError:
-        pass
+    if kept and kept[0].holds(text):
+        return "unchanged", kept[0]
     return "backed up", save_backup(d, text, kind, "backup")
 
 
@@ -1620,9 +1671,10 @@ def reboot(login: sshrun.Login, d, report=None, stop=None, within: float = 600) 
         elapsed = time.monotonic() - start
         if now is None:
             down = True
-        elif down or 0 <= now < before:
+        elif 0 <= now < before or (down and now < 0):  # its uptime started again (unread: it was down)
             return elapsed
-        else:  # still up: the command may have failed (no sudo, say), or not taken
+        else:  # still up (an answer missed was a lost one): the command may have failed (no sudo, say), or not taken
+            down = False
             try:
                 said = sshrun.run(login, f"cat {REBOOT_LOG} 2>/dev/null", timeout=25).out
             except sshrun.SSHError:
@@ -1771,7 +1823,7 @@ def _lldp_sightings(lines) -> list:
         if key == "via" or current is None:
             current = Sighting("lldp", port=port)
             found.append(current)
-        if key == "chassis.mac" or (key == "chassis.id" and _MAC.fullmatch(value)):
+        if key in ("chassis.mac", "chassis.id") and _MAC.fullmatch(value):  # (a MAC names folders and host keys)
             current.mac = current.mac or value.lower()
         elif key == "chassis.name":
             current.name = value
@@ -1826,7 +1878,7 @@ def scan_from_address(res, login: sshrun.Login, local: set = frozenset()) -> tup
     """Scan from a device given by its address and login (over a VPN, say), whether or not
     this computer found it: it becomes the device that what it sees is listed under, the way
     Scan from device does it. A device already in the table with that address or MAC is that
-    device. local: this computer's MACs. Returns (the device, what it saw, the devices it
+    device. local: this computer's MACs and addresses. Returns (the device, what it saw, the devices it
     knows of, the ones that were new)."""
     text = read_scan(login, "")
     sightings, me = parse_scan(text), parse_self(text, login.ip)
@@ -1874,7 +1926,7 @@ def merge_scan(res, finder, sightings: list, local: set = frozenset()) -> tuple:
     this computer hadn't found itself is listed under the finder (found_by), and so is one
     attached to it directly (a station or an LLDP neighbour); one this computer found that is
     merely in the finder's ARP table isn't, or a gateway would collect the whole network.
-    local: this computer's MACs (core.local_macs()), and any of the finder's own. Returns
+    local: this computer's MACs and addresses (core.local_addresses()), and any of the finder's own MACs. Returns
     (devices it knows of, the ones that were new)."""
     from opendisco import core
     above, up = {finder.key}, finder  # the finder's own chain, so no loop is made
@@ -1884,11 +1936,15 @@ def merge_scan(res, finder, sightings: list, local: set = frozenset()) -> tuple:
     order = {"stations": 0, "lldp": 1, "arp": 2}  # the most telling first
     seen, new = [], []
     for s in sorted(sightings, key=lambda s: order[s.how]):
-        mac = core.norm_mac(s.mac) if s.mac else None
+        mac = core.norm_mac(s.mac) if core.valid_mac(s.mac) else None
         ip = s.ip if s.ip and core._usable_ip(s.ip) else ""
-        if (not mac and not ip) or mac in local or mac == finder.mac or (ip and ip in finder.ips):
+        if (not mac and not ip) or mac in local or (ip and ip in local) or mac == finder.mac or (ip and ip in finder.ips):
             continue
-        dev = (res.inv.find(mac=mac) if mac else None) or (res.inv.find(ip=ip) if ip else None)
+        dev = res.inv.find(mac=mac) if mac else None
+        if dev is None and ip:
+            dev = res.inv.find(ip=ip)
+            if dev is not None and mac and dev.mac and dev.mac != mac:  # another device's address (a station's
+                dev, ip = None, ""  # last IP can be a router's behind it): this one is a device of its own
         known = dev is not None and bool(dev.via - {FROM_DEVICE})
         if dev is None:
             dev = res.inv.lookup(mac=mac, ip=ip or None)
@@ -2207,7 +2263,6 @@ def change_edgeos_login(login: sshrun.Login, new: sshrun.Login, steps: list, rep
 # because Python 3.13 dropped the crypt module. airOS reads MD5-crypt only; matching the
 # device's current hash keeps it that way.
 _ITOA64 = "./0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz"
-_SALT = re.compile(r"[./0-9A-Za-z]*")
 
 
 def hash_scheme(stored: str) -> str:

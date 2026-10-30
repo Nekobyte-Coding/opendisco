@@ -108,7 +108,8 @@ FALLBACKS = {"Picker": _SelectionPicker, "watch_keyboard": _nothing, "plain_entr
              "end_editing": _nothing, "done_bar": _nothing, "wide": lambda app: False,
              "side_by_side": lambda app: False, "clear_selection": _nothing, "search_field": _nothing,
              "export_menu": _nothing, "here": lambda app: _("this phone"), "text_box": _nothing,
-             "menu_button": _nothing, "bar_button": _nothing, "open_file": None}
+             "menu_button": _nothing, "bar_button": _nothing, "open_file": None,
+             "wrap_switch": _nothing}  # (Android's switch wraps its own text)
 
 
 def hook(app, name: str):
@@ -506,7 +507,25 @@ def _copy_items(app) -> list:
 
 def say(app, text: str):
     """Add lines to the console."""
+    _flush(app)  # after the SSH output that came before them
     _append(app, text.rstrip("\n") + "\n")
+
+
+def _stream(app, text: str):
+    """SSH output as it arrives, often a few bytes at a time: gathered for a tenth of a second and
+    added at once, so the console's whole text isn't rewritten for every chunk."""
+    pending = app.__dict__.setdefault("console_pending", [])
+    pending.append(text)
+    if len(pending) == 1:
+        app.loop.call_later(0.1, _flush, app)
+
+
+def _flush(app):
+    pending = getattr(app, "console_pending", None)
+    if pending:
+        text = "".join(pending)
+        pending.clear()
+        _append(app, text)
 
 
 def _append(app, text: str):
@@ -603,21 +622,19 @@ async def _work(app, fn, *args):
 
 
 def route(app, d) -> list:
-    """The devices on the way to d, the nearest first: the ones it was found through (as
-    devicegui.route on the desktop). Empty for a device found directly."""
-    devices = app.result.inv.devices if app.result else {}
-    chain, seen, current = [], {d.key}, d
-    while current.found_by.get("key") in devices and current.found_by["key"] not in seen:
-        current = devices[current.found_by["key"]]
-        seen.add(current.key)
-        chain.insert(0, current)
-    return chain
+    """The devices on the way to d, the nearest first (Inventory.route)."""
+    return app.result.inv.route(d) if app.result else []
 
 
 async def ask_route(app, d, purpose: str):
     """The login for d, through the devices on its route, each asked for in turn, nearest first
-    (a device this phone can reach itself is logged in to directly). None when cancelled."""
+    (a device this phone can reach itself is logged in to directly). None when cancelled, and
+    for a device that's no longer listed (a page left open from the demo network, say: its
+    made-up address would be looked for on the real network)."""
     from opendisco import devicetools
+    if app.result is None or app.result.inv.devices.get(d.key) is not d:
+        app._tool_said(tr("{ip} is no longer in the list: scan again.", ip=d.ip or d.mac))
+        return None
     hops = route(app, d)
     if hops and await _work(app, devicetools.answers, d.ip, d.port("ssh"), 2):
         hops = []
@@ -740,7 +757,7 @@ async def toggle_ssh(app):
     key = d.key
     app._tool_said(tr("SSH to {where} as {user}…", where=login.where, user=login.user), begins=True)
     # It starts in the background; a failure arrives as the reason it closed.
-    session = phonessh.Shell(login, lambda text: app._from_worker(_append, app, phonessh.plain(text)),
+    session = phonessh.Shell(login, lambda text: app._from_worker(_stream, app, phonessh.plain(text)),
                              lambda reason: app._from_worker(_ssh_ended, app, key, reason), cols=SHELL_COLUMNS)
     app.ssh = (key, session)
     app.tools_box.insert(len(app.tools_box.children) - 1, app.ssh_row)
@@ -797,9 +814,7 @@ async def scan_from(app):
     if result is not app.result:
         app._tool_said(tr("Scan from {ip} finished after a new scan started: start it again.", ip=d.ip))
         return
-    own = {i.ip for i in core.local_interfaces()}  # this phone is in the device's ARP table too
-    sightings = [s for s in sightings if s.ip not in own]
-    seen, new = devicetools.merge_scan(result, d, sightings, core.local_macs())
+    seen, new = devicetools.merge_scan(result, d, sightings, core.local_addresses())  # (not this phone itself)
     app._show_devices(result.devices)
     counts = ", ".join(f"{_(devicetools.SCAN_HOW[how])} {n}" for how in devicetools.SCAN_HOW
                        if (n := sum(1 for s in sightings if s.how == how)))

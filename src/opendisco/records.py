@@ -330,8 +330,10 @@ def latest_firmware(d) -> tuple:
 
 
 def cve_fix(d) -> str:
-    """The firmware version that fixes every known CVE of d that names a fix, or ""."""
-    fixes = [m.fixed for m in d.cves or () if m.fixed]
+    """The firmware version that fixes every known CVE of d's firmware that names a fix, or "".
+    (A console's UniFi Network application has fixes of its own, in its own versions.)"""
+    family = vulns.device_family(d)
+    fixes = [m.fixed for m in d.cves or () if m.fixed and (family is None or m.family == family[0])]
     return max(fixes, key=vulns.version_key) if fixes else ""
 
 
@@ -632,11 +634,11 @@ def security_csv(devices) -> str:
     for r in security_rows(devices):
         d = r["device"]
         sev = _severities(r["cves"])
-        writer.writerow([d.ip, d.mac or "", d.model, d.name, d.firmware, r["latest"],
-                         {True: "yes", False: "no"}.get(r["outdated"], ""),
-                         len(r["cves"]) if d.cves is not None else "not checked",
-                         *(sev.get(s, 0) for s in _SEVERITY_ORDER[:4]), r["fix"],
-                         " ".join(m.cve["id"] for m in r["cves"])])
+        writer.writerow(core.csv_row([d.ip, d.mac or "", d.model, d.name, d.firmware, r["latest"],
+                                      {True: "yes", False: "no"}.get(r["outdated"], ""),
+                                      len(r["cves"]) if d.cves is not None else "not checked",
+                                      *(sev.get(s, 0) for s in _SEVERITY_ORDER[:4]), r["fix"],
+                                      " ".join(m.cve["id"] for m in r["cves"])]))
     return out.getvalue()
 
 
@@ -669,9 +671,9 @@ def notes_csv(notes: Notes, devices=()) -> str:
     writer = csv.writer(out)
     writer.writerow(["MAC", "IP", "Model", "Name", "In this scan", "Updated", "Note"])
     for mac, entry, d in _note_rows(notes, devices):
-        writer.writerow([mac, d.ip if d else entry.get("ip", ""), d.model if d else entry.get("model", ""),
-                         d.name if d else entry.get("name", ""), "yes" if d else "no", entry.get("updated", ""),
-                         entry["text"]])
+        writer.writerow(core.csv_row([mac, d.ip if d else entry.get("ip", ""), d.model if d else entry.get("model", ""),
+                                      d.name if d else entry.get("name", ""), "yes" if d else "no", entry.get("updated", ""),
+                                      entry["text"]]))
     return out.getvalue()
 
 
@@ -698,7 +700,7 @@ def write_backups_zip(path, backups, notes: Notes | None = None, devices=()) -> 
             for p, name in zip(paths, _pack_backups(z, folder, paths)):
                 why = _reason(p)
                 lines.append(f"    {name}  {time.strftime('%Y-%m-%d %H:%M', time.localtime(p.stat().st_mtime))}"
-                             + (f"  ({why})" if why else ""))
+                             + (f"  ({_(why)})" if why else ""))  # (kept in English: "before upload"…)
                 count += 1
         z.writestr("index.txt", "\n".join(lines) + "\n")
     return count
@@ -951,10 +953,12 @@ def _device_table(rows, ids: dict) -> str:
 def _cve_section(devices, ids: dict) -> str:
     """The known CVEs found, the worst first, each with the devices it was found on; then each
     device's finding (what it runs, and the firmware that fixes it)."""
-    found = {}
+    found, fixes = {}, {}
     for d in devices:
         for m in d.cves or ():
             found.setdefault(m.cve["id"], (m, []))[1].append(d)
+            if m.fixed:  # (each family and model its own: airMAX AC 8.7.21, airMAX M 6.3.24)
+                fixes.setdefault(m.cve["id"], set()).add(m.fixed)
     with_cves = [d for d in devices if d.cves or any(tag == "CVE" for _, tag, _ in d.issues)]
     unchecked = sum(1 for d in devices if d.cves is None and d.firmware)
     listed = escape(vulns.list_label())
@@ -983,7 +987,8 @@ def _cve_section(devices, ids: dict) -> str:
         score = m.cve.get("score")
         rows.append([f'<a href="{vulns.nvd_url(cve_id)}">{escape(cve_id)}</a>',
                      f'<span class="{_LEVEL_CLASS[vulns.LEVELS.get(severity, "warn")]}">{escape(_(severity))}'
-                     f'{f" {score:g}" if score is not None else ""}</span>', escape(m.fixed or _("none named")),
+                     f'{f" {score:g}" if score is not None else ""}</span>',
+                     escape(", ".join(sorted(fixes.get(cve_id, ()), key=vulns.version_key)) or _("none named")),
                      escape(m.cve.get("summary") or ""),
                      ", ".join(_ip_link(d, ids) for d in hit)])
     if rows:
@@ -1076,7 +1081,7 @@ def _latency_table(devices, tags, ids: dict) -> str:
     out = [f"<p>{said}</p>",
            _report_table(["IP", _("Name"), _("Model"), _("Average"), _("Range"), _("Replies")], rows, nowrap=(0, 3, 4),
                          wide=True)]
-    left = rest[LATENCY_SHOWN:]
+    left = [(d, cells) for d, cells in rest[LATENCY_SHOWN:] if average(d) >= 0]  # (the silent: counted above)
     if left:
         slowest = _ms(max(average(d) for d, _ in left))
         out.append('<p class="muted">'
@@ -1117,8 +1122,10 @@ def _notes_section(rows, ids: dict) -> str:
 
 
 def report_file_name(site: str) -> str:
-    """opendisco-site-report-<site>-<when>.html, with only characters every file system takes."""
-    return f"opendisco-site-report-{f'{_safe(site)}-' if site.strip() else ''}{time.strftime('%Y%m%d-%H%M')}.html"
+    """opendisco-site-report-<site>-<when>.html, with only characters every file system takes: a
+    site's letters and digits in any language stay ("本社", "São-Paulo"), where _safe kept ASCII only."""
+    name = re.sub(r"[^\w.-]+", "-", site).strip("-._")[:40]
+    return f"opendisco-site-report-{f'{name}-' if name else ''}{time.strftime('%Y%m%d-%H%M')}.html"
 
 
 def site_report(res, site: str = "", demo: bool = False) -> str:

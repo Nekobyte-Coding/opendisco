@@ -18,6 +18,8 @@ Every call blocks, like sshrun's: call them from a worker thread. They run on an
 their own, on a thread of their own, never on the UI's. Every failure is an SSHError whose text
 says what went wrong in terms of the device.
 """
+from __future__ import annotations
+
 import asyncio
 import base64
 import concurrent.futures
@@ -28,14 +30,14 @@ import os
 import re
 import threading
 import time
-from dataclasses import dataclass
 from pathlib import Path
 
 from opendisco import core
 from opendisco.i18n import _, tr
+from opendisco.sshcommon import (ANSI, CLIENT_NOISE, Login, Result, SSHError, last_hop, nested_command,
+                                 nested_failure, route_text)  # (shared with sshrun)
 
 PASSWORD_PROMPT = re.compile(r"(?i)pass(word|code)[^\r\n]{0,60}:\s*$")
-ANSI = re.compile(r"\x1b\[[0-9;?]*[ -/]*[@-~]|\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)|\x1b[()][0-9A-Za-z]|\x1b[=>]")
 # Allowed after asyncssh's own choices, for airOS 5/6, old EdgeOS and other old firmware.
 LEGACY = {"kex_algs": ["diffie-hellman-group14-sha1", "diffie-hellman-group-exchange-sha1",
                        "diffie-hellman-group1-sha1"],
@@ -47,80 +49,12 @@ HERE = "this phone" if core.platform_name() in ("ios", "android") else "this com
 # asyncssh asks getpass for this device's own user name before every connection, and an iOS
 # app has none (getpass raises): every login failed with "Unknown local username" there.
 os.environ.setdefault("LOGNAME", "opendisco")
-# What a hop's own SSH client says about the connection, not the command's output: "Host '…' key
-# accepted unconditionally." and the fingerprint under it (Dropbear), "Warning: Permanently added…"
-CLIENT_NOISE = re.compile(r"dbclient:\s*$|(dbclient: )?Host '|\(\S+ fingerprint |Warning: Permanently added"
-                          r"|Connection to ")
-
-
-class SSHError(Exception):
-    """kind: "key" (host key changed), "auth", "refused", "timeout", "unreachable",
-    "algorithms", "space", "cancelled", "forwarding" or "other"."""
-
-    def __init__(self, message: str, kind: str = "other"):
-        super().__init__(message)
-        self.kind = kind
-
-
-@dataclass
-class Login:
-    ip: str
-    port: int
-    user: str
-    password: str
-    alias: str  # the name its host key is filed under (host_key_alias)
-    known_hosts: Path
-    via: tuple = ()  # the logins of the devices on the way to it, the nearest to this phone first
-    nested: bool = False  # a device on the way refused to forward: run commands on the last hop instead
-
-    @property
-    def where(self) -> str:
-        if self.via:
-            return tr("{ip} port {port} (via {route})", ip=self.ip, port=self.port, route=route_text(self))
-        return tr("{ip} port {port}", ip=self.ip, port=self.port)
-
-    @property
-    def passwords(self):
-        """The password to type, or one per device on the way, by the name its prompt shows."""
-        if not self.via:
-            return self.password
-        return {**{hop.alias: hop.password for hop in self.via}, self.alias: self.password, self.ip: self.password}
-
-
-@dataclass
-class Result:
-    code: int
-    out: str  # what the command printed
-    err: str  # what it printed to stderr
 
 
 def available() -> bool:
     """asyncssh is here to use (the phone apps bring it)."""
     import importlib.util
     return importlib.util.find_spec("asyncssh") is not None
-
-
-def route_text(login: Login) -> str:
-    return " → ".join(hop.ip for hop in login.via)
-
-
-def last_hop(login: Login) -> Login:
-    """The device just before this one on its route, reached through the ones before it."""
-    *before, hop = login.via
-    return Login(hop.ip, hop.port, hop.user, hop.password, hop.alias, hop.known_hosts, tuple(before))
-
-
-def _quote(text: str) -> str:
-    return "'" + text.replace("'", "'\\''") + "'"
-
-
-def nested_command(login: Login, command: str | None) -> str:
-    """Run command (None: a shell) on the device through the last hop's own SSH client (Dropbear's
-    dbclient, or ssh), for a hop that refuses to forward connections. That hop checks the
-    device's host key."""
-    target = f"-p {login.port} -l {_quote(login.user)} {login.ip}" + (f" {_quote(command)}" if command else "")
-    return (f"if command -v dbclient >/dev/null 2>&1; then dbclient -y {target}; "
-            f"else ssh -o StrictHostKeyChecking=accept-new {target}; fi")
 
 
 def plain(text: str) -> str:
@@ -136,7 +70,9 @@ def host_key_alias(mac: str | None, ip: str) -> str:
     """The name a device's host key is filed under: its MAC, so a different radio at the same
     factory address isn't mistaken for the last one, while a changed key on the same device is
     still caught. (The same as terminal.host_key_alias, which phones don't have.)"""
-    return "ubnt-" + mac.replace(":", "") if mac else ip
+    mac = (mac or "").lower()
+    valid = re.fullmatch(r"(?:[0-9a-f]{2}:){5}[0-9a-f]{2}", mac)  # (anything else could be a known_hosts pattern)
+    return "ubnt-" + mac.replace(":", "") if valid else ip
 
 
 def _names(line: str) -> list:
@@ -403,7 +339,7 @@ def _run_nested(login: Login, command: str | None, timeout: float, stop) -> Resu
         try:
             process = await conns[-1].create_process(nested_command(login, command), term_type="dumb",
                                                      term_size=(200, 50), encoding="utf-8", errors="replace")
-            typer = _PasswordTyper({**_as_dict(hop), login.ip: login.password}, process.stdin.write)
+            typer = _PasswordTyper(login, process.stdin.write)
             text = []
             while True:
                 data = await asyncio.wait_for(process.stdout.read(65536), timeout)
@@ -427,27 +363,23 @@ def _run_nested(login: Login, command: str | None, timeout: float, stop) -> Resu
 
     code, text = _call(work, timeout + CONNECT_TIMEOUT * 4 * len(login.via), stop)
     code = code if code is not None and code >= 0 else 255
-    failure = _nested_failure(text, login)
-    if failure and (code == 255 or failure.kind in ("key", "auth")):
+    failure = nested_failure(text, login)
+    if failure:  # (it's about reaching the device, not what the command printed)
         raise failure
     lines = [line for line in text.split("\n")
              if not PASSWORD_PROMPT.search(line + " ") and not CLIENT_NOISE.match(line)]
     return Result(code, "\n".join(lines).strip("\n") + "\n", text)
 
 
-def _as_dict(login: Login) -> dict:
-    passwords = login.passwords
-    return passwords if isinstance(passwords, dict) else {login.alias: passwords, login.ip: passwords}
-
-
 class _PasswordTyper:
-    """Types the password when a hop's own SSH client asks for it ("ubnt@10.0.0.5's password:"),
-    at most twice for each device."""
+    """Types the device's password when the last hop's own SSH client asks for it ("ubnt@10.0.0.5's
+    password:"), at most twice. Only that prompt: the hops log in through asyncssh, so a prompt
+    naming anything else (or nothing) comes from the device itself and gets no password."""
     ASKER = re.compile(r"([^\s@']+)@([^\s@']+)'s password")
 
-    def __init__(self, passwords: dict, write):
-        self.passwords, self.write = passwords, write
-        self.tail, self.typed, self.unanswered = "", {}, False
+    def __init__(self, login: Login, write):
+        self.ip, self.password, self.write = login.ip, login.password, write
+        self.tail, self.typed, self.unanswered = "", 0, False
 
     def feed(self, data: str) -> None:
         self.tail = (self.tail + data)[-400:]
@@ -455,38 +387,19 @@ class _PasswordTyper:
             return
         asker = self.ASKER.findall(self.tail)
         who = asker[-1][1] if asker else None
-        password = self.passwords.get(who) if who else next(iter(self.passwords.values()), None)
         self.tail = ""
-        if password and self.typed.get(who, 0) < 2:
-            self.typed[who] = self.typed.get(who, 0) + 1
-            self.write(password + "\r")
+        if who == self.ip and self.password and self.typed < 2:
+            self.typed += 1
+            self.write(self.password + "\r")
         else:
             self.unanswered = True
-
-
-def _nested_failure(text: str, login: Login) -> SSHError | None:
-    """What a hop's own SSH client printed, as an SSHError, if it failed."""
-    t = text.lower()
-    if "host key mismatch" in t or "remote host identification has changed" in t:
-        return SSHError(tr("The SSH key of {ip} changed since {route} last connected to it. If that's expected, "
-                           "remove it from that device's known hosts, then try again.", ip=login.ip,
-                           route=route_text(login)), "key")
-    if "permission denied" in t or "authentication failed" in t or "exited: no auth methods" in t:
-        return SSHError(tr("{device} didn't accept the username and password.", device=login.where), "auth")
-    if "connection refused" in t:
-        return SSHError(tr("Nothing accepts SSH connections on {device}.", device=login.where), "refused")
-    if "timed out" in t:
-        return SSHError(tr("No SSH answer from {device} (timed out).", device=login.where), "timeout")
-    if "no route to host" in t or "network is unreachable" in t or "host is unreachable" in t:
-        return SSHError(tr("{ip} can't be reached from {hop}.", ip=login.ip, hop=login.via[-1].ip), "unreachable")
-    return None
 
 
 def check_login(login: Login, stop: threading.Event | None = None) -> None:
     """Log in and out again: raises SSHError if that doesn't work."""
     result = run(login, "true", timeout=40, stop=stop)
     if result.code:
-        raise _nested_failure(result.err, login) or SSHError(
+        raise nested_failure(result.err, login) or SSHError(
             tr("Logging in to {device} worked, but the device didn't run a command (exit code {code}).",
                device=login.where, code=result.code))
 
@@ -561,12 +474,17 @@ class Shell:
         self.login, self.on_output, self.on_closed = login, on_output, on_closed
         self.command, self.ask, self.keys, self.error = command, ask, keys, None
         self.size, self.process, self.conns, self.ended = (cols, rows), None, [], False
+        self.closed = False  # close() was asked for, perhaps while it was still connecting
         self.task = asyncio.run_coroutine_threadsafe(self._run(), _loop())
 
     async def _start(self, login: Login, command: str | None, ask=None):
         self.conns = await _open(login, ask, self.keys)
-        return await self.conns[-1].create_process(command, term_type="xterm-256color", term_size=self.size,
-                                                   encoding="utf-8", errors="replace")
+        try:
+            return await self.conns[-1].create_process(command, term_type="xterm-256color", term_size=self.size,
+                                                       encoding="utf-8", errors="replace")
+        except BaseException:  # (logged in, but no shell: the connections go, not left open)
+            _close(self.conns)
+            raise
 
     async def _run(self) -> None:
         reason, typer, started = "", None, time.monotonic()
@@ -582,11 +500,14 @@ class Shell:
             failure = _failure(e, self.login)
             return self._end(str(failure), failure)
         try:
-            if self.process is None:  # through the last hop's own client, which asks for the password
+            if self.process is None and not self.closed:  # through the last hop's own client, which asks for the password
                 hop = last_hop(self.login)
                 self.process = await self._start(hop, nested_command(self.login, self.command))
-                typer = _PasswordTyper({**_as_dict(hop), self.login.ip: self.login.password}, self.process.stdin.write)
-            while True:
+                typer = _PasswordTyper(self.login, self.process.stdin.write)
+            if self.closed:  # closed while it connected (another device's page opened, say): it doesn't open
+                if self.process is not None:
+                    self.process.close()
+            while not self.closed:
                 data = await self.process.stdout.read(65536)
                 if not data:
                     break
@@ -617,6 +538,7 @@ class Shell:
 
     def close(self) -> None:
         def closing():
+            self.closed = True
             if self.process is not None:
                 self.process.close()
             _close(self.conns)
@@ -641,6 +563,9 @@ class Forward(Shell):
         local, host, port = self.target
         try:
             self.conns = await _open(self.login, None, self.keys)
+            if self.closed:
+                _close(self.conns)
+                return self._end("")
             await self.conns[-1].forward_local_port("127.0.0.1", local, host, port)
         except Exception as e:
             _close(self.conns)

@@ -44,15 +44,8 @@ ROUTED = ("ssh", "ping", "web", "rescan", "find_http", "find_https", "find_ssh",
 
 
 def route(app, d) -> list:
-    """The devices on the way to d, the nearest to this computer first: the devices it was found
-    through (found_by), each through the one before. Empty for a device found directly."""
-    devices = app.result.inv.devices if app.result else {}
-    chain, seen, current = [], {d.key}, d
-    while current.found_by.get("key") in devices and current.found_by["key"] not in seen:
-        current = devices[current.found_by["key"]]
-        seen.add(current.key)
-        chain.insert(0, current)
-    return chain
+    """The devices on the way to d, the nearest to this computer first (Inventory.route)."""
+    return app.result.inv.route(d) if app.result else []
 
 
 def handles(app, d, name: str) -> bool:
@@ -120,7 +113,7 @@ def act(app, d, name: str) -> None:
     if flow:
         asyncio.create_task(_guarded(app, d, flow))
     elif name == "forget_login":
-        forget_login(app, d)
+        asyncio.create_task(forget_login(app, d))
 
 
 async def _guarded(app, d, flow):
@@ -183,10 +176,10 @@ async def ask_route(app, d, purpose: str, hops_only: bool = False):
     return await ask_login(app, d, purpose, via)
 
 
-def forget_login(app, d) -> None:
+async def forget_login(app, d) -> None:
     _logins(app).pop(d.mac, None)
     app._save_settings()
-    gone = credstore.forget(d.mac)
+    gone = await _work(credstore.forget, d.mac)
     app.status.text = (tr("Forgot the saved login for {device}.", device=d.ip or d.mac) if gone
                        else tr("Forgot the saved username for {device}; {store} had no password for it.",
                                device=d.ip or d.mac, store=credstore.store_name()))
@@ -194,9 +187,11 @@ def forget_login(app, d) -> None:
 
 async def ask_login(app, d, purpose: str, via: tuple = ()) -> sshrun.Login | None:
     """Ask for the username, password and port, then log in once to check them. Remembers or
-    forgets the login as the checkbox says, once it has worked. None when cancelled."""
+    forgets the login as the checkbox says, once it has worked. None when cancelled. (The
+    credential store is asked from a worker thread: it can wait up to a minute to be unlocked.)"""
     saved = _remembered(app, d)
-    password = credstore.load(d.mac) if saved and credstore.available() else None
+    can_remember = await _work(credstore.available)  # (asked once; _login_window reads the answer kept)
+    password = await _work(credstore.load, d.mac) if saved and can_remember else None
     user = (saved or {}).get("user") or app.settings.get("ssh_user") or ""
     port = int((saved or {}).get("port") or d.port("ssh"))
     problem, remember = "", bool(saved)
@@ -214,14 +209,14 @@ async def ask_login(app, d, purpose: str, via: tuple = ()) -> sshrun.Login | Non
             problem = str(e)
             continue
         app.status.text = tr("Logged in to {ip} as {user}.", ip=d.ip, user=user)
-        if remember and d.mac and credstore.available():
-            if credstore.save(d.mac, user, password):
+        if remember and d.mac and can_remember:
+            if await _work(credstore.save, d.mac, user, password):
                 _logins(app)[d.mac] = {"user": user, "port": port}
             else:
                 app.status.text = tr("Logged in, but {store} didn't take the password.", store=credstore.store_name())
         elif saved and not remember:
             _logins(app).pop(d.mac, None)
-            credstore.forget(d.mac)
+            await _work(credstore.forget, d.mac)
         app._save_settings()
         await warn_factory_login(app, d, login)
         return login
@@ -377,7 +372,7 @@ async def scan_flow(app, d):
     app.status.text = tr("Reading what {ip} sees…", ip=d.ip)
     try:
         def work():
-            return devicetools.parse_scan(devicetools.read_scan(login, fam)), core.local_macs()
+            return devicetools.parse_scan(devicetools.read_scan(login, fam)), core.local_addresses()
 
         try:
             sightings, local = await _work(work)
@@ -492,19 +487,13 @@ async def routed_ping(app, d):
     if not hops:  # reachable from here
         app._open_ping(d)
         return
-    last = _chain(hops)
+    last = hops[-1]  # the last device on the way, its login already through the ones before it
     title = tr("{ip}  ping from {via}  {name}", ip=d.ip, via=last.ip, name=d.name or d.model or "").rstrip()
     if devicetools.OWN_SSH:
         app._show_terminal(app.term.open_own(d.key, "ping", title, last, command=f"ping {d.ip}"))
         return
     app._show_terminal(app.term.open(d.key, "ping", title, sshrun.ssh_command(last, f"ping {d.ip}", "-tt"),
                                      last.passwords))
-
-
-def _chain(hops) -> sshrun.Login:
-    """The last device on the way, reached through the ones before it."""
-    *before, last = hops
-    return sshrun.Login(last.ip, last.port, last.user, last.password, last.alias, last.known_hosts, tuple(before))
 
 
 def _free_port() -> int:
@@ -531,7 +520,7 @@ async def routed_web(app, d):
         webbrowser.open(url.geturl())
         app.status.text = tr("Opened {url}", url=url.geturl())
         return
-    last, local = _chain(hops), _free_port()
+    last, local = hops[-1], _free_port()
     if not any(kind in ("https", "http") for kind in d.services.values()):
         # This computer can't check its ports: the device before it looks for a web server.
         candidates = list(dict.fromkeys([port, 443, 80, 8443, 8080]))
@@ -586,7 +575,10 @@ async def routed_find(app, d, kind: str):
     if not hops:
         app._find(d, kind)
         return
-    last, result = _chain(hops), app.result
+    if app.running or app.rescanning or app.finding or not app.result:  # (started while it asked)
+        app.status.text = _("Works once the scan has finished.")
+        return
+    last, result = hops[-1], app.result
     name = _(core.SERVICE_NAMES[kind])  # ("services"; protocol names stay)
     ports = core.search_order(kind, result.devices if result else ())
     app.finding = True
@@ -603,8 +595,13 @@ async def routed_find(app, d, kind: str):
             if core.STOP.is_set():
                 break
             chunk = " ".join(map(str, ports[start:start + 600]))
-            out = sshrun.run(last, f"for p in {chunk}; do nc -z -w1 {d.ip} $p 2>/dev/null && echo $p; done",
-                             timeout=900).out
+            try:  # (Stop ends the chunk too: one can take ten minutes)
+                out = sshrun.run(last, f"for p in {chunk}; do nc -z -w1 {d.ip} $p 2>/dev/null && echo $p; done",
+                                 timeout=900, stop=core.STOP).out
+            except sshrun.SSHError as e:
+                if e.kind == "cancelled":
+                    break
+                raise
             for port in (int(p) for p in out.split() if p.isdigit()):
                 banner = sshrun.run(last, f"printf 'HEAD / HTTP/1.0\\r\\n\\r\\n' | nc -w2 {d.ip} {port} 2>/dev/null "
                                           "| head -c 80").out
@@ -626,8 +623,9 @@ async def routed_find(app, d, kind: str):
         error = str(e)
     finally:
         app.finding = False
-        app.spinner.stop()
-        app.start_button.enabled, app.stop_button.enabled = True, False
+        if not app.running:  # (a scan started meanwhile keeps its Stop)
+            app.spinner.stop()
+            app.start_button.enabled, app.stop_button.enabled = True, False
     if error:
         app.status.text = tr("Port search on {ip}: {error}", ip=d.ip, error=error)
         return
@@ -780,20 +778,9 @@ async def _install(app, d, check, login):
 
 
 async def _reread(app, d) -> str | None:
-    """Rescan the device for the firmware it reports now; None when a scan is busy."""
-    result = app.result
-    if not result or app.running or app.rescanning or app.finding:
-        return None
-    app.rescanning = True
-    app.spinner.start()
-    error = None
-    try:
-        dev, answered = await _work(core.rescan_device, result, d,
-                                    lambda m: app._from_worker(app._append_log, m))
-    except Exception as e:
-        dev, answered, error = d, False, f"{type(e).__name__}: {e}"
-    app._rescanned(result, dev, answered, error)
-    return devicetools.device_version(dev) if answered else None
+    """Rescan the device for the firmware it reports now; None when a scan is busy or it didn't answer."""
+    found = await app.reread(d)
+    return devicetools.device_version(found[0]) if found and found[1] else None
 
 
 # ---------------------------------------------------------------------------
@@ -853,7 +840,7 @@ class ConfigEditor:
         self.window.content = toga.Box(style=Pack(direction=COLUMN, margin=12, gap=8), children=[
             toga.Label(_fill(about, 118)), self.box,
             toga.Box(style=Pack(direction=ROW, align_items="center", gap=8), children=[
-                self.state, *self.buttons, toga.Button(_("Close"), on_press=lambda w: self.window.close())])])
+                self.state, *self.buttons, toga.Button(_("Close"), on_press=lambda w: self.window.on_close())])])  # (asks about edits)
         self._pending(pending)
         self._enable(True)
         app._show_over_main(self.window)
@@ -1029,7 +1016,7 @@ async def login_flow(app, d):
                                                         "reset to factory defaults gets it back."))
             return
         if _remembered(app, d):
-            credstore.save(d.mac, new_user, new_password)
+            await _work(credstore.save, d.mac, new_user, new_password)
             _logins(app)[d.mac] = {"user": new_user, "port": login.port}
             app._save_settings()
         devicetools.forget_factory_login(d)
@@ -1186,10 +1173,7 @@ async def compare_flow(app, d, backup, other=None):
     buttons = [(_("Close"), None, True)]
     if other is None:  # the config now can be kept, unless the last backup has it already
         latest = devicetools.list_backups(d.mac)
-        try:
-            same = bool(latest) and latest[0].path.read_bytes() == new.encode("utf-8")
-        except OSError:
-            same = False
+        same = bool(latest) and latest[0].holds(new)
         buttons.insert(0, (_("Same as its last backup") if same else _("Keep it as a backup"), "keep", not same))
     if await _diff_view(app, tr("Compare configs: {ip}", ip=d.ip), heading, diff, note, buttons) != "keep":
         return
@@ -1275,7 +1259,7 @@ class BackupsWindow:
     def refresh(self):
         self.backups = devicetools.list_backups(self.d.mac)
         self.table.data = [{"taken": b.date, "why": _(b.reason or "backup"), "address": b.meta.get("ip", ""),
-                            "firmware": devicetools.device_version(_FirmwareOf(b.meta)) or b.meta.get("firmware", ""),
+                            "firmware": b.version,
                             "size": f"{b.path.stat().st_size:,} B", "backup": b} for b in self.backups]
         self.text.value = ""
         self.state.text = tr("{count} kept.", count=len(self.backups)) if self.backups else _("None kept yet.")
@@ -1348,13 +1332,6 @@ class BackupsWindow:
         self.refresh()
 
 
-class _FirmwareOf:
-    """A backup's firmware string where device_version() looks for it."""
-
-    def __init__(self, meta):
-        self.info, self.firmware = {"firmware": str(meta.get("firmware") or "")}, ""
-
-
 # ---------------------------------------------------------------------------
 # Back up all configs
 # ---------------------------------------------------------------------------
@@ -1373,11 +1350,12 @@ def _saved_login(app, d, via: tuple = ()) -> sshrun.Login | None:
 
 async def back_up_all(app):
     """Device > Back up all configs…: every device in the table that keeps a config, with the
-    login remembered for it (BackupAllWindow). While a run goes on, its window shows again; one
-    that's over makes way for a new run."""
+    login remembered for it (BackupAllWindow). While a run goes on, its window shows again, and
+    so does one that finished hidden (the status line says so): its results come first. One that's
+    over and showing makes way for a new run."""
     last = _backup_all
     if last is not None and not last.window.closed:
-        if last.running:
+        if last.running or not last.window.visible:
             last.window.show()
             return
         last.closing(last.window) and last.window.close()
@@ -1745,6 +1723,7 @@ async def scan_address(app):
         return
     ip, port = "", 22
     user, password, remember, problem = app.settings.get("ssh_user") or "", "", False, ""
+    can_remember = await _work(credstore.available)  # (asked once; _address_window reads the answer kept)
     while True:
         answer = await _address_window(app, ip, port, user, password, remember, problem)
         if answer is None:
@@ -1767,7 +1746,7 @@ async def scan_address(app):
     app.status.text = tr("Reading what {ip} sees…", ip=ip)
     try:
         def work():
-            return devicetools.scan_from_address(result, login, core.local_macs())
+            return devicetools.scan_from_address(result, login, core.local_addresses())
 
         try:
             finder, sightings, seen, new = await _work(work)
@@ -1790,8 +1769,8 @@ async def scan_address(app):
         devicetools.relink(result, key, finder)
         app._show_devices(result.devices)
     app.settings["ssh_user"] = user
-    if remember and credstore.available():
-        if finder.mac and credstore.save(finder.mac, user, password):
+    if remember and can_remember:
+        if finder.mac and await _work(credstore.save, finder.mac, user, password):
             _logins(app)[finder.mac] = {"user": user, "port": port}
         elif not finder.mac:
             app._append_log(tr("{ip}'s login isn't remembered: the app didn't learn its MAC address, which it's filed "

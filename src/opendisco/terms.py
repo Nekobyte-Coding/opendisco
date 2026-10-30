@@ -121,8 +121,9 @@ def record(folder, via: str, platform: str, channel: str = "github", language: s
         entry.update(language=language, translation_sha256=digest(translated))
     folder = Path(folder)
     folder.mkdir(parents=True, exist_ok=True)
-    (folder / RECORD).write_text(json.dumps({"accepted": (accepted(folder) + [entry])[-KEPT:]}, indent=1),
-                                 encoding="utf-8")
+    tmp = folder / (RECORD + ".tmp")  # written beside it, then swapped in: a crash can't leave it half there
+    tmp.write_text(json.dumps({"accepted": (accepted(folder) + [entry])[-KEPT:]}, indent=1), encoding="utf-8")
+    os.replace(tmp, folder / RECORD)
     return entry
 
 

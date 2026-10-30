@@ -112,7 +112,8 @@ Installers are on the [Releases](https://github.com/Nekobyte-Coding/opendisco/re
 
 | Version | What's new | Released for | Known issues (fixed in) |
 |---|---|---|---|
-| 1.7.0 | Spanish, Brazilian Portuguese and Japanese, terms of use included. A demo network of made-up gear whose device tools work. The Site Report. Back up all configs, and Compare backups. airMAX link health. EdgeRouters: firmware updates and Change login. Devices that take their factory login are flagged. Linux: the app's own SSH client where `ssh` is missing, and the AppImage updates itself | macOS, Windows, Linux, Android; iOS (beta, no public download yet) |  |
+| 1.7.1 | Fixes: Android's Settings opens again; a hop's password goes only to that hop; firmware updates through other devices and reboots are checked properly; the command line runs on Python 3.8 and 3.9 again; a malformed reply no longer ends a scan; the selection stays with its device on macOS; and more (CHANGELOG.md) | macOS, Windows, Linux, Android; iOS (beta, no public download yet) |  |
+| 1.7.0 | Spanish, Brazilian Portuguese and Japanese, terms of use included. A demo network of made-up gear whose device tools work. The Site Report. Back up all configs, and Compare backups. airMAX link health. EdgeRouters: firmware updates and Change login. Devices that take their factory login are flagged. Linux: the app's own SSH client where `ssh` is missing, and the AppImage updates itself | macOS, Windows, Linux, Android; iOS (beta, no public download yet) | Android: Settings doesn't open, nor the terms in Spanish, Portuguese or Japanese; through other devices, a device further along can be typed a hop's password; Windows: the command line on Python 3.8 or 3.9 (all 1.7.1) |
 | 1.6.2 | The Linux packages name the project's homepage | macOS, Windows, Linux, Android; iOS (beta, no public download yet) |  |
 | 1.6.1 | Terms of use, shown when the app first opens and after each upgrade, to be accepted before use (the command line asks too). Each device tool's confirmation says what can go wrong. Windows and Linux: the window starts wider when the screen has room, and the list's columns fit what they hold. Open-source licenses… lists the licenses of what each build bundles | macOS, Windows, Linux, Android; iOS (beta, no public download yet) | Linux: the .deb and .rpm give the homepage as "None" (1.6.2) |
 | 1.6.0 | Config backups, Upload config… with what changes shown first, and Apply (airMAX, airFiber, LTU, GigaBeam, EdgeOS). Reboot, and Locate for UniFi access points and switches. Scan from a device given by its address, over a VPN too. Each device's latest firmware during scans, and a Latency column. Search, a note per device, Export device…, and a security report, all config backups, all notes and the Log. Settings holds the networks list and "Also sweep these subnets", on every platform. Tablets and iPads show the device list and a device's page side by side. The adapter picker is called Interface | macOS, Windows, Linux, Android; iOS (beta, no public download yet) | Windows and Linux: at the window's first size, long names, firmware and statuses are cut short. Details says "1 packets" (1.6.1) |
@@ -149,9 +150,9 @@ Installers are on the [Releases](https://github.com/Nekobyte-Coding/opendisco/re
 
 ## The app
 
-- **Mac:** open `OpenDisco-1.7.0-macos-universal.dmg` (Apple silicon and Intel Macs) and drag
+- **Mac:** open `OpenDisco-1.7.1-macos-universal.dmg` (Apple silicon and Intel Macs) and drag
   the app to Applications.
-- **Windows:** run `OpenDisco-1.7.0-windows-x64-setup.exe` (64-bit; Windows on ARM runs it
+- **Windows:** run `OpenDisco-1.7.1-windows-x64-setup.exe` (64-bit; Windows on ARM runs it
   too). It installs for the current user without administrator rights, with Start menu and
   desktop shortcuts and an uninstaller in Apps.
   - **SmartScreen:** the installer isn't code-signed, so the first time Windows shows
@@ -163,16 +164,16 @@ Installers are on the [Releases](https://github.com/Nekobyte-Coding/opendisco/re
     (`%LOCALAPPDATA%\Programs\OpenDisco`), for example `opendisco.cmd --quick`.
 - **Linux:**
   - **Ubuntu 24.04 LTS, Linux Mint 22, Pop!_OS 24.04:**
-    `sudo apt install ./OpenDisco-1.7.0-ubuntu-24.04-amd64.deb`
-  - **Fedora 44:** `sudo dnf install ./OpenDisco-1.7.0-fedora-44-x86_64.rpm`
+    `sudo apt install ./OpenDisco-1.7.1-ubuntu-24.04-amd64.deb`
+  - **Fedora 44:** `sudo dnf install ./OpenDisco-1.7.1-fedora-44-x86_64.rpm`
   - **Any other distribution** (Debian 13, Arch, newer Ubuntu or Fedora...):
-    - **The AppImage** (x86-64, from 1.6.2): `OpenDisco-1.7.0-linux-x86_64.AppImage`. Make it
+    - **The AppImage** (x86-64, from 1.6.2): `OpenDisco-1.7.1-linux-x86_64.AppImage`. Make it
       executable (`chmod +x`) and run it. It brings its own Python and Toga and uses the
       system's GTK 3 and WebKitGTK 4.1, which most desktops have; if they're missing, it says
       what to install. Given options, it's the command-line tool. It runs on Ubuntu 24.04,
       Debian 13, Fedora 40, Linux Mint 22 and later. Where the system has no `ssh` and `scp`,
       Open SSH… and the device tools use the app's own SSH client (asyncssh, which it brings).
-    - **The portable** `OpenDisco-1.7.0-linux.tar.gz`: extract it and run `./opendisco`; its
+    - **The portable** `OpenDisco-1.7.1-linux.tar.gz`: extract it and run `./opendisco`; its
       `README-LINUX.md` lists the packages to install first. The environment it sets up has the
       app's own SSH client too, for a system without `ssh` and `scp`.
 
@@ -180,7 +181,7 @@ Installers are on the [Releases](https://github.com/Nekobyte-Coding/opendisco/re
   release, and pull in GTK, WebKitGTK, tcpdump, ip, iw and the ssh client. The app is in the
   desktop's app menu, and `opendisco` in a terminal runs it (with options, it's the
   command-line tool).
-- **Android:** `OpenDisco-1.7.0-android.apk`: sideload it with "Install unknown apps"
+- **Android:** `OpenDisco-1.7.1-android.apk`: sideload it with "Install unknown apps"
   allowed, on a phone or a tablet. It installs over 1.4.1 and later, keeping its data. See
   [On phones and tablets](#on-phones-and-tablets). From 1.4.1 the app is signed with
   OpenDisco's own release key, so later versions install over it. 1.4.0 was
@@ -621,7 +622,11 @@ version bring that client: asyncssh). Their login window can
 **remember the login for that device** (by MAC address) in the operating system's credential
 store: the macOS Keychain, Windows Credential Manager, or a Secret Service keyring on Linux
 (through `secret-tool`, from libsecret-tools). Where there's no such store, nothing is
-remembered; passwords are never written to a file.
+remembered; passwords are never written to a file. They log in with that username and password
+only: not with this account's SSH keys, nor over a connection `~/.ssh/config` shares
+(ControlMaster), so a password is always checked (the Terminal tab's sessions still use keys).
+Through other devices, a password is typed only for the device that asks for it, in route order:
+a device further along that prints another's prompt gets nothing.
 
 Each action is offered only for the device families whose steps are documented, by Ubiquiti
 or in the firmware's own scripts:
@@ -1339,7 +1344,7 @@ Linux one inside containers, so nothing big ends up in iCloud. Finished installe
 | `src/opendisco/phone.py`, `phone_android.py`, `phone_ios.py` | The phone screens, shared by Android and iPhone/iPad, and each one's native parts |
 | `src/opendisco/terminal.py` | The Terminal tab: SSH and ping sessions |
 | `src/opendisco/devicetools.py`, `devicegui.py`, `phonetools.py` | The device tools over SSH (firmware, config backups and uploads, Reboot, Locate, login, Scan from device) and their windows on desktops and phones |
-| `src/opendisco/sshrun.py`, `phonessh.py`, `credstore.py` | SSH for the device tools (the computer's `ssh` and `scp`; asyncssh on phones and on a Linux system without them) and remembered logins in the system's credential store |
+| `src/opendisco/sshrun.py`, `phonessh.py`, `sshcommon.py`, `credstore.py` | SSH for the device tools (the computer's `ssh` and `scp`; asyncssh on phones and on a Linux system without them; what both share: the login, result and error) and remembered logins in the system's credential store |
 | `src/opendisco/vulns.py` | The CVE check and its updates from the NVD and Ubiquiti's advisories |
 | `src/opendisco/health.py` | Each device's latest firmware, and latency |
 | `src/opendisco/linkhealth.py` | airMAX link health: airOS's `mca-status` and `wstalist` read, the weak links flagged, Details' Link section and the exports' part |

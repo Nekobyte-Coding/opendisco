@@ -7,6 +7,8 @@ Each device's login is filed under its MAC address. The password never goes on a
 where other programs could read it from the process list: the security tool gets it hex-encoded
 on its standard input, secret-tool on its standard input.
 """
+from __future__ import annotations
+
 import re
 import shutil
 import subprocess
