@@ -1009,11 +1009,13 @@ tower. Plug a computer straight into it and run:
 python3 opendisco.py --direct -i en7
 ```
 
-`-i` names the interface the radio is plugged into. Without it, the tool picks wired
-interfaces that have link but no real IP address, and refuses ones that have one, so it never
-listens on an office LAN by accident. If the interface has no link yet, it listens anyway:
-plug in, or re-seat the cable, once it's running. Devices talk the most right after link
-comes up.
+`-i` names the interface the radio is plugged into. Without it, the tool listens on every
+wired interface with link, whether or not it has an address of its own (one set by hand, such
+as 192.168.1.100 for a radio on its factory 192.168.1.20, or one from the device's own DHCP
+server). An interface where more than two devices talk, such as an office LAN on a dock, is
+taken as a shared network: only gear the tool recognises is listed from it, and no temporary
+addresses go on it. An interface named with `-i` is listened to even with no link yet: plug
+in, or re-seat the cable, once it's running. Devices talk the most right after link comes up.
 
 On a direct wire, whatever is talking is the radio, so the tool listens to it the way it
 listens on a trunk (up to 45 seconds) and prints what it learns as it happens:

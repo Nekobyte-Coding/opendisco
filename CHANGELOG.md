@@ -6,6 +6,15 @@ when it came out. The Linux packages of 1.1.0 to 1.3.1 were added then too; thos
 never released for Linux. README.md's "Versions and platforms" lists each version's platforms
 and known issues.
 
+## Unreleased
+
+- Direct to a device scans a wired port that has an address of its own: one set by hand (such
+  as 192.168.1.100 for a radio on 192.168.1.20) or handed out by the device's DHCP server. 1.7.1
+  refused it ("--direct needs the wired interface that's plugged into the device") unless it was
+  chosen under Interface. Every wired port with link is listened to now; one where more than two
+  devices talk, such as an office LAN on a dock, is taken as a shared network: only gear
+  OpenDisco recognises is listed from it, and no temporary addresses go on it.
+
 ## 1.7.1 (2026-10-30)
 
 Fixes from a review of all the code.

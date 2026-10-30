@@ -2801,6 +2801,7 @@ class Trunk:
     error: str = ""
     fed: int = 0  # frames analysed so far
     wifi: dict = field(default_factory=dict)  # the access point a Wi-Fi port is joined to
+    shared: bool = False  # --direct: several devices talk here, so it's a network rather than one device's wire
 
     def tagged_ids(self) -> list:
         """Tagged VLANs seen in traffic or listed by the switch (minus the native one)."""
@@ -2930,9 +2931,14 @@ class Trunk:
             dev = (inv.find(mac=nb.mac) or inv.find(mac=nb.lldp.get("chassis_mac"))
                    or (inv.find(ip=mgmt) if mgmt else None))
             if dev is None and (sniff_all or nb.vendor):
-                dev = inv.attach(mgmt, nb.mac, "sniff") if mgmt else inv.lookup(mac=nb.mac)
-                busiest = max(nb.vlans, key=lambda v: (bool(nb.vlans[v]["ips"]), nb.vlans[v]["frames"]))
-                _tag_vlan(dev, busiest, self.link.name)
+                used = [(vid, ip) for vid, seen in sorted(nb.vlans.items()) for ip in sorted(seen["ips"])]
+                for vid, ip in used:  # a talker only judged at the end (--direct on a port with an address)
+                    dev = inv.attach(ip, nb.mac, "sniff")
+                    _tag_vlan(dev, vid, self.link.name)
+                if not used:
+                    dev = inv.attach(mgmt, nb.mac, "sniff") if mgmt else inv.lookup(mac=nb.mac)
+                    busiest = max(nb.vlans, key=lambda v: (bool(nb.vlans[v]["ips"]), nb.vlans[v]["frames"]))
+                    _tag_vlan(dev, busiest, self.link.name)
             if dev is None:
                 continue
             dev.via.add("sniff")
@@ -3369,6 +3375,14 @@ def render_direct(trunks, inv: Inventory) -> str:
             lines.append(f"    capture failed: {tr.error}")
             continue
         found = talkers(tr)
+        if tr.shared:
+            gear = [nb for nb in found if nb.vendor]
+            lines.append(f"    {len(found)} devices are talking here: a shared network, not a direct wire to one device. "
+                         + ("Gear this tool recognises:" if gear else "None of them is gear this tool recognises."))
+            for nb in gear[:5]:
+                addrs = ", ".join(sorted({ip for seen in nb.vlans.values() for ip in seen["ips"]})) or "-"
+                lines.append(f"    {nb.mac}  {nb.vendor}  {addrs}")
+            continue
         if not found:
             lines.append("    nothing heard: check power/PoE and the cable, or re-seat it while listening")
         for nb in found[:5]:
@@ -3390,12 +3404,13 @@ def render_direct(trunks, inv: Inventory) -> str:
 
 def direct_to_dict(tr: Trunk, inv: Inventory) -> dict:
     return {"interface": tr.link.name, "media": link_media(tr.link.name) or None, "seconds": tr.seconds,
-            "error": tr.error or None,
+            "error": tr.error or None, "shared_network": tr.shared,  # then only recognised gear is listed
             "talkers": [{"mac": nb.mac, "vendor": nb.vendor or None, "frames": nb.frames, "lldp": nb.lldp or None,
                          "vlans": {_vlan_name(v): {"ips": sorted(s["ips"]), "looking_for": sorted(s["wants"]),
                                                    "kinds": sorted(s["kinds"]), "dhcp": s["dhcp"] or None}
                                    for v, s in sorted(nb.vlans.items())},
-                         "verdict": neighbor_verdict(nb, inv.find(mac=nb.mac))} for nb in talkers(tr)]}
+                         "verdict": neighbor_verdict(nb, inv.find(mac=nb.mac))}
+                        for nb in talkers(tr) if nb.vendor or not tr.shared]}
 
 
 def trunk_to_dict(tr: Trunk) -> dict:
@@ -5436,18 +5451,26 @@ def run_scan(opts, log, progress=None, on_inventory=None):
     extra_notes, base_targets, overlap_noted = [], [], set()
 
     ports = wired  # where --vlans / --direct listen and tag VLANs
+    wire = set()  # --direct: ports taken to be wired straight to the device, where every talker is listed
     if opts.direct:
         every_wired = [l for l in hardware_links(all_ifaces) if not l.wireless]
         for l in every_wired:
             l.label = labels.get(l.name, l.label)
         if opts.interface:  # may not have link yet: the user plugs in once it's listening
             ports = [l for l in every_wired if _matches(opts.interface, l.name, l.label)]
-        else:  # a port with link but no real address is the one plugged into the device
-            ports = [l for l in every_wired if l.active and all(i.ip.startswith("169.254.") for i in l.addrs)]
-        if not ports:
-            have = ", ".join(str(l) for l in every_wired if l.active) or "none"
-            raise SystemExit("error: --direct needs the wired interface that's plugged into the device; "
-                             f"interfaces with link: {have}. Name it with -i, e.g. -i en7.")
+            wire = {l.name for l in ports}
+            if not ports:
+                have = ", ".join(str(l) for l in every_wired) or "none"
+                raise SystemExit(f"error: no wired interface matches {', '.join(opts.interface)}; "
+                                 f"wired interfaces: {have}.")
+        else:  # every port with link: a device that hands out addresses (DHCP) gives its port a real one too
+            def link_local_only(l):
+                return all(i.ip.startswith("169.254.") for i in l.addrs)
+            ports = sorted((l for l in every_wired if l.active), key=lambda l: not link_local_only(l))
+            wire = {l.name for l in ports if link_local_only(l)}  # the others are judged by who talks there
+            if not ports:
+                raise SystemExit("error: --direct needs a wired interface plugged into the device, and none has "
+                                 "link. Plug it in, or name the interface with -i to listen while it comes up.")
         names = {l.name for l in ports}
         ifaces = [i for i in ifaces if i.name in names]
 
@@ -5592,18 +5615,32 @@ def run_scan(opts, log, progress=None, on_inventory=None):
             trunks = list(by_name.values())
             mine, told, started = local_macs(), set(), time.monotonic()
 
-            def on_frames(name, frames):
-                for frame in frames:
-                    by_name[name].add(frame, inv, sc.local_ips, mine, opts.direct)
-                if opts.direct:
-                    for line in new_findings(by_name[name], told):
-                        log("  " + line)
+            def crowded(tr):  # --direct: more than two talkers on a port nobody named is a network, not a wire
+                return tr.link.name not in wire and len(talkers(tr)) > 2
 
-            def found_enough():  # --direct: stop a few seconds after the device used an address
-                return opts.direct and any(nb.first_ip_at and time.monotonic() - nb.first_ip_at > 5
-                                           for tr in trunks for nb in talkers(tr))
+            def on_frames(name, frames):
+                tr = by_name[name]
+                for frame in frames:
+                    tr.add(frame, inv, sc.local_ips, mine, opts.direct and name in wire)
+                if opts.direct and not tr.shared:
+                    if crowded(tr):
+                        tr.shared = True
+                        log(f"  {name}: several devices are talking, so it's a shared network, not a direct wire; "
+                            "only gear this tool recognises is listed from it")
+                    else:
+                        for line in new_findings(tr, told):
+                            log("  " + line)
+
+            def found_enough():  # --direct: stop a few seconds after the device used an address, on every port
+                now = time.monotonic()
+                return opts.direct and all(
+                    crowded(tr) or any(nb.first_ip_at and now - nb.first_ip_at > 5 for nb in talkers(tr))
+                    for tr in trunks)
 
             if opts.direct:
+                if len(ports) > 1:
+                    log("The device could be on any wired interface with link, so each is listened to: "
+                        + ", ".join(l.name for l in ports) + ".")
                 for l in ports:
                     media = link_media(l.name)
                     log(f"Listening on {l.name} ({l.label}{', ' + media if media else ''}) for up to "
@@ -5621,8 +5658,9 @@ def run_scan(opts, log, progress=None, on_inventory=None):
             for tr in trunks:
                 frames, tr.error = captured.get(tr.link.name, ([], "not captured"))
                 for frame in frames[tr.fed:]:  # whatever wasn't analysed live
-                    tr.add(frame, inv, sc.local_ips, mine, opts.direct)
-                tr.finish(inv, opts.direct)
+                    tr.add(frame, inv, sc.local_ips, mine, opts.direct and tr.link.name in wire)
+                tr.shared = opts.direct and crowded(tr)
+                tr.finish(inv, opts.direct and not tr.shared)  # a port that turned out to be a wire lists all
                 tr.seconds = round(time.monotonic() - started, 1)
                 if tr.link.wireless:
                     tr.wifi = wifi_association(tr.link.name, sudo)
@@ -5647,13 +5685,15 @@ def run_scan(opts, log, progress=None, on_inventory=None):
                 heard = trunk.heard(vid, vendors_only)
                 return heard, {pair for pair in trunk.pairs.get(vid, ()) if pair[0] in heard}, wants
 
+            # --direct: a shared network isn't the device's wire, so no temporary addresses go on it
+            probed = [l for l in ports if not (by_link.get(l.name) and by_link[l.name].shared)]
             plans = []
-            for link in (ports if opts.direct else links):  # untagged, plus subnets heard untagged
+            for link in (probed if opts.direct else links):  # untagged, plus subnets heard untagged
                 heard, pairs, wants = heard_on(by_link.get(link.name), 0)
                 plans.append({"link": link, "busy": set(heard) | wants,  # never borrow a gateway's address
                               "targets": merged(drop_overlaps(infer_targets(heard, pairs, base_targets, opts.direct)),
                                                 base_targets)})
-            for link in ports:  # then every VLAN found on the port or asked for
+            for link in probed:  # then every VLAN found on the port or asked for
                 trunk = by_link.get(link.name)
                 for vid in sorted(set(opts.vlan_ids) | set(trunk.tagged_ids() if trunk else [])):
                     existing = next((n for n, (v, p) in sc.vlan_map.items() if v == vid and p == link.name), "")
@@ -5666,10 +5706,14 @@ def run_scan(opts, log, progress=None, on_inventory=None):
                     plans.append({"link": Link(existing, f"VLAN {vid}", vlan=vid, parent=link.name),
                                   "targets": targets, "busy": set(heard) | wants})
             vlans = sorted({p["link"].vlan for p in plans if p["link"].vlan and p["targets"]})
-            log("Probing through temporary aliases on " + ", ".join(str(l) for l in (ports if opts.direct else links))
-                + (f", and tagged VLAN {', '.join(map(str, vlans))}" if vlans else ""))
-            alias_result = {}  # (kept when Stop ends the rounds early)
-            run_alias_rounds(sc, inv, mgr, plans, opts, log, alias_result)
+            if plans:
+                log("Probing through temporary aliases on " + ", ".join(str(l) for l in (probed if opts.direct else links))
+                    + (f", and tagged VLAN {', '.join(map(str, vlans))}" if vlans else ""))
+                alias_result = {}  # (kept when Stop ends the rounds early)
+                run_alias_rounds(sc, inv, mgr, plans, opts, log, alias_result)
+            else:
+                log("No temporary addresses: every wired interface with link is a shared network, not a direct "
+                    "wire to the device. Plug the device in, then scan again.")
     except KeyboardInterrupt:
         clear_progress()
         interrupted = True
