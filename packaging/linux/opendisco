@@ -20,6 +20,18 @@ TOGA="toga-gtk==0.5.7"
 SSH="asyncssh==2.23.1"
 CRYPTOGRAPHY="cryptography==47.0.0"  # asyncssh's, the version the AppImage and the iPhone app have
 ENV="${XDG_DATA_HOME:-$HOME/.local/share}/opendisco/python"
+# Made for one Python: after the distribution moves python3 to a new version, it's made again
+# (its packages are in the old version's folder). One made before this check is tried once.
+VERSION="$("$PYTHON" -c 'import sys; print("%d.%d" % sys.version_info[:2])')"
+if [ -f "$ENV/.ready-$TOGA" ]; then
+    if [ -f "$ENV/.python" ]; then
+        [ "$(cat "$ENV/.python")" = "$VERSION" ] || rm -f "$ENV/.ready-$TOGA" "$ENV/.ready-$SSH"
+    elif "$ENV/bin/python" -c 'import toga' 2>/dev/null; then
+        echo "$VERSION" > "$ENV/.python"
+    else
+        rm -f "$ENV/.ready-$TOGA" "$ENV/.ready-$SSH"
+    fi
+fi
 if [ ! -f "$ENV/.ready-$TOGA" ]; then
     if ! "$PYTHON" -c 'import sys; sys.exit(sys.version_info < (3, 11))'; then
         echo "The app needs Python 3.11 or newer (this is $("$PYTHON" -V 2>&1))." >&2
@@ -38,6 +50,7 @@ if [ ! -f "$ENV/.ready-$TOGA" ]; then
         exit 1
     fi
     touch "$ENV/.ready-$TOGA"
+    echo "$VERSION" > "$ENV/.python"
 fi
 if [ ! -f "$ENV/.ready-$SSH" ]; then  # (also into an environment an earlier version set up)
     if "$ENV/bin/python" -m pip install --quiet --disable-pip-version-check --retries 1 --only-binary cryptography \

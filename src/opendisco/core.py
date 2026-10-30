@@ -5375,9 +5375,16 @@ def export_csv(res: ScanResult) -> str:
     writer = csv.writer(out)
     writer.writerow(EXPORT_COLUMNS + ("Diagnostics", "Found through", "Latest firmware", "Note"))
     for d in res.devices:
-        writer.writerow(device_row(d, english=True) + [" | ".join(f"[{tag}] {msg}" for _, tag, msg in d.issues),
-                                         d.found_by.get("ip", ""), health.latest_version(d), d.note])
+        writer.writerow(csv_row(device_row(d, english=True) + [" | ".join(f"[{tag}] {msg}" for _, tag, msg in d.issues),
+                                                d.found_by.get("ip", ""), health.latest_version(d), d.note]))
     return out.getvalue()
+
+
+def csv_row(cells) -> list:
+    """Cells a spreadsheet won't take for formulas: a name a device gives itself ("=HYPERLINK(…)")
+    starts with ' then, as spreadsheets expect for text. (Numbers like -79 stay as they are.)"""
+    return ["'" + c if isinstance(c, str) and c[:1] in ("=", "+", "-", "@", "\t", "\r")
+            and not re.fullmatch(r"[-+]?\d[\d.,]*(?: ?[A-Za-z%]+)?|-", c) else c for c in cells]
 
 
 def export_html(res: ScanResult, site: str = "", demo: bool = False) -> str:

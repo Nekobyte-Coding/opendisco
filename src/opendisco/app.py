@@ -1059,7 +1059,7 @@ class OpenDiscoApp(toga.App):
         self.result = self.live_inv = self.shown_packets = None
         self.table.data = []
         self.details.value = self.packets.value = self.wire.value = self.notes.value = ""
-        self.log.value = f"{time.strftime('%H:%M:%S')}  {demo.MODE}: {demo.NOTE}\n"
+        self.log.value = f"{time.strftime('%H:%M:%S')}  {_(demo.MODE)}: {demo.note()}\n"
         self._finished(self.demo.scan(), None)
         self.status.text = self.demo.status(self.result)
 

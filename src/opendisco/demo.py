@@ -35,8 +35,13 @@ from opendisco.i18n import N_, _, tr
 
 MODE = N_("Demo network")
 STAMP = records.DEMO_STAMP  # "Demo network: made-up devices"
-NOTE = (f"{STAMP}. Nothing was sent on the network: the device tools work on simulated gear. Log in as demo / demo "
-        "(the bench spare: ubnt / ubnt).")
+NOTE = N_("{stamp}. Nothing was sent on the network: the device tools work on simulated gear. Log in as demo / demo "
+          "(the bench spare: ubnt / ubnt).")
+
+
+def note() -> str:
+    """The demo scan's note, in the app's language (the command line's: English)."""
+    return _(NOTE).format(stamp=_(STAMP))
 NO_WEB_UI = N_("The demo network's devices are made up: they have no web UI to open.")
 # What a phone's device tool (phonetools' app.device_job) is doing, for "The demo network's … is still running"
 PHONE_JOBS = {"firmware": N_("firmware update"), "login": N_("login change"), "backup": N_("config backup"),
@@ -327,8 +332,8 @@ def scan(net: demossh.Network, opts=None) -> core.ScanResult:
         dev.ubnt_packets = 6  # a Quick scan's rounds of probes, each answered
         dev.ports, dev.services = sorted(gear.ports), dict(gear.ports)
     for gear in net.gears.values():  # found through its sector's station list (Scan from device)
-        if gear.link.get("found") and gear.up:
-            finder = inv.find(ip=DEVICES[gear.link["via"]][1])
+        finder = inv.find(ip=DEVICES[gear.link["via"]][1]) if gear.link.get("found") else None
+        if finder is not None and gear.up:  # (its sector restarting, it's out of reach: not listed)
             dev = inv.lookup(mac=gear.mac, ip=gear.ip)
             dev.add_ip(gear.ip)
             dev.via.add(devicetools.FROM_DEVICE)
@@ -355,7 +360,7 @@ def scan(net: demossh.Network, opts=None) -> core.ScanResult:
             linkhealth.keep(dev, linkhealth.parse([l for l in said[0].splitlines() if l.strip()], said[1]))
     diag_args = ([], [], opts)
     core.diagnose(inv, *diag_args)
-    return core.ScanResult(opts, core.sorted_devices(inv), [("note", NOTE)], [], [], [], [], inv, None,
+    return core.ScanResult(opts, core.sorted_devices(inv), [("note", note())], [], [], [], [], inv, None,
                            time.monotonic() - started, diag_args=diag_args)
 
 
@@ -422,7 +427,7 @@ class Credentials:
         return True
 
     def store_name(self) -> str:
-        return "the demo's memory"
+        return _("the demo's memory")
 
     def load(self, mac: str) -> str | None:
         return self.passwords.get(mac)
@@ -451,7 +456,25 @@ class Demo:
         self.network = network(self.folder)
         self.patches = []  # (object or dict, name, what it was)
         self.ended = False
-        self._start()
+        try:
+            self._start()
+        except BaseException:  # (its folder full, say): nothing of it stays in the app's settings
+            self.ended = True
+            demossh.NETWORK = None
+            self._restore()
+            shutil.rmtree(self.folder, ignore_errors=True)
+            raise
+
+    def _restore(self) -> None:
+        """Put back what the demo replaced, the latest first."""
+        for target, name, value in reversed(self.patches):
+            if isinstance(target, dict):
+                if value is _MISSING:
+                    target.pop(name, None)
+                else:
+                    target[name] = value
+            elif value is not _MISSING:
+                setattr(target, name, value)
 
     def _set(self, target, name, value) -> None:
         if isinstance(target, dict):
@@ -467,8 +490,11 @@ class Demo:
         remembered = {mac: {"user": k["user"], "port": k["port"]} for mac, k in known.items()}
         factory = {FACTORY: ["ubnt", "ubnt"]}  # found before: the bench spare's issue shows from the start
         for key, value in (("hidden", {}), ("ssh_user", "demo"), ("factory_logins", factory),
-                           ("device_logins", remembered)):
+                           ("device_logins", remembered),  # and, as they are, what the demo may change:
+                           ("skip_port_warning", app.settings.get("skip_port_warning", False)),
+                           (records.SITE_KEY, app.settings.get(records.SITE_KEY, ""))):
             self._set(app.settings, key, value)
+        self._set(app, "port_warning_accepted", getattr(app, "port_warning_accepted", False))
         self._set(app, "hidden", app.settings["hidden"])
         app._update_hidden_button()
         self._set(core, "FACTORY_LOGINS_FOUND", factory)
@@ -558,14 +584,7 @@ class Demo:
                     if window is not app.main_window and window.title != _("Settings"):
                         window.on_close()  # as if closed by hand: each window's own clean-up runs
             demossh.NETWORK = None
-            for target, name, value in reversed(self.patches):
-                if isinstance(target, dict):
-                    if value is _MISSING:
-                        target.pop(name, None)
-                    else:
-                        target[name] = value
-                elif value is not _MISSING:
-                    setattr(target, name, value)
+            self._restore()
             app._update_hidden_button()
             if hasattr(app, "_top_changed"):
                 app._top_changed()

@@ -64,8 +64,10 @@ def create_key() -> None:
                     "-storepass:env", "OPENDISCO_KEYSTORE_PASSWORD", "-keypass:env", "OPENDISCO_KEYSTORE_PASSWORD"],
                    env=env, check=True)
     KEYSTORE.chmod(0o600)
-    subprocess.run(["security", "add-generic-password", "-a", ALIAS, "-s", KEYCHAIN_ITEM, "-U", "-w", password],
-                   check=True)
+    # Through security's own prompt (-i), not its command line: an argument shows in ps, and in the
+    # error printed if it fails. (-X: the password as hex, as credstore.py gives it.)
+    subprocess.run(["security", "-i"], input=f'add-generic-password -U -a "{ALIAS}" -s "{KEYCHAIN_ITEM}" '
+                                             f'-X {password.encode().hex()}\n', text=True, check=True)
     print(f"Created {KEYSTORE}; its password is in the login keychain as \"{KEYCHAIN_ITEM}\".\n"
           "Back up both: without them, no later version can update an installed copy.")
 

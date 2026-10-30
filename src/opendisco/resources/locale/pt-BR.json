@@ -1458,5 +1458,15 @@
  "The demo network has ended: its made-up devices are gone.": "A rede de demonstração terminou: os dispositivos fictícios dela não existem mais.",
  "error": "erro",
  "warning": "aviso",
- "notice": "observação"
+ "notice": "observação",
+ "The demo network opens once {what} has finished or is closed.": "A rede de demonstração abre depois que {what} terminar ou fechar.",
+ "the {title} window": "a janela {title}",
+ "{stamp}. Nothing was sent on the network: the device tools work on simulated gear. Log in as demo / demo (the bench spare: ubnt / ubnt).": "{stamp}. Nada foi enviado na rede: as ferramentas de dispositivo funcionam em equipamentos simulados. Fazer login como demo / demo (o equipamento reserva: ubnt / ubnt).",
+ "the demo's memory": "a memória da demonstração",
+ "{mac} isn't a MAC address, so no backups are kept under it.": "{mac} não é um endereço MAC, então nenhum backup é guardado com esse nome.",
+ "{ip} is no longer in the list: scan again.": "{ip} não está mais na lista: escanear novamente.",
+ "{device}: wait for what's running to finish.": "{device}: aguardar o término do que está em andamento.",
+ "Back up all: wait for what's running to finish.": "Backup de todas: aguardar o término do que está em andamento.",
+ "Couldn't open the file: {error}": "Não foi possível abrir o arquivo: {error}",
+ "Log in to stop its LED blinking.": "Fazer login para parar de piscar o LED."
 }
