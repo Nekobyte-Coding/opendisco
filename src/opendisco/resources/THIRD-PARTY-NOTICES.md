@@ -6,7 +6,7 @@ Licensed under the Apache License, Version 2.0. The license text is in the LICEN
 
 OpenDisco's installers, packages and apps also include the third-party components listed below. Each is the work of its own authors and is used under its own license, whose full text is at the end of this file. Nothing in OpenDisco's Terms of Use limits any right that these licenses grant, and the Terms' disclaimers of warranty and limits of liability are also made on behalf of these components' authors and contributors.
 
-This list covers OpenDisco 1.7.0 for macOS (the .dmg), Windows (the setup .exe), Linux (the .deb, the .rpm, the AppImage and the portable .tar.gz), Android (the .apk) and the iPhone and iPad beta. Each component says which of them include it.
+This list covers OpenDisco 1.7.1 for macOS (the .dmg), Windows (the setup .exe), Linux (the .deb, the .rpm, the AppImage and the portable .tar.gz), Android (the .apk) and the iPhone and iPad beta. Each component says which of them include it.
 
 Not included in OpenDisco's own files:
 - The Linux .deb and .rpm use the system's Python, GTK, WebKitGTK, OpenSSH, tcpdump, ip and iw, which the distribution's package manager installs from the distribution.
