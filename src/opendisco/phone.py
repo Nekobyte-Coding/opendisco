@@ -628,8 +628,13 @@ def route(app, d) -> list:
 
 async def ask_route(app, d, purpose: str):
     """The login for d, through the devices on its route, each asked for in turn, nearest first
-    (a device this phone can reach itself is logged in to directly). None when cancelled."""
+    (a device this phone can reach itself is logged in to directly). None when cancelled, and
+    for a device that's no longer listed (a page left open from the demo network, say: its
+    made-up address would be looked for on the real network)."""
     from opendisco import devicetools
+    if app.result is None or app.result.inv.devices.get(d.key) is not d:
+        app._tool_said(tr("{ip} is no longer in the list: scan again.", ip=d.ip or d.mac))
+        return None
     hops = route(app, d)
     if hops and await _work(app, devicetools.answers, d.ip, d.port("ssh"), 2):
         hops = []
@@ -809,9 +814,7 @@ async def scan_from(app):
     if result is not app.result:
         app._tool_said(tr("Scan from {ip} finished after a new scan started: start it again.", ip=d.ip))
         return
-    own = {i.ip for i in core.local_interfaces()}  # this phone is in the device's ARP table too
-    sightings = [s for s in sightings if s.ip not in own]
-    seen, new = devicetools.merge_scan(result, d, sightings, core.local_macs())
+    seen, new = devicetools.merge_scan(result, d, sightings, core.local_addresses())  # (not this phone itself)
     app._show_devices(result.devices)
     counts = ", ".join(f"{_(devicetools.SCAN_HOW[how])} {n}" for how in devicetools.SCAN_HOW
                        if (n := sum(1 for s in sightings if s.how == how)))

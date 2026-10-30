@@ -474,12 +474,17 @@ class Shell:
         self.login, self.on_output, self.on_closed = login, on_output, on_closed
         self.command, self.ask, self.keys, self.error = command, ask, keys, None
         self.size, self.process, self.conns, self.ended = (cols, rows), None, [], False
+        self.closed = False  # close() was asked for, perhaps while it was still connecting
         self.task = asyncio.run_coroutine_threadsafe(self._run(), _loop())
 
     async def _start(self, login: Login, command: str | None, ask=None):
         self.conns = await _open(login, ask, self.keys)
-        return await self.conns[-1].create_process(command, term_type="xterm-256color", term_size=self.size,
-                                                   encoding="utf-8", errors="replace")
+        try:
+            return await self.conns[-1].create_process(command, term_type="xterm-256color", term_size=self.size,
+                                                       encoding="utf-8", errors="replace")
+        except BaseException:  # (logged in, but no shell: the connections go, not left open)
+            _close(self.conns)
+            raise
 
     async def _run(self) -> None:
         reason, typer, started = "", None, time.monotonic()
@@ -495,11 +500,14 @@ class Shell:
             failure = _failure(e, self.login)
             return self._end(str(failure), failure)
         try:
-            if self.process is None:  # through the last hop's own client, which asks for the password
+            if self.process is None and not self.closed:  # through the last hop's own client, which asks for the password
                 hop = last_hop(self.login)
                 self.process = await self._start(hop, nested_command(self.login, self.command))
                 typer = _PasswordTyper(self.login, self.process.stdin.write)
-            while True:
+            if self.closed:  # closed while it connected (another device's page opened, say): it doesn't open
+                if self.process is not None:
+                    self.process.close()
+            while not self.closed:
                 data = await self.process.stdout.read(65536)
                 if not data:
                     break
@@ -530,6 +538,7 @@ class Shell:
 
     def close(self) -> None:
         def closing():
+            self.closed = True
             if self.process is not None:
                 self.process.close()
             _close(self.conns)
@@ -554,6 +563,9 @@ class Forward(Shell):
         local, host, port = self.target
         try:
             self.conns = await _open(self.login, None, self.keys)
+            if self.closed:
+                _close(self.conns)
+                return self._end("")
             await self.conns[-1].forward_local_port("127.0.0.1", local, host, port)
         except Exception as e:
             _close(self.conns)

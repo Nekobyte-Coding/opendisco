@@ -41,7 +41,7 @@ NO_WEB_UI = N_("The demo network's devices are made up: they have no web UI to o
 # What a phone's device tool (phonetools' app.device_job) is doing, for "The demo network's … is still running"
 PHONE_JOBS = {"firmware": N_("firmware update"), "login": N_("login change"), "backup": N_("config backup"),
               "upload": N_("config upload"), "reboot": N_("reboot"), "link": N_("link health check"),
-              "backup_all": N_("Back up all")}
+              "backup_all": N_("Back up all"), "config": N_("config upload")}  # (Save or Apply in the editor)
 DAY = 86400
 # The interface Details names for the untagged VLAN, as each system calls its first one
 INTERFACE = {"darwin": "en0", "ios": "en0", "win32": "Ethernet", "android": "wlan0"}.get(sys.platform, "eth0")

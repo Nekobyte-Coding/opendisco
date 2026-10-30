@@ -372,7 +372,7 @@ async def scan_flow(app, d):
     app.status.text = tr("Reading what {ip} sees…", ip=d.ip)
     try:
         def work():
-            return devicetools.parse_scan(devicetools.read_scan(login, fam)), core.local_macs()
+            return devicetools.parse_scan(devicetools.read_scan(login, fam)), core.local_addresses()
 
         try:
             sightings, local = await _work(work)
@@ -1746,7 +1746,7 @@ async def scan_address(app):
     app.status.text = tr("Reading what {ip} sees…", ip=ip)
     try:
         def work():
-            return devicetools.scan_from_address(result, login, core.local_macs())
+            return devicetools.scan_from_address(result, login, core.local_addresses())
 
         try:
             finder, sightings, seen, new = await _work(work)

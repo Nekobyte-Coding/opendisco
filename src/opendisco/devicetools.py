@@ -1878,7 +1878,7 @@ def scan_from_address(res, login: sshrun.Login, local: set = frozenset()) -> tup
     """Scan from a device given by its address and login (over a VPN, say), whether or not
     this computer found it: it becomes the device that what it sees is listed under, the way
     Scan from device does it. A device already in the table with that address or MAC is that
-    device. local: this computer's MACs. Returns (the device, what it saw, the devices it
+    device. local: this computer's MACs and addresses. Returns (the device, what it saw, the devices it
     knows of, the ones that were new)."""
     text = read_scan(login, "")
     sightings, me = parse_scan(text), parse_self(text, login.ip)
@@ -1926,7 +1926,7 @@ def merge_scan(res, finder, sightings: list, local: set = frozenset()) -> tuple:
     this computer hadn't found itself is listed under the finder (found_by), and so is one
     attached to it directly (a station or an LLDP neighbour); one this computer found that is
     merely in the finder's ARP table isn't, or a gateway would collect the whole network.
-    local: this computer's MACs (core.local_macs()), and any of the finder's own. Returns
+    local: this computer's MACs and addresses (core.local_addresses()), and any of the finder's own MACs. Returns
     (devices it knows of, the ones that were new)."""
     from opendisco import core
     above, up = {finder.key}, finder  # the finder's own chain, so no loop is made
@@ -1938,7 +1938,7 @@ def merge_scan(res, finder, sightings: list, local: set = frozenset()) -> tuple:
     for s in sorted(sightings, key=lambda s: order[s.how]):
         mac = core.norm_mac(s.mac) if core.valid_mac(s.mac) else None
         ip = s.ip if s.ip and core._usable_ip(s.ip) else ""
-        if (not mac and not ip) or mac in local or mac == finder.mac or (ip and ip in finder.ips):
+        if (not mac and not ip) or mac in local or (ip and ip in local) or mac == finder.mac or (ip and ip in finder.ips):
             continue
         dev = res.inv.find(mac=mac) if mac else None
         if dev is None and ip:

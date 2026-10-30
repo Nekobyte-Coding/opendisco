@@ -64,13 +64,23 @@ def update_buttons(app, d):
         app.running or app.rescanning or app.finding or job))
 
 
-def _begin(app, d, name: str, stop: threading.Event | None = None):
-    app.device_job = {"key": d.key, "name": name, "stop": stop}
+def _begin(app, d, name: str, stop: threading.Event | None = None) -> dict | None:
+    """Take the one job a phone runs at a time. None (and it says so) when another took it
+    meanwhile: a flow checks on its first tap, then waits for questions and the network, and a
+    second tap could get there too (two firmware installs on one radio)."""
+    if app.device_job:
+        _say(app, tr("{device}: wait for what's running to finish.", device=_label(d)))
+        return None
+    job = app.device_job = {"key": d.key, "name": name, "stop": stop}
     app.spinner.start()
     phone.update_tools(app)
+    return job
 
 
-def _end(app):
+def _end(app, job=None):
+    """Give the job back: that one only (job), when given."""
+    if job is not None and app.device_job is not job:
+        return
     app.device_job = None
     app.spinner.stop()
     phone.update_tools(app)
@@ -168,12 +178,14 @@ async def _update(app, d, check):
     if not await _alert(app, _("Install firmware?"), message, question=True):
         return
     stop = threading.Event()
-    _begin(app, d, "firmware", stop)
+    job = _begin(app, d, "firmware", stop)
+    if job is None:
+        return
     folder = Path(app.paths.cache) / "firmware"
     outcome, report = {}, _reporter(app)
 
     def no_stop():
-        app.device_job["stop"] = None  # past the point where stopping leaves the device as it was
+        job["stop"] = None  # past the point where stopping leaves the device as it was
         phone.update_tools(app)
 
     def work():
@@ -203,7 +215,7 @@ async def _update(app, d, check):
     try:
         await _work(app, work)
     finally:
-        _end(app)
+        _end(app, job)
     if "error" in outcome:
         text = outcome["error"]
         if stop.is_set() and ("Cancelled" in text or _("Cancelled.") in text):
@@ -266,6 +278,7 @@ class ConfigPage:
     def __init__(self, app, d, login, text, pending, kind="airos", tools=None):
         self.app, self.d, self.login, self.saved, self.kind = app, d, login, text, kind
         self.tools = tools or {"save": True, "apply": True, "why": ""}
+        self.writing = False  # Save or Apply on its way to the device
         ui = phone.native(app)
         self.box = toga.MultilineTextInput(value=text, style=Pack(flex=1, font_family="monospace", font_size=10))
         self.state = toga.Label("")
@@ -300,8 +313,9 @@ class ConfigPage:
         return self.box.value.replace("\r", "") != self.saved.replace("\r", "")
 
     def leaving(self):
-        """Back: with edits not saved, ask; keeping them shows the page again."""
-        if self._changed():
+        """Back: with edits not saved, ask; keeping them shows the page again. (Not while they're
+        being written: they're on their way.)"""
+        if self._changed() and not self.writing:
             self.app.loop.create_task(self._discard_or_keep())
 
     async def _discard_or_keep(self):
@@ -352,6 +366,10 @@ class ConfigPage:
         detail = i18n.sentences(changes, then) + "\n\n" + terms.risk("apply" if apply else "save")
         if not await _alert(app, what, detail, question=True):
             return
+        job = _begin(app, self.d, "config")  # (the one job: no reboot or second write meanwhile)
+        if job is None:
+            return
+        self.writing = True
         self._enable(False)
         self.state.text = _("Applying…") if apply else _("Saving…")
         def work():
@@ -367,10 +385,14 @@ class ConfigPage:
             await app.main_window.dialog(toga.ErrorDialog(_("Connection lost"), str(e)))
         except (devicetools.ToolError, phonessh.SSHError, OSError) as e:
             self.state.text = app._wrap(str(e))
+            _say(app, f"{self.d.ip}: {e}")  # (also when the page was left meanwhile)
         else:
             self.saved = text
             self.state.text = app._wrap(message)
             _say(app, f"{self.d.ip}: {message}")
+        finally:
+            self.writing = False
+            _end(app, job)
         self._enable(True)
 
 
@@ -428,7 +450,9 @@ async def change_login(app):
         return
     new = phonessh.Login(login.ip, login.port, new_user, new_password, login.alias, login.known_hosts, login.via,
                          login.nested)
-    _begin(app, d, "login")
+    job = _begin(app, d, "login")
+    if job is None:
+        return
     outcome = {}
 
     def work():
@@ -448,7 +472,7 @@ async def change_login(app):
     try:
         await _work(app, work)
     finally:
-        _end(app)
+        _end(app, job)
     if "error" in outcome:
         _say(app, tr("{error} If the device takes neither login now, its web UI or a reset to factory defaults gets "
                      "it back.", error=outcome['error']))
@@ -670,6 +694,9 @@ class BackupsPage:
                                                  file=devicetools.CONFIG_FILES[kind]))
         if not login:
             return
+        job = _begin(app, d, "backup")  # (the one job: the demo, say, doesn't end under it)
+        if job is None:
+            return
         self.state.text = tr("Reading the config of {ip}…", ip=d.ip)
         self.backup_button.enabled = False
 
@@ -684,13 +711,19 @@ class BackupsPage:
             return
         finally:
             self.backup_button.enabled = True
+            _end(app, job)
         self.refresh()
         self.state.text = app._wrap(tr("Backed up the config of {ip} ({date}); {count} kept.", ip=d.ip,
                                        date=backup.date, count=len(self.backups)))
         app._append_log(tr("Config backup of {device}: {path}", device=_label(d), path=backup.path), status=False)
 
     async def upload_file(self, widget, **kwargs):
-        path = await self.opener(self.app)
+        try:
+            path = await self.opener(self.app)
+        except Exception as e:  # too big, not available offline, refused by its app: said, not lost
+            self.state.text = self.app._wrap(tr("Couldn't open the file: {error}", error=getattr(e, "strerror", None)
+                                                or e))
+            return
         if path:
             await upload(self.app, self.d, path=path)
 
@@ -832,7 +865,10 @@ class BackupAllPage:
 
     async def run(self):
         app = self.app
-        app.device_job = {"key": None, "name": "backup_all", "stop": self.stop}
+        if app.device_job:  # (taken while its page was being made)
+            _say(app, _("Back up all: wait for what's running to finish."))
+            return
+        app.device_job = taken = {"key": None, "name": "backup_all", "stop": self.stop}
         app.spinner.start()
         phone.update_tools(app)
         _say(app, tr("Back up all: {waiting} of {count} device(s), {at_once} at a time…",
@@ -842,7 +878,7 @@ class BackupAllPage:
             await _work(app, devicetools.back_up_all, self.jobs, lambda job: app._from_worker(self.show, job),
                         self.stop)
         finally:
-            _end(app)
+            _end(app, taken)
         self.stop_button.enabled = False
         for job in self.jobs:
             self.show(job)
@@ -877,7 +913,9 @@ class BackupAllPage:
                                                  file=devicetools.CONFIG_FILES[job.kind]))
         if not login:
             return
-        _begin(app, d, "backup")
+        taken = _begin(app, d, "backup")
+        if taken is None:
+            return
         job.state, job.said = "backing up", ""
         self.show(job)
         try:
@@ -885,7 +923,7 @@ class BackupAllPage:
         except (phonessh.SSHError, devicetools.ToolError, OSError) as e:
             job.state, job.said = "failed", str(e)
         finally:
-            _end(app)
+            _end(app, taken)
         for other in self.jobs:  # the other buttons were off meanwhile
             self.show(other)
         self.summary.text = app._wrap(tr("Done: {summary}.", summary=devicetools.backup_summary(self.jobs)))
@@ -936,7 +974,9 @@ async def upload(app, d, backup=None, path=None):
         page.page.close()
         page.closed()
     app.tabs.current_tab = _("Tools")
-    _begin(app, d, "upload")
+    job = _begin(app, d, "upload")
+    if job is None:
+        return
     outcome = {}
 
     def work():
@@ -951,7 +991,7 @@ async def upload(app, d, backup=None, path=None):
     try:
         await _work(app, work)
     finally:
-        _end(app)
+        _end(app, job)
     _say(app, f"{d.ip}: {outcome.get('said') or outcome.get('error', '')}")
 
 
@@ -1023,7 +1063,9 @@ async def reboot(app):
     if not login:
         return
     stop = threading.Event()
-    _begin(app, d, "reboot", stop)
+    job = _begin(app, d, "reboot", stop)
+    if job is None:
+        return
     _say(app, tr("Rebooting {ip}…", ip=d.ip), begins=True)
     outcome, report = {}, _reporter(app)
 
@@ -1036,7 +1078,7 @@ async def reboot(app):
     try:
         await _work(app, work)
     finally:
-        _end(app)
+        _end(app, job)
     said = outcome.get("error") or tr("Rebooted: back after {seconds:.0f} s.", seconds=outcome["took"])
     _say(app, f"{d.ip}: {said}")
 
@@ -1051,8 +1093,21 @@ async def locate(app):
         try:
             await _work(app, devicetools.locate, login, d, False)
         except (devicetools.ToolError, phonessh.SSHError) as e:
-            _say(app, tr("Stop locating {ip}: {error}", ip=d.ip, error=e))
-            return
+            if getattr(e, "kind", "") in ("auth", "key"):  # its login changed meanwhile: asked for again
+                login = await phone.ask_route(app, d, _("Log in to stop its LED blinking."))
+                try:
+                    if login is None:
+                        raise e
+                    await _work(app, devicetools.locate, login, d, False)
+                except (devicetools.ToolError, phonessh.SSHError) as again:
+                    e = again
+                else:
+                    e = None
+            if e is not None:
+                app.phone_locating.pop(d.key, None)  # (not stuck at Stop locating: Locate tries again)
+                _say(app, tr("Stop locating {ip}: {error}", ip=d.ip, error=e))
+                phone.update_tools(app)
+                return
         app.phone_locating.pop(d.key, None)
         _say(app, tr("{ip}: its LED is back to normal.", ip=d.ip))
         phone.update_tools(app)
@@ -1086,7 +1141,9 @@ async def link(app):
                                             "airtime and distance, its own and each station's on an access point."))
     if not login:
         return
-    _begin(app, d, "link")
+    job = _begin(app, d, "link")
+    if job is None:
+        return
     _say(app, tr("Reading the link health of {ip}…", ip=d.ip), begins=True)
     try:
         reading = await _work(app, devicetools.read_link, login)
@@ -1094,7 +1151,7 @@ async def link(app):
         _say(app, tr("Link health of {ip}: {error}", ip=d.ip, error=e))
         return
     finally:
-        _end(app)
+        _end(app, job)
     linkhealth.keep(d, reading)
     app._rediagnose()  # its issues, in the list and Details
     if app._selected_device() is d:
@@ -1135,7 +1192,7 @@ async def scan_address(app):
     app.status.text = tr("Reading what {ip} sees…", ip=login.ip)
     try:
         finder, sightings, seen, new = await _work(app, devicetools.scan_from_address, result, login,
-                                                   core.local_macs())
+                                                   core.local_addresses())
     except (phonessh.SSHError, devicetools.ToolError) as e:
         app.status.text = tr("Scan from {ip}: {error}", ip=login.ip, error=e)
         return

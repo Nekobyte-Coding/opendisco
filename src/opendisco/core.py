@@ -586,6 +586,12 @@ def valid_mac(mac: str | None) -> bool:
     return bool(mac) and re.fullmatch(r"(?:[0-9a-f]{2}:){5}[0-9a-f]{2}", norm_mac(mac)) is not None
 
 
+def local_addresses() -> set:
+    """This computer's (or phone's) MACs and IPv4 addresses: what a device's ARP table lists of it
+    once it has logged in. (Phones can't read their own MACs: the addresses still tell.)"""
+    return set(local_macs()) | {i.ip for i in local_interfaces()}
+
+
 def is_ubnt_mac(mac: str | None) -> bool:
     return bool(mac) and norm_mac(mac).replace(":", "")[:6].upper() in UBNT_OUIS
 
