@@ -6,7 +6,7 @@ when it came out. The Linux packages of 1.1.0 to 1.3.1 were added then too; thos
 never released for Linux. README.md's "Versions and platforms" lists each version's platforms
 and known issues.
 
-## Unreleased
+## 1.7.2 (2026-11-04)
 
 - Direct to a device scans a wired port that has an address of its own: one set by hand (such
   as 192.168.1.100 for a radio on 192.168.1.20) or handed out by the device's DHCP server. 1.7.1
