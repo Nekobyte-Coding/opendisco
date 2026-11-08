@@ -100,7 +100,7 @@ def accepted(folder) -> list:
     try:
         records = json.loads((Path(folder) / RECORD).read_text(encoding="utf-8")).get("accepted", [])
         return [r for r in records if isinstance(r, dict)]
-    except (OSError, ValueError, AttributeError):
+    except (OSError, ValueError, AttributeError, TypeError):  # (no such file, or not one this app wrote)
         return []
 
 

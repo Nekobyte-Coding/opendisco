@@ -2052,6 +2052,17 @@ def _icmp_checksum(data: bytes) -> int:
     return ~total & 0xFFFF
 
 
+def quoted_echo(data: bytes):
+    """(ident, sequence number, the address it went to) of the echo an ICMP error quotes, data
+    being the error from its ICMP header on; None when it doesn't quote an echo whole."""
+    inner = data[8:]  # the quoted packet: its IP header, then the first 8 bytes of the echo
+    head = (inner[0] & 0x0F) * 4 if inner else 0
+    if head < 20 or len(inner) < head + 8 or inner[head] != 8:
+        return None
+    ident, seq = struct.unpack("!HH", inner[head + 4:head + 8])
+    return ident, seq, socket.inet_ntoa(inner[16:20])
+
+
 def ping(ip: str, out, stop, interval: float = 1.0, timeout: float = 2.0, count: int = 0) -> None:
     """Ping ip the way ping(8) does, a line per reply to out(line), until stop() is true (or count
     echoes have been answered or timed out), then the statistics. Through an unprivileged ICMP
@@ -2103,11 +2114,10 @@ def ping(ip: str, out, stop, interval: float = 1.0, timeout: float = 2.0, count:
             if len(data) < 8:
                 continue
             kind, _code, _sum, _ident, n = struct.unpack("!BBHHH", data[:8])
-            if kind in ICMP_KINDS and len(data) >= 36:  # the error quotes our echo: IP header + 8 bytes
-                inner = data[8:]
-                n = struct.unpack("!H", inner[(inner[0] & 0x0F) * 4 + 6:][:2])[0]
-                if pending.pop(n, None) is not None:
-                    out(f"From {addr[0]} icmp_seq={n} {ICMP_KINDS[kind]}")
+            if kind in ICMP_KINDS:
+                echo = quoted_echo(data)  # (only an echo to ip: another ping's error isn't this one's)
+                if echo and echo[2] == ip and pending.pop(echo[1], None) is not None:
+                    out(f"From {addr[0]} icmp_seq={echo[1]} {ICMP_KINDS[kind]}")
                 continue
             if kind != 0 or n not in pending or addr[0] != ip:
                 continue
@@ -3939,7 +3949,7 @@ def run_alias_rounds(sc: Scanner, inv: Inventory, mgr: AliasManager, plans, opts
              the address round 2 borrowed would have ignored us."""
     # result: filled as the rounds go, so a run stopped halfway keeps what the rounds before found
     result = {} if result is None else result
-    result.update(arp={}, ctx={}, skipped=[], tftp=set())
+    result.update(arp={}, ctx={}, skipped=[], tftp=set(), probed=[])
 
     def occupied(seen) -> set:
         # Our own earlier aliases don't count as taken; anything that answered does.
@@ -3959,6 +3969,7 @@ def run_alias_rounds(sc: Scanner, inv: Inventory, mgr: AliasManager, plans, opts
         added = [(t, ip) for t, ip in plan if mgr.add(link.name, ip, t.network.prefixlen)]
         if not added:
             return
+        result["probed"] += [t.network for t, _ in added if t.network not in result["probed"]]
         time.sleep(3.0 if IS_WINDOWS else 0.5)  # let the new routes settle (Windows checks for duplicates first)
         nets = [t.network for t, _ in added]
         hosts = [] if opts.quick else [str(h) for t, ip in added for h in t.network.hosts() if str(h) != ip]
@@ -5574,6 +5585,7 @@ class ScanResult:
     counters: dict = field(default_factory=dict)  # error counters that went up during the scan
     diag_args: tuple = ()  # diagnose()'s other arguments, to diagnose again after a rescan
     finished: float = field(default_factory=time.time)  # when the scan ended (the Site Report's date)
+    probed: list = field(default_factory=list)  # the networks a temporary address was added on, in order
 
     def wire_title(self) -> str:
         """The Wire tab's heading, in English (the Site Report translates it)."""
@@ -6029,7 +6041,7 @@ def run_scan(opts, log, progress=None, on_inventory=None):
                                "the device.", network=net)) for net in skipped]
 
     return ScanResult(opts, devs, notes, trunks, ifaces, links, base_targets, inv, mgr, elapsed, interrupted,
-                      counters, diag_args)
+                      counters, diag_args, probed=(alias_result or {}).get("probed", []))
 
 
 def rescan_device(res: ScanResult, d: Device, log, seconds: float = 3.0):

@@ -610,8 +610,11 @@ class OpenDiscoApp(toga.App):
         """The editable networks file lives in the app's data folder (the bundle is read-only)."""
         path = Path(self.paths.data) / "networks.txt"
         if not path.exists():
-            path.parent.mkdir(parents=True, exist_ok=True)
-            shutil.copyfile(core.DEFAULT_NETWORKS_FILE, path)
+            try:
+                path.parent.mkdir(parents=True, exist_ok=True)
+                shutil.copyfile(core.DEFAULT_NETWORKS_FILE, path)
+            except OSError:  # a data folder that can't be written: the bundled file (Save then says why)
+                return Path(core.DEFAULT_NETWORKS_FILE)
         return path
 
     def _ports(self) -> dict:

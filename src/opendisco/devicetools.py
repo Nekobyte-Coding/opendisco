@@ -2266,11 +2266,15 @@ _ITOA64 = "./0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz"
 
 
 def hash_scheme(stored: str) -> str:
+    """The scheme of a stored hash the app can check and write, or "". Not one with a non-ASCII salt,
+    nor one asking for a million rounds or more: hashed here in Python, that would take minutes."""
+    if not stored.isascii():
+        return ""
     if re.fullmatch(r"\$1\$[^$]{0,8}\$[./0-9A-Za-z]{22}", stored):
         return "MD5-crypt"
-    if re.fullmatch(r"\$5\$(rounds=\d+\$)?[^$]{0,16}\$[./0-9A-Za-z]{43}", stored):
+    if re.fullmatch(r"\$5\$(rounds=\d{1,6}\$)?[^$]{0,16}\$[./0-9A-Za-z]{43}", stored):
         return "SHA-256-crypt"
-    if re.fullmatch(r"\$6\$(rounds=\d+\$)?[^$]{0,16}\$[./0-9A-Za-z]{86}", stored):
+    if re.fullmatch(r"\$6\$(rounds=\d{1,6}\$)?[^$]{0,16}\$[./0-9A-Za-z]{86}", stored):
         return "SHA-512-crypt"
     return ""
 

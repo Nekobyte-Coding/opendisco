@@ -354,13 +354,10 @@ def _take_replies(sock, pending: dict, times: dict, idents: set) -> None:
         if len(data) < 8:
             continue
         kind, _code, _sum, ident, n = struct.unpack("!BBHHH", data[:8])
-        if kind in core.ICMP_KINDS and len(data) >= 36:  # an error quoting one of the echoes
-            inner = data[8:]
-            inner = inner[(inner[0] & 0x0F) * 4:]
-            if len(inner) >= 8:
-                ident, n = struct.unpack("!HH", inner[4:8])
-                if ident in idents and n in pending and pending[n][0] == socket.inet_ntoa(data[24:28]):
-                    del pending[n]  # unreachable: lost now rather than at the timeout
+        if kind in core.ICMP_KINDS:  # an error quoting one of the echoes
+            echo = core.quoted_echo(data)
+            if echo and echo[0] in idents and echo[1] in pending and pending[echo[1]][0] == echo[2]:
+                del pending[echo[1]]  # unreachable: lost now rather than at the timeout
             continue
         if kind != 0 or ident not in idents or n not in pending or pending[n][0] != addr[0]:
             continue
