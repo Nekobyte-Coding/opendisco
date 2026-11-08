@@ -3304,10 +3304,29 @@ def talkers(trunk: Trunk) -> list:
                   key=lambda nb: (not nb.ubiquiti, not nb.vendor, -nb.frames))
 
 
-def new_findings(trunk: Trunk, told: set) -> list:
-    """Lines for --direct's live output: things learned since the last call."""
+INFRA_KINDS = {"STP/LLC", "LLDP", "CDP"}  # what a switch sends from its port MACs
+
+
+def host_count(trunk: Trunk) -> int:
+    """How many devices other than switches talk on a port (for --direct's shared-network test).
+    A neighbor that only sends STP, LLDP or CDP is a switch's port, not a host, and the MACs
+    of one recognised device (the same vendor and first five octets) count once."""
+    seen = set()
+    for nb in talkers(trunk):
+        kinds = set().union(*(v["kinds"] for v in nb.vlans.values())) if nb.vlans else set()
+        if kinds and kinds <= INFRA_KINDS:
+            continue
+        seen.add((nb.vendor, nb.mac[:14]) if nb.vendor else nb.mac)
+    return len(seen)
+
+
+def new_findings(trunk: Trunk, told: set, vendors_only: bool = False) -> list:
+    """Lines for --direct's live output: things learned since the last call. vendors_only
+    keeps to the gear this tool recognises (on a shared network)."""
     lines = []
     for nb in talkers(trunk):
+        if vendors_only and not nb.vendor:
+            continue
         who = nb.mac + (f" ({nb.vendor})" if nb.vendor else "")
         if nb.lldp and (nb.mac, "lldp") not in told:
             told.add((nb.mac, "lldp"))
@@ -5590,7 +5609,16 @@ def run_scan(opts, log, progress=None, on_inventory=None):
     watched = sorted({l.name for l in links} | {l.name for l in ports} | {i.name for i in ifaces})
     counters_before = interface_counters(watched)
     t0 = time.monotonic()
-    alias_result, trunks, interrupted = None, [], False
+    alias_result, trunks, interrupted, judged = None, [], False, set()
+
+    def crowded(tr):  # --direct: more than two hosts on a port nobody named is a network, not a wire
+        return tr.link.name not in wire and host_count(tr) > 2
+
+    def judge(tr):  # once listening ends: a shared network, or a wire where every talker is listed
+        tr.shared = bool(opts.direct) and crowded(tr)
+        tr.finish(inv, bool(opts.direct) and not tr.shared)
+        judged.add(tr.link.name)
+
     try:
         if ifaces:
             sc.run(duration, (lambda e, t: progress(e, t, inv)) if progress else None)
@@ -5615,27 +5643,31 @@ def run_scan(opts, log, progress=None, on_inventory=None):
             trunks = list(by_name.values())
             mine, told, started = local_macs(), set(), time.monotonic()
 
-            def crowded(tr):  # --direct: more than two talkers on a port nobody named is a network, not a wire
-                return tr.link.name not in wire and len(talkers(tr)) > 2
-
             def on_frames(name, frames):
                 tr = by_name[name]
                 for frame in frames:
                     tr.add(frame, inv, sc.local_ips, mine, opts.direct and name in wire)
-                if opts.direct and not tr.shared:
-                    if crowded(tr):
+                if opts.direct:
+                    if not tr.shared and crowded(tr):
                         tr.shared = True
                         log(f"  {name}: several devices are talking, so it's a shared network, not a direct wire; "
                             "only gear this tool recognises is listed from it")
-                    else:
-                        for line in new_findings(tr, told):
-                            log("  " + line)
+                    for line in new_findings(tr, told, vendors_only=tr.shared):
+                        log("  " + line)
 
-            def found_enough():  # --direct: stop a few seconds after the device used an address, on every port
+            def found_enough():  # --direct: stop a few seconds after the device used an address
+                if not opts.direct:
+                    return False
                 now = time.monotonic()
-                return opts.direct and all(
-                    crowded(tr) or any(nb.first_ip_at and now - nb.first_ip_at > 5 for nb in talkers(tr))
-                    for tr in trunks)
+                rest = [tr for tr in trunks if not crowded(tr)]  # shared networks aren't waited on
+
+                def found(tr):
+                    return any(nb.first_ip_at and now - nb.first_ip_at > 5 for nb in talkers(tr))
+
+                # once it's found on one port, a port where nobody has used an address isn't waited on;
+                # one where someone just did gets its few seconds too
+                return not rest or (any(found(tr) for tr in rest) and
+                                    all(found(tr) or not any(nb.first_ip_at for nb in talkers(tr)) for tr in rest))
 
             if opts.direct:
                 if len(ports) > 1:
@@ -5653,16 +5685,14 @@ def run_scan(opts, log, progress=None, on_inventory=None):
                     "announcements, from any subnet")
             captured = capture_frames(list(by_name), opts.vlan_listen, sudo, log, on_frames, found_enough,
                                       **({"pcap": opts.pcap} if opts.pcap else {}))
-            if STOP.is_set():
-                raise KeyboardInterrupt
+            stopped = STOP.is_set()  # what was heard before Stop is still judged and listed
             for tr in trunks:
                 frames, tr.error = captured.get(tr.link.name, ([], "not captured"))
                 for frame in frames[tr.fed:]:  # whatever wasn't analysed live
                     tr.add(frame, inv, sc.local_ips, mine, opts.direct and tr.link.name in wire)
-                tr.shared = opts.direct and crowded(tr)
-                tr.finish(inv, opts.direct and not tr.shared)  # a port that turned out to be a wire lists all
+                judge(tr)  # a port that turned out to be a wire lists all
                 tr.seconds = round(time.monotonic() - started, 1)
-                if tr.link.wireless:
+                if tr.link.wireless and not stopped:
                     tr.wifi = wifi_association(tr.link.name, sudo)
                 if not opts.direct:
                     gear = Counter(nb.vendor for nb in talkers(tr) if nb.vendor)
@@ -5671,6 +5701,8 @@ def run_scan(opts, log, progress=None, on_inventory=None):
                     log(f"  {tr.link.name}: {'capture failed: ' + tr.error if tr.error else found}")
                 elif not talkers(tr):
                     log(f"  {tr.link.name}: nothing heard" + (f" ({tr.error})" if tr.error else ""))
+            if stopped:
+                raise KeyboardInterrupt
         if mgr:
             by_link = {tr.link.name: tr for tr in trunks}
 
@@ -5718,6 +5750,9 @@ def run_scan(opts, log, progress=None, on_inventory=None):
         clear_progress()
         interrupted = True
         log("\nstopped - showing what was found so far")
+        for tr in trunks:  # Ctrl+C while listening: what was heard live is still judged and listed
+            if tr.link.name not in judged:
+                judge(tr)
     finally:
         if mgr:
             mgr.remove_all()
