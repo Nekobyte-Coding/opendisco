@@ -6,6 +6,20 @@ when it came out. The Linux packages of 1.1.0 to 1.3.1 were added then too; thos
 never released for Linux. README.md's "Versions and platforms" lists each version's platforms
 and known issues.
 
+## Unreleased
+
+Fixes from a review of 1.7.2's Direct to a device.
+
+- Stop (or Ctrl+C) while listening keeps the device: one OpenDisco doesn't recognise, on a
+  port with an address of its own, was printed as found and then missing from the results. A
+  shared network is still told apart from the device's wire when listening is stopped.
+- Listening ends a few seconds after the device uses an address again when another wired port
+  has link but nothing on it does (a quiet dock or switch): 1.7.2 listened the full 45 seconds.
+- A switch between the computer and the device no longer makes its port a shared network: MACs
+  that only send STP, LLDP or CDP aren't counted as devices, and one recognised device's MACs
+  count once.
+- Gear OpenDisco recognises is still logged as it's heard on a port judged a shared network.
+
 ## 1.7.2 (2026-11-04)
 
 - Direct to a device scans a wired port that has an address of its own: one set by hand (such
