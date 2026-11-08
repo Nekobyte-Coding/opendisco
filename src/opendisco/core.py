@@ -3765,7 +3765,7 @@ class AliasManager:
             self.active.remove(entry)
         self.prepared.discard(iface)
 
-    def add(self, iface: str, ip: str, prefix: int) -> bool:
+    def add(self, iface: str, ip: str, prefix: int, quiet: bool = False) -> bool:
         if IS_WINDOWS:
             self._coexist(iface)
         entry = ("alias", iface, ip, prefix)
@@ -3773,11 +3773,19 @@ class AliasManager:
         err = self._run(self.command(iface, ip, prefix, True))
         if err:
             self._forget(lambda e: e != entry)
-            self.log(f"  couldn't add {ip}/{prefix} to {iface}: {err}")
+            if not quiet:
+                self.log(f"  couldn't add {ip}/{prefix} to {iface}: {err}")
             return False
         self.active.append(entry)
         self.used.add((iface, ip))
         return True
+
+    def gone(self, iface: str, ip: str, prefix: int) -> None:
+        """The address went without us (sleep, a cable unplugged, DHCP renewing): stop tracking it."""
+        entry = ("alias", iface, ip, prefix)
+        self._forget(lambda e: e != entry)
+        if entry in self.active:
+            self.active.remove(entry)
 
     def remove(self, iface: str, ip: str, prefix: int) -> None:
         entry = ("alias", iface, ip, prefix)
@@ -3840,8 +3848,10 @@ class AliasManager:
         still running holds (Keep addresses, --hold) stays, and so does what couldn't be removed
         (no administrator rights, say), still written down for the next try."""
         kept, removed = [], 0
+        mine = {e for m in list(_MANAGERS) if m is not self for e in m.active}  # this app's kept addresses
         for (kind, iface, a, b), pid in reversed(self._load_state()):
-            if pid and pid != os.getpid() and _process_alive(pid):
+            if pid and ((pid != os.getpid() and _process_alive(pid))
+                        or (pid == os.getpid() and (kind, iface, a, b) in mine)):
                 kept.append(((kind, iface, a, b), pid))
                 continue
             if kind == "alias":
@@ -4057,6 +4067,219 @@ def hold_start(mgr: AliasManager, inv: Inventory, log) -> list:
         for d in devs:
             lines.append(f"    {d.ip or '-':<15}  {_trunc(d.model or '?', 22):<22}  {web_url(d) or 'ssh ' + (d.ip or '?')}")
     return lines
+
+
+class KeptAddresses:
+    """The temporary addresses the app keeps while it's open, so gear a scan reached through one
+    can still be opened (web UI, SSH, ping) afterwards: one address per subnet, on the interface
+    or tagged VLAN the scan reached it through. check() runs every minute: it puts back an
+    address that went (sleep, a cable unplugged, DHCP renewing), moves off one a device turns
+    out to use, and lets go of one whose subnet another interface has an address in now (two
+    interfaces in one subnet would take that network's traffic, and maybe the internet with it).
+
+    The AliasManager writes each down before it's made, so a crash leaves nothing the next run
+    can't clean up; quitting, or being told to end, removes them (release_aliases)."""
+
+    def __init__(self, log):
+        self.mgr = AliasManager(log)
+        self.log = log
+        # network -> {"iface", "parent", "vlan", "ip", "prefix"} (+ "down": gone, being put back)
+        self.held: dict = {}
+        self.made: dict = {}  # VLAN interface this made -> (parent, VLAN ID)
+        self.routes: dict = {}  # network -> the alias context a scan reached gear there through
+        self.lock = threading.RLock()
+
+    def __bool__(self) -> bool:
+        return bool(self.held)
+
+    def learn(self, devices) -> None:
+        """Remember how a scan reached each subnet, for gear a later scan finds without an alias
+        (through an address kept here, say) and that's opened once the address has gone."""
+        for d in devices:
+            a = d.alias
+            if a and a.get("alias") and a.get("prefix"):
+                self.routes[ipaddress.IPv4Network(f"{a['alias']}/{a['prefix']}", strict=False)] = dict(a)
+
+    def route(self, d: Device):
+        """(network, alias context) d was reached through, or None."""
+        self.learn([d])
+        nets = [n for n in self.routes if any(_in_any(ip, [n]) for ip in d.ips)]
+        if not nets:
+            return None
+        net = max(nets, key=lambda n: n.prefixlen)
+        return net, self.routes[net]
+
+    def wanted(self, d: Device) -> bool:
+        """Whether opening d needs an address kept here: it was reached through one that isn't up."""
+        found = self.route(d)
+        return found is not None and not (found[0] in self.held and not self.held[found[0]].get("down"))
+
+    def covers(self, d: Device) -> bool:
+        return any(_in_any(ip, [n]) for ip in d.ips for n, h in self.held.items() if not h.get("down"))
+
+    def _ours(self) -> set:
+        """Every temporary address this process has up (its scans' too)."""
+        return {e[2] for m in list(_MANAGERS) for e in m.active if e[0] == "alias"}
+
+    def keep(self, devices, busy=()) -> list:
+        """Keep an address in each subnet these devices were reached through, where this computer
+        has none; returns a line for each address kept, and one for each that couldn't be.
+        Raises SystemExit without administrator rights (as AliasManager.authorize does)."""
+        with self.lock:
+            self.learn(devices)
+            wanted = {}
+            for d in devices:
+                found = self.route(d)
+                if found and found[0] not in self.held:
+                    wanted.setdefault(found[0], (found[1], []))[1].append(d)
+            if not wanted:
+                return []
+            ifaces, ours = local_interfaces(), self._ours()
+            busy = set(busy) | {i.ip for i in ifaces}
+            lines, vlan_ifaces, authorized = [], None, False
+            for net, (ctx, devs) in wanted.items():
+                clash = next((i for i in ifaces if i.ip not in ours and i.network.overlaps(net)), None)
+                if clash:  # this computer is in that subnet already: nothing to keep
+                    continue
+                pinned = ctx.get("alias") if _in_any(ctx.get("alias") or "", [net]) else None
+                ip = next((c for c in ([pinned] if pinned else []) + alias_candidates(AliasTarget(net))
+                           if c not in busy), None)
+                if ip is None:
+                    lines.append(f"  {net}: no free address to keep")
+                    continue
+                if not authorized:
+                    self.mgr.authorize()
+                    authorized = True
+                parent, vid = ctx.get("parent") or ctx.get("interface"), ctx.get("vlan") or 0
+                if not parent:
+                    continue
+                iface, made = parent, False
+                if vid:
+                    if vlan_ifaces is None:
+                        vlan_ifaces = {(p, v): n for n, (v, p) in os_vlan_map().items()}
+                    iface = vlan_ifaces.get((parent, vid))
+                    if not iface:
+                        iface, made = self.mgr.create_vlan(parent, vid), True
+                        if not iface:
+                            lines.append(f"  {net}: couldn't create VLAN {vid} on {parent}")
+                            continue
+                        vlan_ifaces[(parent, vid)] = iface
+                        self.made[iface] = (parent, vid)
+                if not self.mgr.add(iface, ip, net.prefixlen):
+                    if made:
+                        self._tidy_vlan(iface)
+                    lines.append(f"  {net}: couldn't add {ip} to {iface}")
+                    continue
+                self.held[net] = {"iface": iface, "parent": parent, "vlan": vid, "ip": ip, "prefix": net.prefixlen}
+                busy.add(ip)
+                where = f"VLAN {vid} ({iface} on {parent})" if vid else iface
+                lines.append(f"  {ip}/{net.prefixlen} on {where}: " + ", ".join(d.ip or "?" for d in devs))
+            return lines
+
+    def _drop_address(self, h) -> None:
+        if h.get("down"):  # most likely not there: no warning when removing it fails
+            self.mgr._run(self.mgr.command(h["iface"], h["ip"], h["prefix"], False))
+            self.mgr.gone(h["iface"], h["ip"], h["prefix"])
+        else:
+            self.mgr.remove(h["iface"], h["ip"], h["prefix"])
+
+    def _tidy_vlan(self, iface) -> None:
+        """Destroy a VLAN interface this made once no kept address is on it."""
+        if iface in self.made and not any(h["iface"] == iface for h in self.held.values()):
+            parent, vid = self.made.pop(iface)
+            self.mgr.destroy_vlan(iface, parent, vid)
+
+    def let_go(self, net) -> None:
+        with self.lock:
+            h = self.held.pop(net, None)
+            if h:
+                self._drop_address(h)
+                self._tidy_vlan(h["iface"])
+
+    def release(self) -> None:
+        """Remove every kept address (and VLAN interface), and undo what was changed for them."""
+        with self.lock:
+            for net in list(self.held):
+                self.let_go(net)
+            self.mgr.remove_all()  # (Windows: DHCP/static coexistence back as it was)
+            self.made.clear()
+
+    def check(self, busy=()) -> list:
+        """The minute's check; returns what changed, for the log."""
+        msgs = []
+        with self.lock:
+            if not self.held:
+                return msgs
+            ifaces, ours, busy = local_interfaces(), self._ours(), set(busy)
+            for net, h in list(self.held.items()):
+                ip, iface, prefix = h["ip"], h["iface"], h["prefix"]
+                clash = next((i for i in ifaces if i.ip not in ours and i.network.overlaps(net)), None)
+                if clash:
+                    self.let_go(net)
+                    msgs.append(f"Removed kept {ip}/{prefix} from {iface}: {clash.name} has an address in "
+                                f"{net} now ({clash.ip}), and two interfaces in one subnet confuse routing.")
+                    continue
+                if ip in busy:  # a device uses it: move to a free address
+                    self._drop_address(h)
+                    taken = busy | ours | {i.ip for i in ifaces}
+                    new = next((c for c in alias_candidates(AliasTarget(net)) if c not in taken), None)
+                    if new and self.mgr.add(iface, new, prefix):
+                        h["ip"] = new
+                        h.pop("down", None)
+                        msgs.append(f"Kept {ip} on {iface} turned out to be a device's: moved to {new}.")
+                    else:
+                        self.held.pop(net)
+                        self._tidy_vlan(iface)
+                        msgs.append(f"Kept {ip} on {iface} turned out to be a device's, and {net} has no other "
+                                    "free address: removed it.")
+                    continue
+                if any(i.name == iface and i.ip == ip for i in ifaces):
+                    if h.pop("down", False):
+                        msgs.append(f"Kept {ip}/{prefix} is back on {iface}.")
+                    continue
+                self.mgr.gone(iface, ip, prefix)  # went without us: put it back
+                if self.mgr.add(iface, ip, prefix, quiet=True):
+                    if not h.pop("down", False):
+                        msgs.append(f"Put kept {ip}/{prefix} back on {iface}: it had gone (sleep, a cable "
+                                    "unplugged or DHCP renewing, say).")
+                    else:
+                        msgs.append(f"Kept {ip}/{prefix} is back on {iface}.")
+                else:
+                    entry = ("alias", iface, ip, prefix)  # it may be there unseen: still removed on quitting
+                    self.mgr._remember(entry)
+                    self.mgr.active.append(entry)
+                    if not h.get("down"):
+                        msgs.append(f"Kept {ip}/{prefix} went from {iface} and can't be put back yet (no link?): "
+                                    "trying again every minute.")
+                    h["down"] = True
+        return msgs
+
+
+def manual_address_hint(d: Device, devices=(), phone: bool = True) -> str:
+    """How to reach d by hand where this device can't keep an address for it (a phone can't
+    have a second one; a computer may lack the rights): a fixed address in its subnet."""
+    a = d.alias
+    if a.get("alias") and a.get("prefix"):
+        net = ipaddress.IPv4Network(f"{a['alias']}/{a['prefix']}", strict=False)
+    else:  # its subnet isn't known: the usual /24
+        net = ipaddress.IPv4Network(f"{d.ip}/24", strict=False)
+    busy = {ip for x in devices for ip in x.ips} | set(d.ips)
+    address = next((c for c in alias_candidates(AliasTarget(net)) if c not in busy), None)
+    if address is None:
+        return ""
+    values = {"ip": d.ip, "network": str(net), "address": address, "mask": str(net.netmask)}
+    if phone:
+        text = i18n.tr("{ip} is in {network}, where this phone has no address. To reach it, set this phone's Wi-Fi "
+                       "(or Ethernet adapter) to a manual address such as {address}, subnet mask {mask}, with no "
+                       "router, and back to automatic (DHCP) afterwards: while it's set, the phone is off its "
+                       "usual network.", **values)
+        how = {"ios": N_("On iPhone and iPad: Settings › Wi-Fi › ⓘ › Configure IP › Manual."),
+               "android": N_("On Android: Settings › Network › Wi-Fi › the network › ✎ (or Advanced) › IP settings "
+                             "› Static.")}.get(platform_name())
+        return i18n.sentences(text, _(how)) if how else text
+    return i18n.tr("{ip} is in {network}, where this computer has no address. To reach it without a temporary "
+                   "address, give this computer's network adapter a second, manual address such as {address}, "
+                   "subnet mask {mask}, with no router.", **values)
 
 
 def print_alias_plan(plans, sudo, listen_on=(), listen_seconds=0.0) -> None:
@@ -4366,6 +4589,7 @@ def diagnose(inv: Inventory, all_ifaces, scan_nets, opts, alias_used=(), skipped
     """alias_used: (iface, ip) aliases taken. probed_links: interfaces that had their own
     address during the normal scan, so silence there means the device ignored us."""
     local_nets = list(dict.fromkeys(i.network for i in all_ifaces if i.prefix < 32))
+    mobile = platform_name() in ("ios", "android")
     odd_ports = port_outliers(inv.devices.values())
     owners: dict = {}
     for d in inv.devices.values():
@@ -4419,16 +4643,23 @@ def diagnose(inv: Inventory, all_ifaces, scan_nets, opts, alias_used=(), skipped
                 why = tr("Reached through temporary {alias} on {interface}, which had no address of its own.",
                          alias=a["alias"], interface=a["interface"])
             issues.append(("note", "ALIAS", i18n.sentences(
-                why, _("Keep addresses (--hold) keeps that address for working on it."))))
+                why, _("Keep addresses (--hold) keeps that address for working on it, and Open Web UI, SSH and "
+                       "Ping put it back when it's needed."))))
         elif (heard_ubnt and d.ips and local_nets and not any(_in_any(ip, local_nets) for ip in d.ips)
                 and not any(_in_any(ip, scan_nets) for ip in d.ips)):
             nets = ", ".join(str(n) for n in local_nets)
-            issues.append(("warn", "OFF-SUBNET",
-                           tr("Answers discovery from other subnets (older firmware does), but its address "
-                              "isn't in this computer's subnet(s) ({networks}), so its web UI and SSH can't be "
-                              "reached from here. Probe its subnet through a temporary address (its subnet in the "
-                              "networks file, then Probe listed networks and Keep addresses: -a --hold), or fix "
-                              "its IP/VLAN.", networks=nets)))
+            if mobile:  # a phone can't add an address: it can be given one by hand
+                issues.append(("warn", "OFF-SUBNET", i18n.sentences(
+                    tr("Answers discovery from other subnets (older firmware does), but its address isn't in this "
+                       "phone's subnet ({networks}), so its web UI can't be reached from here.", networks=nets),
+                    manual_address_hint(d, inv.devices.values()))))
+            else:
+                issues.append(("warn", "OFF-SUBNET",
+                               tr("Answers discovery from other subnets (older firmware does), but its address "
+                                  "isn't in this computer's subnet(s) ({networks}), so its web UI and SSH can't be "
+                                  "reached from here. Probe its subnet through a temporary address (its subnet in the "
+                                  "networks file, then Probe listed networks and Keep addresses: -a --hold), or fix "
+                                  "its IP/VLAN.", networks=nets)))
         if d.wifi:
             msg = tr("This computer's Wi-Fi ({interface}) is joined to this access point (BSSID {bssid}).",
                      interface=d.wifi["iface"], bssid=d.wifi["bssid"])
@@ -5474,12 +5705,19 @@ def run_scan(opts, log, progress=None, on_inventory=None):
         names = {l.name for l in ports}
         ifaces = [i for i in ifaces if i.name in names]
 
+    kept = {e[2] for m in list(_MANAGERS) for e in m.active if e[0] == "alias"}  # the app's kept addresses
+
     def drop_overlaps(targets) -> list:
-        kept = []
+        out = []
         for t in targets:
             clash = next((i for i in all_ifaces if i.network.overlaps(t.network)), None)
             if not clash:
-                kept.append(t)
+                out.append(t)
+            elif t.network not in overlap_noted and clash.ip in kept:
+                overlap_noted.add(t.network)
+                extra_notes.append(("note", i18n.tr("{network}: probed through {address}, the temporary address "
+                                                    "OpenDisco keeps on {interface}.", network=t.network,
+                                                    address=clash.ip, interface=clash.name)))
             elif t.network not in overlap_noted:
                 overlap_noted.add(t.network)
                 # i18n.tr in run_scan, whose own tr is a trunk
@@ -5487,7 +5725,7 @@ def run_scan(opts, log, progress=None, on_inventory=None):
                                                     "was probed directly. If gear on another interface uses that "
                                                     "subnet too, disconnect this network (e.g. turn Wi-Fi off) and "
                                                     "run again.", network=t.network, interface=clash)))
-        return kept
+        return out
 
     def merged(*groups) -> list:
         out = []

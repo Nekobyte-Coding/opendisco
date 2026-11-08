@@ -6,6 +6,23 @@ when it came out. The Linux packages of 1.1.0 to 1.3.1 were added then too; thos
 never released for Linux. README.md's "Versions and platforms" lists each version's platforms
 and known issues.
 
+## Unreleased
+
+- Temporary addresses stay while OpenDisco is open, so right-click › Open Web UI reaches gear
+  on another subnet without setting an address on the network adapter by hand. After a scan
+  that reached gear through one, the app keeps an address in each of those subnets (Settings:
+  "Keep temporary addresses while OpenDisco is open", on by default); the next scan, and the
+  demo network, leave them in place (1.7.2 removed them). Open Web UI, SSH and Ping put the
+  address back first when it isn't there.
+- The kept addresses are checked every minute: one that went (sleep, a cable unplugged, DHCP
+  renewing) is put back, one a device turns out to use moves to a free address, and one whose
+  subnet another adapter has an address in now is removed. Release addresses and quitting
+  remove them; a scan no longer takes the app's own kept addresses for a crashed run's
+  leftovers.
+- Phones: Open Web UI on gear outside the phone's subnet says which manual address to give the
+  phone (with no router) to reach it, and where iOS and Android set it. A computer that
+  couldn't add the address says the same for its network adapter.
+
 ## 1.7.2 (2026-11-04)
 
 - Direct to a device scans a wired port that has an address of its own: one set by hand (such
