@@ -5476,7 +5476,7 @@ def run_scan(opts, log, progress=None, on_inventory=None):
         for l in every_wired:
             l.label = labels.get(l.name, l.label)
         if opts.interface:  # may not have link yet: the user plugs in once it's listening
-            ports = [l for l in every_wired if _matches(opts.interface, l.name, l.label)]
+            ports = [l for l in every_wired if _matches(opts.interface, l.name, l.label, *(i.ip for i in l.addrs))]
             wire = {l.name for l in ports}
             if not ports:
                 have = ", ".join(str(l) for l in every_wired) or "none"

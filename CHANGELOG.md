@@ -36,6 +36,8 @@ Fixes from a review of 1.7.2's Direct to a device.
   that only send STP, LLDP or CDP aren't counted as devices, and one recognised device's MACs
   count once.
 - Gear OpenDisco recognises is still logged as it's heard on a port judged a shared network.
+- `--direct -i` takes an interface's address too (such as `-i 192.168.1.100`), as `-i` does
+  without `--direct`: 1.7.2 said no wired interface matched.
 
 ## 1.7.2 (2026-11-04)
 
