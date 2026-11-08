@@ -1101,7 +1101,11 @@ def refresh(cache_dir, log=None, timeout: float = 60.0) -> bool:
         carried = [c for c in before["cves"] if c.get("source") == "advisory"]
         say(f"Couldn't read Ubiquiti's security advisories ({e}); keeping the {len(carried)} CVE(s) read from "
             "them before.")
-    data = build_rules(nvd, advisories, carried=carried)
+    try:
+        data = build_rules(nvd, advisories, carried=carried)
+    except Exception as e:  # (records of a shape the build doesn't know: the list in use stays)
+        say(f"Couldn't update the CVE list from the NVD: {e}")
+        return False
     path = Path(cache_dir) / CACHE_NAME
     try:
         path.parent.mkdir(parents=True, exist_ok=True)
