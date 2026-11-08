@@ -260,8 +260,19 @@ Help on Windows and Linux, and in Settings on phones and tablets.
   .zip holding the report and the backups. On Android, exports go to the Downloads folder; on
   iPhone and iPad, to the share sheet. Phones save each one in its first format, and ask for
   the site's name before the Site Report.
-- **Keep addresses** holds the temporary addresses that reached gear until they're released,
-  so the gear's web UI can be opened.
+- **Temporary addresses stay while OpenDisco is open.** After a scan that reached gear through
+  a temporary address, the app keeps one address in each of those subnets (Settings: "Keep
+  temporary addresses while OpenDisco is open", on by default), and the next scan leaves them
+  in place. **Open Web UI**, **SSH** and **Ping** on gear reached that way put its address back
+  first when it isn't there, so right-click › Open Web UI works without setting an address on
+  the network adapter by hand. Every minute the app checks them: one that went (sleep, a cable
+  unplugged, DHCP renewing) is put back; one a device turns out to use moves to a free
+  address; one whose subnet another adapter has an address in now (joining a Wi-Fi network on
+  the same subnet, say) is removed, as two adapters in one subnet would take that network's
+  traffic. **Release addresses** removes them (**Keep addresses** brings them back), and so
+  does quitting; after a crash, the next run cleans up.
+- **Phones** can't add a second address to Wi-Fi or Ethernet, so Open Web UI on gear outside
+  the phone's subnet says which manual address to give the phone to reach it, and how.
 
 **Administrator rights on macOS and Linux.** Modes that need them (sniffing, temporary
 addresses, VLANs, direct) ask for the computer's password in a small window, pass it straight

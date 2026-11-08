@@ -470,7 +470,6 @@
  ", one digit off": ", um dígito diferente",
  "Its {service} is on port {port}, but the other {count} {vendor} consoles here use {usual}{typo}: a typo in its config?": "Usa a porta {port} para {service}, mas os outros {count} consoles {vendor} daqui usam {usual}{typo}: um erro de digitação na configuração?",
  "Its {service} is on port {port}, but the other {count} {vendor} devices here use {usual}{typo}: a typo in its config?": "Usa a porta {port} para {service}, mas os outros {count} dispositivos {vendor} daqui usam {usual}{typo}: um erro de digitação na configuração?",
- "Keep addresses (--hold) keeps that address for working on it.": "Manter endereços (--hold) mantém esse endereço para trabalhar no dispositivo.",
  "Answers discovery from other subnets (older firmware does), but its address isn't in this computer's subnet(s) ({networks}), so its web UI and SSH can't be reached from here. Probe its subnet through a temporary address (its subnet in the networks file, then Probe listed networks and Keep addresses: -a --hold), or fix its IP/VLAN.": "Responde à descoberta vinda de outras sub-redes (firmwares mais antigos fazem isso), mas o endereço dele não está em nenhuma sub-rede em que este computador está ({networks}), então a interface web e o SSH dele não podem ser alcançados daqui. Sondar a sub-rede dele por meio de um endereço temporário (a sub-rede no arquivo de redes e depois Sondar redes listadas e Manter endereços: -a --hold), ou corrigir o IP/VLAN dele.",
  "WAN port {port} reports no link.": "A porta WAN {port} informa que está sem link.",
  "Adding Probe listed networks (-a) probes it through a temporary address in its subnet.": "Adicionar Sondar redes listadas (-a) o sonda por meio de um endereço temporário na sub-rede dele.",
@@ -1468,5 +1467,17 @@
  "{device}: wait for what's running to finish.": "{device}: aguardar o término do que está em andamento.",
  "Back up all: wait for what's running to finish.": "Backup de todas: aguardar o término do que está em andamento.",
  "Couldn't open the file: {error}": "Não foi possível abrir o arquivo: {error}",
- "Log in to stop its LED blinking.": "Fazer login para parar de piscar o LED."
+ "Log in to stop its LED blinking.": "Fazer login para parar de piscar o LED.",
+ "Keep temporary addresses while OpenDisco is open": "Manter os endereços temporários enquanto o OpenDisco está aberto",
+ "Adding a temporary address to reach {ip}…": "Adicionando um endereço temporário para alcançar {ip}…",
+ "Couldn't add a temporary address to reach {ip}.": "Não foi possível adicionar um endereço temporário para alcançar {ip}.",
+ "Can't reach this device": "Não é possível alcançar este dispositivo",
+ "Not on this phone's network": "Fora da rede deste telefone",
+ "{ip} is in {network}, where this computer has no address. To reach it without a temporary address, give this computer's network adapter a second, manual address such as {address}, subnet mask {mask}, with no router.": "{ip} está em {network}, onde este computador não tem endereço. Para alcançá-lo sem um endereço temporário, dê ao adaptador de rede deste computador um segundo endereço manual, como {address}, máscara de sub-rede {mask}, sem roteador.",
+ "{ip} is in {network}, where this phone has no address. To reach it, set this phone's Wi-Fi (or Ethernet adapter) to a manual address such as {address}, subnet mask {mask}, with no router, and back to automatic (DHCP) afterwards: while it's set, the phone is off its usual network.": "{ip} está em {network}, onde este telefone não tem endereço. Para alcançá-lo, configure o Wi-Fi (ou o adaptador Ethernet) deste telefone com um endereço manual, como {address}, máscara de sub-rede {mask}, sem roteador, e volte para automático (DHCP) depois: enquanto estiver assim, o telefone fica fora da sua rede habitual.",
+ "On iPhone and iPad: Settings › Wi-Fi › ⓘ › Configure IP › Manual.": "No iPhone e iPad: Ajustes › Wi-Fi › ⓘ › Configurar IP › Manual.",
+ "On Android: Settings › Network › Wi-Fi › the network › ✎ (or Advanced) › IP settings › Static.": "No Android: Configurações › Rede › Wi-Fi › a rede › ✎ (ou Avançado) › Configurações de IP › Estático.",
+ "Keep addresses (--hold) keeps that address for working on it, and Open Web UI, SSH and Ping put it back when it's needed.": "Manter endereços (--hold) mantém esse endereço para trabalhar no dispositivo, e Abrir interface web, SSH e Ping o colocam de volta quando necessário.",
+ "{network}: probed through {address}, the temporary address OpenDisco keeps on {interface}.": "{network}: sondada pelo {address}, o endereço temporário que o OpenDisco mantém em {interface}.",
+ "Answers discovery from other subnets (older firmware does), but its address isn't in this phone's subnet ({networks}), so its web UI can't be reached from here.": "Responde à descoberta de outras sub-redes (firmware antigo faz isso), mas seu endereço não está na sub-rede deste telefone ({networks}), então a interface web dele não pode ser acessada daqui."
 }

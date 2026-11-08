@@ -470,7 +470,6 @@
  ", one digit off": "（1桁違い）",
  "Its {service} is on port {port}, but the other {count} {vendor} consoles here use {usual}{typo}: a typo in its config?": "{service}がポート{port}にありますが、ここにあるほかの{vendor}コンソール{count}台は{usual}を使用しています{typo}：コンフィグの入力ミスではありませんか？",
  "Its {service} is on port {port}, but the other {count} {vendor} devices here use {usual}{typo}: a typo in its config?": "{service}がポート{port}にありますが、ここにあるほかの{vendor}デバイス{count}台は{usual}を使用しています{typo}：コンフィグの入力ミスではありませんか？",
- "Keep addresses (--hold) keeps that address for working on it.": "「アドレスを保持」（--hold）を使うと、そのアドレスを保持してこのデバイスで作業できます。",
  "Answers discovery from other subnets (older firmware does), but its address isn't in this computer's subnet(s) ({networks}), so its web UI and SSH can't be reached from here. Probe its subnet through a temporary address (its subnet in the networks file, then Probe listed networks and Keep addresses: -a --hold), or fix its IP/VLAN.": "ほかのサブネットからのディスカバリーに応答します（古いファームウェアはそうします）が、アドレスがこのコンピューターのサブネット（{networks}）内にないため、ここからはWeb UIとSSHに到達できません。一時アドレスを介してそのサブネットをプローブする（networksファイルにそのサブネットを記載し、「一覧のネットワークをプローブ」と「アドレスを保持」を使用：-a --hold）か、IP／VLANを修正してください。",
  "WAN port {port} reports no link.": "WANポート{port}はリンクなしと報告しています。",
  "Adding Probe listed networks (-a) probes it through a temporary address in its subnet.": "「一覧のネットワークをプローブ」（-a）を追加すると、そのサブネット内の一時アドレスを介してプローブします。",
@@ -1468,5 +1467,17 @@
  "{device}: wait for what's running to finish.": "{device}：実行中の処理が終わるまでお待ちください。",
  "Back up all: wait for what's running to finish.": "すべてバックアップ：実行中の処理が終わるまでお待ちください。",
  "Couldn't open the file: {error}": "ファイルを開けませんでした：{error}",
- "Log in to stop its LED blinking.": "ログインしてLEDの点滅を止めます。"
+ "Log in to stop its LED blinking.": "ログインしてLEDの点滅を止めます。",
+ "Keep temporary addresses while OpenDisco is open": "OpenDiscoを開いている間は一時アドレスを保持",
+ "Adding a temporary address to reach {ip}…": "{ip}に届くよう一時アドレスを追加しています…",
+ "Couldn't add a temporary address to reach {ip}.": "{ip}に届く一時アドレスを追加できませんでした。",
+ "Can't reach this device": "このデバイスに届きません",
+ "Not on this phone's network": "この電話のネットワーク外です",
+ "{ip} is in {network}, where this computer has no address. To reach it without a temporary address, give this computer's network adapter a second, manual address such as {address}, subnet mask {mask}, with no router.": "{ip}は{network}にあり、このコンピュータはそこにアドレスを持っていません。一時アドレスを使わずに届かせるには、このコンピュータのネットワークアダプタに2つ目の手動アドレス（例: {address}、サブネットマスク{mask}、ルーターなし）を設定してください。",
+ "{ip} is in {network}, where this phone has no address. To reach it, set this phone's Wi-Fi (or Ethernet adapter) to a manual address such as {address}, subnet mask {mask}, with no router, and back to automatic (DHCP) afterwards: while it's set, the phone is off its usual network.": "{ip}は{network}にあり、この電話はそこにアドレスを持っていません。届かせるには、この電話のWi-Fi（またはEthernetアダプタ）を手動アドレス（例: {address}、サブネットマスク{mask}、ルーターなし）に設定し、終わったら自動（DHCP）に戻してください。設定している間、電話は普段のネットワークから外れます。",
+ "On iPhone and iPad: Settings › Wi-Fi › ⓘ › Configure IP › Manual.": "iPhone・iPadの場合: 設定 › Wi-Fi › ⓘ › IPを構成 › 手動。",
+ "On Android: Settings › Network › Wi-Fi › the network › ✎ (or Advanced) › IP settings › Static.": "Androidの場合: 設定 › ネットワーク › Wi-Fi › そのネットワーク › ✎（または詳細設定） › IP設定 › 静的。",
+ "Keep addresses (--hold) keeps that address for working on it, and Open Web UI, SSH and Ping put it back when it's needed.": "「アドレスを保持」（--hold）を使うと、そのアドレスを保持してこのデバイスで作業できます。「Web UIを開く」、SSH、Pingは必要なときにそのアドレスを戻します。",
+ "{network}: probed through {address}, the temporary address OpenDisco keeps on {interface}.": "{network}: OpenDiscoが{interface}に保持している一時アドレス{address}経由でプローブしました。",
+ "Answers discovery from other subnets (older firmware does), but its address isn't in this phone's subnet ({networks}), so its web UI can't be reached from here.": "他のサブネットからの探索に応答します（古いファームウェアはそうします）が、アドレスがこの電話のサブネット（{networks}）にないため、ここからWeb UIに届きません。"
 }

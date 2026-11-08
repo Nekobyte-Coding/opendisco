@@ -79,7 +79,8 @@ SITE_EXAMPLE = N_("Tower 1, Main office…")  # the Site Report's site name, bef
 # The Settings window's checkboxes: settings.json key -> text. All are on until turned off.
 SETTINGS = {"check_app_updates": N_("Check for OpenDisco updates when opening"),
             "check_cve_updates": N_("Check for new CVEs when opening"),
-            "check_firmware": N_("Check firmware versions during scans")}
+            "check_firmware": N_("Check firmware versions during scans"),
+            "keep_addresses": N_("Keep temporary addresses while OpenDisco is open")}
 # What settings.json keeps; "update" remembers an update while the app restarts into it,
 # "deep_checks" is iOS's Deep checks switch (in Settings there), "sweep_subnets" Settings' list
 # of subnets every scan also sweeps (records.SWEEP_KEY) and "site_name" the last Site Report's site.
@@ -274,7 +275,9 @@ class OpenDiscoApp(toga.App):
         self.running = False
         self.rescanning = False
         self.finding = False  # a port search on one device
-        self.holding = False
+        self.kept = None  # desktops: core.KeptAddresses, made once the GUI asks for sudo's password
+        self.watching_kept = False  # the minute's check of the kept addresses is running
+        self.hinted = set()  # phones: devices whose manual-address hint was shown
         self.cancel_password = None
         self.cancel_ssh_login = None
         self.cancel_port_warning = None
@@ -305,6 +308,9 @@ class OpenDiscoApp(toga.App):
         self.device_notes = records.Notes(self.paths.data)  # a note per device, by MAC (notes.json)
         if not self.caps["mobile"]:
             core.SUDO_ASKPASS = self._ask_password  # no terminal here, so the GUI asks
+            # The temporary addresses kept for opening gear a scan reached through one (sudo -n: never
+            # stops to ask a terminal that isn't there)
+            self.kept = core.KeptAddresses(lambda m: self._from_worker(self._append_log, m))
         self.multicast_lock = self._android_multicast_lock()
 
         mobile = self.caps["mobile"]
@@ -1029,7 +1035,6 @@ class OpenDiscoApp(toga.App):
             if self.demo is not None:  # only now, when nothing can call the scan off: the demo's devices go
                 self.demo.end()
                 self.demo = None
-            await self._release_hold()
         finally:
             self.starting = False
         self.running, self.result, self.live_inv = True, None, None
@@ -1053,7 +1058,6 @@ class OpenDiscoApp(toga.App):
             if busy:
                 self.status.text = tr("The demo network opens once {what} has finished or is closed.", what=busy)
                 return
-        await self._release_hold()
         if self.demo is None:
             self.demo = demo.Demo(self)
         self.result = self.live_inv = self.shown_packets = None
@@ -1232,13 +1236,19 @@ class OpenDiscoApp(toga.App):
                                    status=self.status.text))
         self.export_button.enabled = bool(result.devices or result.trunks)
         self._update_find_buttons()
-        self.hold_button.enabled = bool(result.mgr) and any(d.alias for d in result.devices)
+        if self.kept is not None:
+            self.kept.learn(result.devices)
+        self._update_hold_button()
         if self.shown_packets:  # now with the interface counters and the final checks
             self.details.value = core.render_details(self.shown_packets[0])
             self._show_packets(self.shown_packets[0], force=True)
         if result.trunks:
             self.tabs.current_tab = _("On the wire")
-        self._measure_latency()
+        if (self.kept is not None and self.settings.get("keep_addresses", True) and result.mgr
+                and any(self.kept.wanted(d) for d in result.devices if d.key not in self.hidden)):
+            self._keep(result, then=self._measure_latency)  # (pinged through them)
+        else:
+            self._measure_latency()
 
     def _device(self, key):
         return next((d for d in self._all_devices() if d.key == key), None)
@@ -1433,6 +1443,49 @@ class OpenDiscoApp(toga.App):
         from opendisco import devicegui
         return devicegui.menu_state(self, d, titles)
 
+    @staticmethod
+    def _on_my_network(d) -> bool:
+        """Whether this computer (or phone) has an address in d's subnet."""
+        try:
+            nets = [i.network for i in core.local_interfaces()]
+        except Exception:
+            return True  # can't tell: open it as before
+        return any(core._in_any(ip, nets) for ip in d.ips)
+
+    async def _reach(self, d, name):
+        """Add a temporary address in d's subnet (kept while OpenDisco is open), then do `name`."""
+        self.status.text = tr("Adding a temporary address to reach {ip}…", ip=d.ip)
+        busy = {ip for x in self._all_devices() for ip in x.ips}
+
+        def work():
+            try:
+                lines, error = self.kept.keep([d], busy), None
+            except SystemExit as e:
+                lines, error = [], str(e.code).removeprefix("error: ")
+            except Exception as e:
+                lines, error = [], f"{type(e).__name__}: {e}"
+            return lines, error, self.kept.covers(d) or self._on_my_network(d)
+
+        lines, error, ok = await asyncio.get_running_loop().run_in_executor(None, work)
+        self._update_hold_button()
+        if lines:
+            self._append_log(_("Keeping these addresses for working on the gear (Release addresses removes them):")
+                             + "\n" + "\n".join(lines), status=False)
+        if ok:
+            if self.kept:
+                self._watch_kept()
+            self._device_action(name, reached=True)
+            return
+        why = error or tr("Couldn't add a temporary address to reach {ip}.", ip=d.ip)
+        self.status.text = why
+        await self.main_window.dialog(toga.ErrorDialog(_("Can't reach this device"), i18n.sentences(
+            why, core.manual_address_hint(d, self._all_devices(), phone=False))))
+
+    async def _hint_then_open(self, d, hint):
+        """Phones: how to reach a device off the phone's network by hand, then its web UI anyway."""
+        await self.main_window.dialog(toga.InfoDialog(_("Not on this phone's network"), hint))
+        self._device_action("web", reached=True)
+
     def _back_up_all(self):
         """Device > Back up all configs… (desktops: devicegui.back_up_all)."""
         if self.caps["mobile"]:
@@ -1440,7 +1493,7 @@ class OpenDiscoApp(toga.App):
         from opendisco import devicegui
         asyncio.create_task(devicegui._guarded(self, None, lambda app, d: devicegui.back_up_all(app)))
 
-    def _device_action(self, name):
+    def _device_action(self, name, reached=False):
         d = self._selected_device()
         if d is None and name == "scan_from" and not self.caps["mobile"]:  # from a device given by its address
             from opendisco import devicegui
@@ -1465,6 +1518,17 @@ class OpenDiscoApp(toga.App):
             self.status.text = (_("Works once a scan has finished, one device at a time.") if waits
                                 else tr("{action}: not available for this device.", action=title))
             return
+        if name in ("web", "ssh", "ping") and not reached and self.demo is None:
+            # Reached through a temporary address that's gone: put one back first
+            if self.kept is not None and not self.running and self.kept.wanted(d):
+                asyncio.create_task(self._reach(d, name))
+                return
+            if self.caps["mobile"] and name == "web" and d.key not in self.hinted and not self._on_my_network(d):
+                hint = core.manual_address_hint(d, self._all_devices())
+                if hint:
+                    self.hinted.add(d.key)
+                    asyncio.create_task(self._hint_then_open(d, hint))
+                    return
         if name == "web":
             url = core.web_url(d, fallback=True)
             webbrowser.open(url)
@@ -1768,7 +1832,7 @@ class OpenDiscoApp(toga.App):
             return
         asked = devices is not None
         devices = [d for d in (devices if asked else res.devices)
-                   if d.ip and (asked or (d.key not in self.hidden and health.pingable(d, self.holding)))]
+                   if d.ip and (asked or (d.key not in self.hidden and health.pingable(d, self._kept_for(d))))]
         if not devices:
             return
         self.measuring = res
@@ -2273,52 +2337,96 @@ class OpenDiscoApp(toga.App):
             pass
         return tr("{name} in Downloads", name=name)
 
+    def _kept_for(self, d) -> bool:
+        return self.kept is not None and self.kept.covers(d)
+
+    def _update_hold_button(self):
+        """Release addresses while some are kept; Keep addresses once a scan reached gear through one."""
+        kept = bool(self.kept)
+        self.hold_button.text = _("Release addresses") if kept else _("Keep addresses")
+        self.hold_button.enabled = not self.running and (kept or (
+            self.kept is not None and bool(self.result) and bool(self.result.mgr)
+            and any(self.kept.wanted(d) for d in self.result.devices)))
+
     async def on_hold(self, widget, **kwargs):
-        if self.holding:
+        if self.kept:
             await self._release_hold()
             return
-        res = self.result
-        # Until the addresses are in place: a scan started meanwhile would replace this result
-        # and lose track of them.
+        if self.result:
+            self._keep(self.result, manual=True)
+
+    def _keep(self, res, then=None, manual=False):
+        """Keep an address in each subnet the scan reached gear through (in a worker: sudo may ask)."""
+        # Until the addresses are in place: a scan started meanwhile could put its own in those subnets
         self.hold_button.enabled = self.start_button.enabled = False
+        devices = [d for d in res.devices if d.key not in self.hidden]
+        busy = {ip for d in res.devices for ip in d.ips}
 
         def work():
             try:
-                res.mgr.authorize()  # sudo on macOS and Linux; on Windows the app already runs as administrator
-                lines = core.hold_start(res.mgr, res.inv, lambda m: self._from_worker(self._append_log, m))
+                lines = self.kept.keep(devices, busy)  # sudo on macOS and Linux; on Windows, administrator rights
             except SystemExit as e:
                 lines = [f"[error] {str(e.code).removeprefix('error: ')}"]
             except Exception as e:
                 lines = [f"[error] {type(e).__name__}: {e}"]
-            self._from_worker(self._held, res, lines)
+            self._from_worker(self._held, lines, then, manual)
 
         threading.Thread(target=work, daemon=True).start()
 
-    def _held(self, res, lines):
-        self.hold_button.enabled = self.start_button.enabled = True
-        if not res.mgr.active:
-            self.notes.value += "\n\n" + ("\n".join(lines) or _("Nothing was reached through an address to keep."))
-            return
-        self.holding = True
-        self.hold_button.text = _("Release addresses")
-        self.notes.value = _("Keeping these addresses for working on the gear (Release addresses removes them):") + \
-                           "\n" + "\n".join(lines) + "\n\n" + self.notes.value
-        self.tabs.current_tab = _("Notes")
-        asyncio.create_task(self._keepalive())
+    def _held(self, lines, then=None, manual=False):
+        self.start_button.enabled = not self.running
+        self._update_hold_button()
+        if lines:
+            self._append_log(_("Keeping these addresses for working on the gear (Release addresses removes them):")
+                             + "\n" + "\n".join(lines), status=False)
+        if not self.kept:
+            if manual:
+                self.notes.value += "\n\n" + ("\n".join(lines) or _("Nothing was reached through an address to keep."))
+        else:
+            if lines:
+                self.notes.value = (_("Keeping these addresses for working on the gear (Release addresses removes "
+                                      "them):") + "\n" + "\n".join(lines) + "\n\n" + self.notes.value)
+            if manual:
+                self.tabs.current_tab = _("Notes")
+            self._watch_kept()
+        if then:
+            then()
 
-    async def _keepalive(self):
-        while self.holding:
-            await asyncio.sleep(60)
-            if self.holding:
-                await asyncio.get_running_loop().run_in_executor(None, self.result.mgr.keepalive)
+    def _watch_kept(self):
+        if not self.watching_kept:
+            self.watching_kept = True
+            asyncio.create_task(self._check_kept())
+
+    async def _check_kept(self):
+        """Every minute while addresses are kept: sudo stays authorised (so removing them later needs
+        no password), and each address is checked: put back if it went, moved or let go if it clashes.
+        Not during a scan, which may be using them."""
+        try:
+            while self.kept:
+                await asyncio.sleep(60)
+                if not self.kept or self.running:
+                    continue
+                busy = {ip for d in self._all_devices() for ip in d.ips}
+
+                def work():
+                    try:
+                        self.kept.mgr.keepalive()
+                        return self.kept.check(busy)
+                    except Exception as e:  # (the next minute tries again)
+                        return [f"Checking the kept addresses failed: {type(e).__name__}: {e}"]
+
+                for msg in await asyncio.get_running_loop().run_in_executor(None, work):
+                    self._append_log(msg)
+                self._update_hold_button()
+        finally:
+            self.watching_kept = False
 
     async def _release_hold(self):
-        if not self.holding:
+        if not self.kept:
             return
-        self.holding = False
-        mgr = self.result.mgr
-        await asyncio.get_running_loop().run_in_executor(None, mgr.remove_all)
-        self.hold_button.text = _("Keep addresses")
+        self.hold_button.enabled = False
+        await asyncio.get_running_loop().run_in_executor(None, self.kept.release)
+        self._update_hold_button()
         self.status.text = _("Temporary addresses removed.")
 
     # -- networks file (in Settings) ---------------------------------------------------
@@ -2553,7 +2661,7 @@ class OpenDiscoApp(toga.App):
 
         switches = [toga.Switch(_(text), value=self.settings.get(key, True),
                                 on_change=lambda widget, key=key, **kwargs: changed(widget, key))
-                    for key, text in SETTINGS.items() if key != "check_app_updates" or self.caps["updates"]]
+                    for key, text in SETTINGS.items() if self._offers_setting(key)]
         if self.phone_ui:  # the scan buttons there have no options beside them
             def deep(widget, **kwargs):
                 self.deep.value = widget.value
@@ -2612,6 +2720,10 @@ class OpenDiscoApp(toga.App):
         else:
             content = toga.Box(style=Pack(direction=COLUMN, flex=1, margin=14, gap=8), children=[*options, finish])
         self.close_settings = self._show_panel(_("Settings"), content, size, on_close=closed, resizable=True)
+
+    def _offers_setting(self, key) -> bool:
+        """Whether Settings shows this switch: not one for what this platform doesn't do."""
+        return {"check_app_updates": self.caps["updates"], "keep_addresses": self.caps["aliases"]}.get(key, True)
 
     def _launch_checks(self):
         if self.caps["updates"]:
@@ -2740,7 +2852,7 @@ class OpenDiscoApp(toga.App):
             ending.append(_("the scan in progress stops"))
         if self.term and self.term.sessions:
             ending.append(_("the SSH and ping sessions close"))
-        if self.holding:
+        if self.kept:
             ending.append(_("the kept addresses are removed"))
         return ", ".join(ending)
 
@@ -2986,6 +3098,8 @@ class OpenDiscoApp(toga.App):
             self.term.close_all()  # ends ssh and ping
         if self.result and self.result.mgr:
             self.result.mgr.remove_all()  # never leave a temporary address behind
+        if self.kept is not None:
+            self.kept.release()
         if self.multicast_lock is not None:
             self.multicast_lock.release()
         if self.demo is not None:
