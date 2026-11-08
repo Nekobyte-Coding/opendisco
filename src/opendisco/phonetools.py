@@ -294,8 +294,8 @@ class ConfigPage:
         content = toga.Box(style=Pack(direction=COLUMN, flex=1, margin=12, gap=8), children=[
             toga.Label(about), self.box, self.state,
             toga.Box(style=Pack(direction=ROW, gap=8), children=self.buttons)])
-        for button, kind in zip(self.buttons, ("gray", "tinted", "filled")):
-            ui.style_button(button, kind)
+        for button, look in zip(self.buttons, ("gray", "tinted", "filled")):
+            ui.style_button(button, look)
         ui.monospaced(self.box, 10)
         phone.hook(app, "plain_entry")(self.box)
         phone.hook(app, "watch_keyboard")(app, self.box, follow=False)

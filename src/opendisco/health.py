@@ -239,7 +239,7 @@ def pingable(d, holding: bool = False) -> bool:
     return bool(d.ip) and core._usable_ip(d.ip) and (holding or not d.alias or d.direct)
 
 
-def measure(devices, count: int = PINGS, stop=None) -> str:
+def measure(devices, count: int = PINGS) -> str:
     """Ping the devices, count times each and all at once, and keep the result in
     d.health["latency"]. One that lost a ping, or answered slowly, gets MORE_PINGS more before
     the result is kept. Returns how it pinged; raises OSError when it can't ping at all."""
@@ -249,10 +249,10 @@ def measure(devices, count: int = PINGS, stop=None) -> str:
             by_ip.setdefault(d.ip, []).append(d)
     if not by_ip:
         return ""
-    how, times = ping_many(list(by_ip), count, stop)
+    how, times = ping_many(list(by_ip), count)
     again = [ip for ip, t in times.items() if _unsure(t)]
-    if again and MORE_PINGS and not (stop and stop()):
-        _how, more = ping_many(again, MORE_PINGS, stop, how)
+    if again and MORE_PINGS:
+        _how, more = ping_many(again, MORE_PINGS, how)
         for ip in again:
             times[ip] = times[ip] + more[ip]
     at = time.time()
@@ -278,7 +278,7 @@ def _stats(times: list, at: float, how: str) -> dict:
     return out
 
 
-def ping_many(ips: list, count: int, stop=None, how: str = "") -> tuple:
+def ping_many(ips: list, count: int, how: str = "") -> tuple:
     """Ping each address count times: (how, {ip: [round trip in ms, or None when lost, per ping]}).
     how picks the way (one that worked before); otherwise the first of them the system allows."""
     # Windows has no ICMP datagram sockets, and nothing else has IcmpSendEcho.
@@ -287,13 +287,13 @@ def ping_many(ips: list, count: int, stop=None, how: str = "") -> tuple:
     problems = []
     for name, ping in sorted(ways, key=lambda way: way[0] != how):
         try:
-            return name, ping(ips, count, PING_TIMEOUT, PING_INTERVAL, stop)
+            return name, ping(ips, count, PING_TIMEOUT, PING_INTERVAL)
         except OSError as e:
             problems.append(f"{name}: {e.strerror or e}")
     raise OSError(f"can't ping from here ({'; '.join(problems)})")
 
 
-def _ping_socket(ips, count, timeout, interval, stop) -> dict:
+def _ping_socket(ips, count, timeout, interval) -> dict:
     """Every address through one ICMP datagram socket: the pings go out PING_RATE a second at
     most and a device's pings interval apart, and each reply is matched to its echo by sequence
     number, identifier and address. Linux sets the identifier to the socket's own; macOS and iOS
@@ -312,7 +312,7 @@ def _ping_socket(ips, count, timeout, interval, stop) -> dict:
     idents, sent, start = {ident}, 0, time.perf_counter()
     with sock:
         sock.setblocking(False)
-        while (sent < len(plan) or pending) and not (stop and stop()):
+        while sent < len(plan) or pending:
             now = time.perf_counter()
             while sent < len(plan) and start + plan[sent][0] <= now:
                 _, ip, k = plan[sent]
@@ -365,7 +365,7 @@ def _take_replies(sock, pending: dict, times: dict, idents: set) -> None:
         times[ip][k] = (got - at) * 1000
 
 
-def _ping_windows(ips, count, timeout, interval, stop) -> dict:
+def _ping_windows(ips, count, timeout, interval) -> dict:
     """Windows: IcmpSendEcho (iphlpapi.dll), which any user may call. It waits for each reply, so
     up to PING_THREADS devices are pinged at once, each in a thread of its own."""
     import ctypes
@@ -401,8 +401,6 @@ def _ping_windows(ips, count, timeout, interval, stop) -> dict:
         handle = opened()
         try:
             for k in range(count):
-                if stop and stop():
-                    break
                 began = time.perf_counter()
                 if send(handle, dest, request, len(payload), None, reply, size, int(timeout * 1000)):
                     # ICMP_ECHO_REPLY starts Address, Status, RoundTripTime (ms): the same in
@@ -440,7 +438,7 @@ def program_times(text: str, count: int) -> list:
     return times + [None] * (count - len(times))
 
 
-def _ping_program(ips, count, timeout, interval, stop) -> dict:
+def _ping_program(ips, count, timeout, interval) -> dict:
     """The system's ping program, PING_PROGRAMS at once: where no ICMP socket is allowed (Linux
     when net.ipv4.ping_group_range leaves the user out) and Windows' API can't be used."""
     exe = core.find_tool("ping") or next((p for p in ("/system/bin/ping", "/sbin/ping", "/bin/ping")
@@ -459,8 +457,6 @@ def _ping_program(ips, count, timeout, interval, stop) -> dict:
 
     def one(ip: str) -> tuple:
         """(round trips, why it couldn't ping: "" when it could)"""
-        if stop and stop():
-            return [None] * count, ""
         try:
             done = subprocess.run([exe, *flags, ip], capture_output=True, text=True, errors="replace", env=env,
                                   timeout=limit, creationflags=window)

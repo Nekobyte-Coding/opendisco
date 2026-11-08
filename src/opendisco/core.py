@@ -4573,7 +4573,7 @@ def packet_findings(d: Device) -> dict:
     for (kind, _), recs in groups.items():
         back = set()  # (index, key) of a change that undid a one-off
         for i in range(1, len(recs)):
-            (r0, prev), (r1, cur) = recs[i - 1], recs[i]
+            prev, (r1, cur) = recs[i - 1][1], recs[i]
             for key in sorted((set(prev) | set(cur)) - VOLATILE_KEYS):
                 if prev.get(key) != cur.get(key) and (i, key) not in back:
                     one_off = i + 1 < len(recs) and recs[i + 1][1].get(key) == prev.get(key)
@@ -4586,7 +4586,7 @@ def packet_findings(d: Device) -> dict:
             if not isinstance(nu, int):
                 continue
             if ref is not None:
-                (r0, ou), dt = ref, rec.at - ref[0].at
+                ou, dt = ref[1], rec.at - ref[0].at
                 if nu < ou and nu <= dt + 60:
                     uptime.append((rec.n, f"{kind}: rebooted (uptime {fmt_uptime(ou)} -> {fmt_uptime(nu)})"))
                 elif abs((nu - ou) - dt) > 120 + dt * 0.02:  # firmware refreshes it every half-minute or so
@@ -4891,7 +4891,6 @@ STATUS_LABELS = {
     "LOW-SNR": N_("Low SNR"), "LOW-CAPACITY": N_("Low capacity"), "LOW-QUALITY": N_("Low airMAX quality"),
 }
 LEVEL_ORDER = ("ok", "note", "warn", "error")
-NVD_URL = "https://nvd.nist.gov/vuln/detail/{}"
 
 
 def status_label(tag: str, english: bool = False) -> str:
@@ -4938,7 +4937,7 @@ def status_cell(d: Device, english: bool = False) -> tuple:
 def issue_links(d: Device) -> list:
     """[(name, URL)] for the public write-ups its findings point to: each CVE's NVD page."""
     ids = dict.fromkeys(m for _, _, msg in d.issues for m in re.findall(r"\bCVE-\d{4}-\d{4,}\b", msg))
-    return [(cve, NVD_URL.format(cve)) for cve in ids]
+    return [(cve, vulns.nvd_url(cve)) for cve in ids]
 
 
 def render_table(devs) -> str:
