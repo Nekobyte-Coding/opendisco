@@ -1306,7 +1306,9 @@ python3 -m venv .venv && .venv/bin/pip install briefcase toga
 - **Windows (setup.exe), built on a Mac:** `.venv/bin/python packaging/windows/build_installer.py`
   (needs `brew install makensis` once). Briefcase can't build Windows apps on a Mac, so this
   script assembles the same parts:
-  - Python 3.13 for Windows, the official embeddable build from python.org;
+  - Python 3.13 for Windows, the official embeddable build from python.org, used only when it
+    matches the SHA-256 pinned for that version in the script (`PYTHON_SHA256`: a new Python
+    version needs its line there first);
   - Toga's Windows backend and pywinpty, installed from Windows wheels;
   - the app's code, LICENSE and NOTICE.
 

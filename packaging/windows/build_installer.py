@@ -23,6 +23,12 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
 PYTHON_VERSION = "3.13.17"  # embeddable builds exist for 3.13 bugfix releases; pythonnet supports it
+# The SHA-256 of each embeddable Python the build may bundle: a download (or a cached copy) that
+# doesn't match isn't used. A new PYTHON_VERSION needs its line here, from a copy checked against
+# what python.org publishes for it (the release page's checksum or Sigstore signature), never from
+# the download being checked.
+PYTHON_SHA256 = {
+}
 TOGA_VERSION = "0.5.7"
 PYWINPTY_VERSION = "2.0.15"  # Windows consoles (ConPTY) for the Terminal tab's SSH and ping
 
@@ -64,8 +70,16 @@ def main() -> int:
     # 1. Python: the official embeddable build. Its ._pth file fixes sys.path, so add the
     #    bundled packages and the app (relative to python\) and turn on site.
     name = f"python-{args.python}-embed-amd64.zip"
+    pinned = PYTHON_SHA256.get(args.python)
+    if not pinned:
+        sys.exit(f"error: no SHA-256 for {name} in PYTHON_SHA256: add it first, from a copy checked against "
+                 f"python.org's {args.python} release page")
     archive = download(f"https://www.python.org/ftp/python/{args.python}/{name}", cache / name)
-    print(f"{name} sha256 {hashlib.sha256(archive.read_bytes()).hexdigest()}")
+    found = hashlib.sha256(archive.read_bytes()).hexdigest()
+    if found != pinned:
+        archive.unlink()  # (downloaded again next time)
+        sys.exit(f"error: {name} has SHA-256 {found}, not the {pinned} pinned for it: not using it")
+    print(f"{name} matches its SHA-256 ({pinned})")
     with zipfile.ZipFile(archive) as z:
         z.extractall(stage / "python")
     short = major_minor.replace(".", "")

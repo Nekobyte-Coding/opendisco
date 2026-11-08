@@ -70,6 +70,12 @@ Fixes from a second review of all the code.
   device's name has "/" or ":" in it.
 - The app opens even when its data folder can't be written, or when its record of the terms
   isn't one it wrote.
+- Windows: the Npcap step runs the installer it downloads only when the certificate it's signed
+  with names Nmap Software LLC, Npcap's publisher, exactly. A valid signature from any company
+  whose name merely contained "Nmap Software" passed before. Each download goes in a folder of its
+  own, removed afterwards, even when the installer is cancelled.
+- The Windows build uses python.org's embeddable Python only when it matches the SHA-256 pinned
+  for that version in the build script, as xterm.js already had to match its registry's.
 
 ## 1.7.2 (2026-11-04)
 
