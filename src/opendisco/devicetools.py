@@ -40,9 +40,6 @@ import secrets
 import shlex
 import shutil
 import socket
-import ssl
-import subprocess
-import sys
 import tempfile
 import threading
 import time
@@ -50,7 +47,7 @@ import urllib.request
 from dataclasses import dataclass, field, replace
 from pathlib import Path
 
-from opendisco import core, i18n, linkhealth
+from opendisco import core, i18n, linkhealth, tls
 from opendisco.i18n import _, N_, sentences, tr
 
 if core.platform_name() in ("ios", "android"):  # no ssh program there: asyncssh, with the same calls
@@ -300,34 +297,13 @@ def version_key(text: str) -> tuple:
 # ---------------------------------------------------------------------------
 
 _INDEX = None  # (when fetched, items)
-_CONTEXT = None
-
-
-def https_context() -> ssl.SSLContext:
-    """Certificates checked as usual. A Python without its own CA list on macOS gets the system's;
-    phones get tls.context()'s (Android's own roots, certifi's on iOS)."""
-    global _CONTEXT
-    if _CONTEXT is None and core.platform_name() in ("ios", "android"):
-        from opendisco import tls
-        _CONTEXT = tls.context()
-    if _CONTEXT is None:
-        ctx = ssl.create_default_context()
-        if not ctx.cert_store_stats().get("x509_ca") and sys.platform == "darwin":
-            try:
-                pem = subprocess.run(["security", "find-certificate", "-a", "-p",
-                                      "/System/Library/Keychains/SystemRootCertificates.keychain"],
-                                     capture_output=True, text=True, timeout=20).stdout
-                if pem:
-                    ctx.load_verify_locations(cadata=pem)
-            except (OSError, subprocess.SubprocessError, ssl.SSLError):
-                pass
-        _CONTEXT = ctx
-    return _CONTEXT
 
 
 def _open(url: str, timeout: float = 30):
+    """A request to the firmware server, its certificate checked the way the app's other
+    downloads are (tls.context: the system's root certificates, certifi's on iOS)."""
     request = urllib.request.Request(url, headers={"User-Agent": USER_AGENT, "Accept": "*/*"})
-    return urllib.request.urlopen(request, timeout=timeout, context=https_context() if url.startswith("https:") else None)
+    return tls.urlopen(request, timeout)
 
 
 def firmware_index(refresh: bool = False) -> list:

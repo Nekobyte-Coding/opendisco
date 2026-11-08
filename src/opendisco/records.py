@@ -360,17 +360,16 @@ def _page(title: str, body: str) -> str:
             "</body></html>\n")
 
 
-def _linked(msg: str, links: dict) -> str:
+def _linked(msg: str) -> str:
     """The message, escaped, with each CVE id linked to its NVD page."""
-    return re.sub(r"\bCVE-\d{4}-\d{4,}\b", lambda m: f'<a href="{links.get(m.group(0), vulns.nvd_url(m.group(0)))}">'
-                                                    f"{m.group(0)}</a>", escape(msg))
+    return re.sub(r"\bCVE-\d{4}-\d{4,}\b", lambda m: f'<a href="{escape(vulns.nvd_url(m.group(0)))}">{m.group(0)}</a>',
+                  escape(msg))
 
 
 def _issue_list(d, issues=None) -> str:
     """d's findings (or these of them) as list items, each CVE linked to its NVD page."""
-    links = dict(core.issue_links(d))
     return "".join(f'<li><b class="{_LEVEL_CLASS.get(level, "warn")}">{escape(core.status_label(tag))}</b> '
-                   f"{_linked(msg, links)}</li>" for level, tag, msg in (d.issues if issues is None else issues))
+                   f"{_linked(msg)}</li>" for level, tag, msg in (d.issues if issues is None else issues))
 
 
 def _table(head, rows) -> str:
