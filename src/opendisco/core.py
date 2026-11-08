@@ -5994,6 +5994,7 @@ def run_scan(opts, log, progress=None, on_inventory=None):
     finally:
         if mgr:
             mgr.remove_all()
+            atexit.unregister(mgr.remove_all)  # (a GUI scans many times: don't keep each manager until it quits)
         sc.close()
     sc.finish_notes()
     enrich(inv, sc, opts, log, alias_result)

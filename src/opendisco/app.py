@@ -3131,10 +3131,9 @@ class OpenDiscoApp(toga.App):
             self.cancel_port_warning()
         if self.term:
             self.term.close_all()  # ends ssh and ping
-        if self.result and self.result.mgr:
-            self.result.mgr.remove_all()  # never leave a temporary address behind
         if self.kept is not None:
-            self.kept.release()
+            self.kept.release()  # (and Windows' DHCP/static coexistence back as it was)
+        core.release_aliases()  # never leave a temporary address behind, a running scan's included
         if self.multicast_lock is not None:
             self.multicast_lock.release()
         if self.demo is not None:
