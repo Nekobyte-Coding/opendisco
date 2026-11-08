@@ -54,6 +54,23 @@ Fixes from a review of 1.7.2's Direct to a device.
 - `--direct -i` takes an interface's address too (such as `-i 192.168.1.100`), as `-i` does
   without `--direct`: 1.7.2 said no wired interface matched.
 
+Fixes from a second review of all the code.
+
+- Ping on phones and tablets: a damaged ICMP error no longer ends the ping with an error, and an
+  "unreachable" for another ping isn't counted against this one.
+- The Site Report lists the networks a scan really reached through temporary addresses: not the
+  networks file's when none was added (every port a shared network, Stop before probing, no free
+  address), and with the subnets Direct to a device inferred from what it heard.
+- Change login points to the device's web UI for a password hash that would take minutes to
+  check (a million rounds or more) or that it can't hash, instead of freezing the window or
+  doing nothing.
+- An NVD record the CVE list can't read (an odd id, a changed format) no longer stops its daily
+  refresh without a word: the Log says why, and the list in use stays.
+- Save a copy of a config backup suggests a file name that works everywhere, even when the
+  device's name has "/" or ":" in it.
+- The app opens even when its data folder can't be written, or when its record of the terms
+  isn't one it wrote.
+
 ## 1.7.2 (2026-11-04)
 
 - Direct to a device scans a wired port that has an address of its own: one set by hand (such
