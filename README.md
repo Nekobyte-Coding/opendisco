@@ -323,11 +323,11 @@ tag VLANs, so the app only offers the modes the platform supports:
 - **Npcap** captures packets for Sniff, Trunk VLANs and Direct. Its license doesn't allow
   bundling it, so the installer has an optional **Npcap** step (ticked when it's missing, as
   Wireshark's is). The step downloads the current official installer from npcap.com, checks
-  that it's signed by the Nmap Project, and starts it to be clicked through. The app offers
-  the same the first time one of those modes is picked. Wireshark installs Npcap too. Npcap's
-  free license covers 5 computers (virtual machines count); more need Npcap OEM from the Nmap
-  Project. Leaving "Restrict Npcap driver's access to Administrators only" unticked lets
-  sniffing work without administrator rights.
+  that it's signed by Npcap's publisher, Nmap Software LLC, and no one else, and starts it to
+  be clicked through. The app offers the same the first time one of those modes is picked.
+  Wireshark installs Npcap too. Npcap's free license covers 5 computers (virtual machines
+  count); more need Npcap OEM from the Nmap Project. Leaving "Restrict Npcap driver's access
+  to Administrators only" unticked lets sniffing work without administrator rights.
 - **Temporary addresses** ("Probe listed networks", Keep addresses, Trunk VLANs, Direct) change the
   network adapter's settings, which Windows only lets administrators do. The app offers to
   restart as administrator (one UAC prompt, which Windows Hello can approve). On the command
