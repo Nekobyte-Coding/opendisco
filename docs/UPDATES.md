@@ -80,8 +80,8 @@ leaks, rotation cuts it off.
 2. **Create a draft release** on Forgejo (nekobyte-coding/opendisco → Releases → New release, and
    tick "draft") with the tag, the notes and every installer from `dist/`.
 3. **Run the Release workflow** (Actions → Release → Run workflow, tag `vX.Y.Z`). It downloads the
-   draft's files, adds `update-key` from the `OPENDISCO_UPDATE_KEY` secret, writes and signs
-   `SHA256SUMS` with the `OPENDISCO_RELEASE_SIGNING_KEY` secret, checks the signature with the
+   draft's files (with the `OPENDISCO_RELEASE_READ_TOKEN` secret), adds `update-key` from the
+   `OPENDISCO_UPDATE_KEY` secret, writes and signs `SHA256SUMS` with the `OPENDISCO_RELEASE_SIGNING_KEY` secret, checks the signature with the
    committed public key (and with openssl), and uploads `update-key`, `SHA256SUMS` and
    `SHA256SUMS.sig` to the draft. It refuses a release that is already published.
 4. **Publish the release.** Within 5 minutes, the Git Box's sync checks the signature and puts the
@@ -97,7 +97,7 @@ A signed release holds the installers, plus:
 
 ### The repository secrets
 
-You add both secrets yourself, at nekobyte-coding/opendisco → Settings → Actions → Secrets:
+You add these secrets yourself, at nekobyte-coding/opendisco → Settings → Actions → Secrets:
 
 - `OPENDISCO_UPDATE_KEY`: random, 32 bytes or more, base64url, for example
   `python3 -c "import secrets; print(secrets.token_urlsafe(32))"` run on a box, never pasted in a chat.
@@ -106,6 +106,10 @@ You add both secrets yourself, at nekobyte-coding/opendisco → Settings → Act
   `-----BEGIN PRIVATE KEY-----` ... `-----END PRIVATE KEY-----` block, as `openssl genpkey -algorithm
   ed25519` writes it. Only the release workflow uses it. Michael keeps the
   private key and its backup; it is never in the repository.
+- `OPENDISCO_RELEASE_READ_TOKEN`: an access token with the `read:repository` scope, from an account
+  that can write this repository's releases. Forgejo serves a draft release's files only to such an
+  account, and the job's own token isn't one on those download links (the API, where it is, lists a
+  release's files but can't send them). The workflow uses it only to download the draft's files.
 
 ## The release key
 
