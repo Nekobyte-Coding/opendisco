@@ -82,7 +82,7 @@ Section "${APPNAME}" SecApp
     RMDir /r "$INSTDIR\app"
   ${EndIf}
   SetOutPath "$INSTDIR"
-  File /r "${STAGE}/*"
+  File /r "${STAGE}\*"
   WriteUninstaller "$INSTDIR\Uninstall.exe"
 
   ; Shortcuts start in the install folder.
