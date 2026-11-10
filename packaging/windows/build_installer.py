@@ -28,6 +28,7 @@ PYTHON_VERSION = "3.13.17"  # embeddable builds exist for 3.13 bugfix releases; 
 # what python.org publishes for it (the release page's checksum or Sigstore signature), never from
 # the download being checked.
 PYTHON_SHA256 = {
+    "3.13.17": "9e35319bffedab8b36ad44d8f377cb4f1733bcec257a0b6d04d94f01486ddb38",  # python-3.13.17-embed-amd64.zip
 }
 TOGA_VERSION = "0.5.7"
 PYWINPTY_VERSION = "2.0.15"  # Windows consoles (ConPTY) for the Terminal tab's SSH and ping
