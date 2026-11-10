@@ -53,6 +53,33 @@ Fixes from a review of 1.7.2's Direct to a device.
 - Gear OpenDisco recognises is still logged as it's heard on a port judged a shared network.
 - `--direct -i` takes an interface's address too (such as `-i 192.168.1.100`), as `-i` does
   without `--direct`: 1.7.2 said no wired interface matched.
+- A port with an address of its own that couldn't be listened to (tcpdump or Npcap failed on
+  it) gets no temporary addresses unless it's named with `-i`, since nothing shows the device
+  is on it, and the log says listening failed there. 1.7.2 probed it as if the device were
+  plugged in, even on an office network.
+
+Fixes from a second review of all the code.
+
+- Ping on phones and tablets: a damaged ICMP error no longer ends the ping with an error, and an
+  "unreachable" for another ping isn't counted against this one.
+- The Site Report lists the networks a scan really reached through temporary addresses: not the
+  networks file's when none was added (every port a shared network, Stop before probing, no free
+  address), and with the subnets Direct to a device inferred from what it heard.
+- Change login points to the device's web UI for a password hash that would take minutes to
+  check (a million rounds or more) or that it can't hash, instead of freezing the window or
+  doing nothing.
+- An NVD record the CVE list can't read (an odd id, a changed format) no longer stops its daily
+  refresh without a word: the Log says why, and the list in use stays.
+- Save a copy of a config backup suggests a file name that works everywhere, even when the
+  device's name has "/" or ":" in it.
+- The app opens even when its data folder can't be written, or when its record of the terms
+  isn't one it wrote.
+- Windows: the Npcap step runs the installer it downloads only when the certificate it's signed
+  with names Nmap Software LLC, Npcap's publisher, exactly. A valid signature from any company
+  whose name merely contained "Nmap Software" passed before. Each download goes in a folder of its
+  own, removed afterwards, even when the installer is cancelled.
+- The Windows build uses python.org's embeddable Python only when it matches the SHA-256 pinned
+  for that version in the build script, as xterm.js already had to match its registry's.
 
 ## 1.7.2 (2026-11-04)
 

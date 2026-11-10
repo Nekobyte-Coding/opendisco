@@ -1,4 +1,5 @@
-"""Certificate-checked HTTPS for what OpenDisco fetches from the internet (the NVD's CVE data).
+"""Certificate-checked HTTPS for what OpenDisco fetches from the internet: the NVD's CVE data,
+Ubiquiti's firmware and OpenDisco's own updates.
 
 Python finds the system's root certificates by itself on Windows (its certificate store), on
 Linux (OpenSSL's folders) and on Android (Chaquopy loads a bundle it brings). The Python inside

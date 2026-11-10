@@ -102,8 +102,9 @@ Section "${APPNAME}" SecApp
 SectionEnd
 
 ; Npcap's license doesn't allow bundling it, so this fetches the official installer from npcap.com,
-; checks it's signed by the Nmap Project, and starts its installer (which asks for administrator
-; rights itself). Ticked when Npcap isn't installed yet, like Wireshark does.
+; checks it's signed by Npcap's publisher (Nmap Software LLC) and no one else, and starts its
+; installer (which asks for administrator rights itself). Ticked when Npcap isn't installed yet,
+; like Wireshark does.
 Section /o "Npcap (packet capture for Sniff, Trunk VLANs and Direct)" SecNpcap
   DetailPrint "Getting Npcap from npcap.com..."
   nsExec::ExecToLog 'powershell -NoProfile -ExecutionPolicy Bypass -File "$INSTDIR\app\opendisco\resources\get-npcap.ps1"'

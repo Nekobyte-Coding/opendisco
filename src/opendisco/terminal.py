@@ -29,15 +29,15 @@ from pathlib import Path
 
 from opendisco import i18n
 from opendisco.i18n import N_, _, tr
+from opendisco.sshcommon import ANSI
 
 IS_WINDOWS = sys.platform == "win32"
 RESOURCES = Path(__file__).with_name("resources")
 PASSWORD_PROMPT = re.compile(rb"(?i)pass(word|code)[^\r\n]{0,60}:\s*$")
 KEY_CHANGED = b"REMOTE HOST IDENTIFICATION HAS CHANGED"
-# Terminal escapes, and one cut off at the end. Windows' console (ConPTY) draws ssh's "password: "
-# as "password:" and a cursor move, then sets the window title, so a prompt can end in escapes.
-ESCAPES = re.compile(rb"\x1b\[[0-9;?]*[ -/]*[@-~]|\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)|\x1b[()][0-9A-Za-z]|\x1b[=>]"
-                     rb"|\x1b\][^\x07\x1b]*$|\x1b\[[0-9;?]*$|\x1b$")
+# Terminal escapes (sshcommon.ANSI), and one cut off at the end. Windows' console (ConPTY) draws ssh's
+# "password: " as "password:" and a cursor move, then sets the window title, so a prompt can end in escapes.
+ESCAPES = re.compile(ANSI.pattern.encode() + rb"|\x1b\][^\x07\x1b]*$|\x1b\[[0-9;?]*$|\x1b$")
 
 
 def plain(data: bytes) -> bytes:

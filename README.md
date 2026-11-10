@@ -323,11 +323,11 @@ tag VLANs, so the app only offers the modes the platform supports:
 - **Npcap** captures packets for Sniff, Trunk VLANs and Direct. Its license doesn't allow
   bundling it, so the installer has an optional **Npcap** step (ticked when it's missing, as
   Wireshark's is). The step downloads the current official installer from npcap.com, checks
-  that it's signed by the Nmap Project, and starts it to be clicked through. The app offers
-  the same the first time one of those modes is picked. Wireshark installs Npcap too. Npcap's
-  free license covers 5 computers (virtual machines count); more need Npcap OEM from the Nmap
-  Project. Leaving "Restrict Npcap driver's access to Administrators only" unticked lets
-  sniffing work without administrator rights.
+  that it's signed by Npcap's publisher, Nmap Software LLC, and no one else, and starts it to
+  be clicked through. The app offers the same the first time one of those modes is picked.
+  Wireshark installs Npcap too. Npcap's free license covers 5 computers (virtual machines
+  count); more need Npcap OEM from the Nmap Project. Leaving "Restrict Npcap driver's access
+  to Administrators only" unticked lets sniffing work without administrator rights.
 - **Temporary addresses** ("Probe listed networks", Keep addresses, Trunk VLANs, Direct) change the
   network adapter's settings, which Windows only lets administrators do. The app offers to
   restart as administrator (one UAC prompt, which Windows Hello can approve). On the command
@@ -1030,9 +1030,12 @@ as 192.168.1.100 for a radio on its factory 192.168.1.20, or one from the device
 server). An interface where more than two devices talk, such as an office LAN on a dock, is
 taken as a shared network: only gear the tool recognises is listed from it, and no temporary
 addresses go on it. A switch in between doesn't count as a device (its ports only send STP,
-LLDP or CDP). Listening ends a few seconds after the device uses an address, without waiting
-on an interface where nothing has. An interface named with `-i` is listened to even with no link yet: plug
-in, or re-seat the cable, once it's running. Devices talk the most right after link comes up.
+LLDP or CDP). Nor do temporary addresses go on an interface with an address of its own that
+couldn't be listened to, since nothing then shows the device is on it: the log says listening
+failed there, and naming it with `-i` probes it anyway. Listening ends a few seconds after the
+device uses an address, without waiting on an interface where nothing has. An interface named
+with `-i` is listened to even with no link yet: plug in, or re-seat the cable, once it's
+running. Devices talk the most right after link comes up.
 
 On a direct wire, whatever is talking is the radio, so the tool listens to it the way it
 listens on a trunk (up to 45 seconds) and prints what it learns as it happens:
@@ -1306,7 +1309,9 @@ python3 -m venv .venv && .venv/bin/pip install briefcase toga
 - **Windows (setup.exe), built on a Mac:** `.venv/bin/python packaging/windows/build_installer.py`
   (needs `brew install makensis` once). Briefcase can't build Windows apps on a Mac, so this
   script assembles the same parts:
-  - Python 3.13 for Windows, the official embeddable build from python.org;
+  - Python 3.13 for Windows, the official embeddable build from python.org, used only when it
+    matches the SHA-256 pinned for that version in the script (`PYTHON_SHA256`: a new Python
+    version needs its line there first);
   - Toga's Windows backend and pywinpty, installed from Windows wheels;
   - the app's code, LICENSE and NOTICE.
 

@@ -2052,6 +2052,17 @@ def _icmp_checksum(data: bytes) -> int:
     return ~total & 0xFFFF
 
 
+def quoted_echo(data: bytes):
+    """(ident, sequence number, the address it went to) of the echo an ICMP error quotes, data
+    being the error from its ICMP header on; None when it doesn't quote an echo whole."""
+    inner = data[8:]  # the quoted packet: its IP header, then the first 8 bytes of the echo
+    head = (inner[0] & 0x0F) * 4 if inner else 0
+    if head < 20 or len(inner) < head + 8 or inner[head] != 8:
+        return None
+    ident, seq = struct.unpack("!HH", inner[head + 4:head + 8])
+    return ident, seq, socket.inet_ntoa(inner[16:20])
+
+
 def ping(ip: str, out, stop, interval: float = 1.0, timeout: float = 2.0, count: int = 0) -> None:
     """Ping ip the way ping(8) does, a line per reply to out(line), until stop() is true (or count
     echoes have been answered or timed out), then the statistics. Through an unprivileged ICMP
@@ -2103,11 +2114,10 @@ def ping(ip: str, out, stop, interval: float = 1.0, timeout: float = 2.0, count:
             if len(data) < 8:
                 continue
             kind, _code, _sum, _ident, n = struct.unpack("!BBHHH", data[:8])
-            if kind in ICMP_KINDS and len(data) >= 36:  # the error quotes our echo: IP header + 8 bytes
-                inner = data[8:]
-                n = struct.unpack("!H", inner[(inner[0] & 0x0F) * 4 + 6:][:2])[0]
-                if pending.pop(n, None) is not None:
-                    out(f"From {addr[0]} icmp_seq={n} {ICMP_KINDS[kind]}")
+            if kind in ICMP_KINDS:
+                echo = quoted_echo(data)  # (only an echo to ip: another ping's error isn't this one's)
+                if echo and echo[2] == ip and pending.pop(echo[1], None) is not None:
+                    out(f"From {addr[0]} icmp_seq={echo[1]} {ICMP_KINDS[kind]}")
                 continue
             if kind != 0 or n not in pending or addr[0] != ip:
                 continue
@@ -3939,7 +3949,7 @@ def run_alias_rounds(sc: Scanner, inv: Inventory, mgr: AliasManager, plans, opts
              the address round 2 borrowed would have ignored us."""
     # result: filled as the rounds go, so a run stopped halfway keeps what the rounds before found
     result = {} if result is None else result
-    result.update(arp={}, ctx={}, skipped=[], tftp=set())
+    result.update(arp={}, ctx={}, skipped=[], tftp=set(), probed=[])
 
     def occupied(seen) -> set:
         # Our own earlier aliases don't count as taken; anything that answered does.
@@ -3959,6 +3969,7 @@ def run_alias_rounds(sc: Scanner, inv: Inventory, mgr: AliasManager, plans, opts
         added = [(t, ip) for t, ip in plan if mgr.add(link.name, ip, t.network.prefixlen)]
         if not added:
             return
+        result["probed"] += [t.network for t, _ in added if t.network not in result["probed"]]
         time.sleep(3.0 if IS_WINDOWS else 0.5)  # let the new routes settle (Windows checks for duplicates first)
         nets = [t.network for t, _ in added]
         hosts = [] if opts.quick else [str(h) for t, ip in added for h in t.network.hosts() if str(h) != ip]
@@ -4562,7 +4573,7 @@ def packet_findings(d: Device) -> dict:
     for (kind, _), recs in groups.items():
         back = set()  # (index, key) of a change that undid a one-off
         for i in range(1, len(recs)):
-            (r0, prev), (r1, cur) = recs[i - 1], recs[i]
+            prev, (r1, cur) = recs[i - 1][1], recs[i]
             for key in sorted((set(prev) | set(cur)) - VOLATILE_KEYS):
                 if prev.get(key) != cur.get(key) and (i, key) not in back:
                     one_off = i + 1 < len(recs) and recs[i + 1][1].get(key) == prev.get(key)
@@ -4575,7 +4586,7 @@ def packet_findings(d: Device) -> dict:
             if not isinstance(nu, int):
                 continue
             if ref is not None:
-                (r0, ou), dt = ref, rec.at - ref[0].at
+                ou, dt = ref[1], rec.at - ref[0].at
                 if nu < ou and nu <= dt + 60:
                     uptime.append((rec.n, f"{kind}: rebooted (uptime {fmt_uptime(ou)} -> {fmt_uptime(nu)})"))
                 elif abs((nu - ou) - dt) > 120 + dt * 0.02:  # firmware refreshes it every half-minute or so
@@ -4880,7 +4891,6 @@ STATUS_LABELS = {
     "LOW-SNR": N_("Low SNR"), "LOW-CAPACITY": N_("Low capacity"), "LOW-QUALITY": N_("Low airMAX quality"),
 }
 LEVEL_ORDER = ("ok", "note", "warn", "error")
-NVD_URL = "https://nvd.nist.gov/vuln/detail/{}"
 
 
 def status_label(tag: str, english: bool = False) -> str:
@@ -4927,7 +4937,7 @@ def status_cell(d: Device, english: bool = False) -> tuple:
 def issue_links(d: Device) -> list:
     """[(name, URL)] for the public write-ups its findings point to: each CVE's NVD page."""
     ids = dict.fromkeys(m for _, _, msg in d.issues for m in re.findall(r"\bCVE-\d{4}-\d{4,}\b", msg))
-    return [(cve, NVD_URL.format(cve)) for cve in ids]
+    return [(cve, vulns.nvd_url(cve)) for cve in ids]
 
 
 def render_table(devs) -> str:
@@ -5574,6 +5584,7 @@ class ScanResult:
     counters: dict = field(default_factory=dict)  # error counters that went up during the scan
     diag_args: tuple = ()  # diagnose()'s other arguments, to diagnose again after a rescan
     finished: float = field(default_factory=time.time)  # when the scan ended (the Site Report's date)
+    probed: list = field(default_factory=list)  # the networks a temporary address was added on, in order
 
     def wire_title(self) -> str:
         """The Wire tab's heading, in English (the Site Report translates it)."""
@@ -5847,7 +5858,7 @@ def run_scan(opts, log, progress=None, on_inventory=None):
     watched = sorted({l.name for l in links} | {l.name for l in ports} | {i.name for i in ifaces})
     counters_before = interface_counters(watched)
     t0 = time.monotonic()
-    alias_result, trunks, interrupted, judged = None, [], False, set()
+    alias_result, trunks, interrupted, judged, deaf = None, [], False, set(), set()
 
     def crowded(tr):  # --direct: more than two hosts on a port nobody named is a network, not a wire
         return tr.link.name not in wire and host_count(tr) > 2
@@ -5937,6 +5948,10 @@ def run_scan(opts, log, progress=None, on_inventory=None):
                     found = ", ".join(f"{n} {v}" for v, n in gear.most_common()) or "no known gear"
                     found += "; " + (", ".join(f"VLAN {v}" for v in tr.tagged_ids()) or "no tagged VLANs")
                     log(f"  {tr.link.name}: {'capture failed: ' + tr.error if tr.error else found}")
+                elif tr.error and not frames and tr.link.name not in wire:  # nothing shows the device is here
+                    deaf.add(tr.link.name)
+                    log(f"  {tr.link.name}: couldn't listen ({tr.error}), so it gets no temporary addresses: "
+                        "nothing shows the device is plugged in there. Name it with -i to probe it anyway.")
                 elif not talkers(tr):
                     log(f"  {tr.link.name}: nothing heard" + (f" ({tr.error})" if tr.error else ""))
             if stopped:
@@ -5955,8 +5970,9 @@ def run_scan(opts, log, progress=None, on_inventory=None):
                 heard = trunk.heard(vid, vendors_only)
                 return heard, {pair for pair in trunk.pairs.get(vid, ()) if pair[0] in heard}, wants
 
-            # --direct: a shared network isn't the device's wire, so no temporary addresses go on it
-            probed = [l for l in ports if not (by_link.get(l.name) and by_link[l.name].shared)]
+            # --direct: a shared network isn't the device's wire, so no temporary addresses go on it; nor
+            # do they on a port that couldn't be listened to, unless it was named
+            probed = [l for l in ports if l.name not in deaf and not (by_link.get(l.name) and by_link[l.name].shared)]
             plans = []
             for link in (probed if opts.direct else links):  # untagged, plus subnets heard untagged
                 heard, pairs, wants = heard_on(by_link.get(link.name), 0)
@@ -5981,6 +5997,9 @@ def run_scan(opts, log, progress=None, on_inventory=None):
                     + (f", and tagged VLAN {', '.join(map(str, vlans))}" if vlans else ""))
                 alias_result = {}  # (kept when Stop ends the rounds early)
                 run_alias_rounds(sc, inv, mgr, plans, opts, log, alias_result)
+            elif deaf:
+                log("No temporary addresses: nothing showed the device is plugged into a wired interface (listening "
+                    f"failed on {', '.join(sorted(deaf))}). Name its interface with -i to probe it anyway.")
             else:
                 log("No temporary addresses: every wired interface with link is a shared network, not a direct "
                     "wire to the device. Plug the device in, then scan again.")
@@ -6029,7 +6048,7 @@ def run_scan(opts, log, progress=None, on_inventory=None):
                                "the device.", network=net)) for net in skipped]
 
     return ScanResult(opts, devs, notes, trunks, ifaces, links, base_targets, inv, mgr, elapsed, interrupted,
-                      counters, diag_args)
+                      counters, diag_args, probed=(alias_result or {}).get("probed", []))
 
 
 def rescan_device(res: ScanResult, d: Device, log, seconds: float = 3.0):

@@ -265,7 +265,7 @@ def find_ports(res, d, kind: str, log, progress=None) -> list:
     return d.ports if kind == "all" else sorted(p for p, k in d.services.items() if k == kind)
 
 
-def measure(devices, count: int = 4, stop=None) -> str:
+def measure(devices, count: int = 4) -> str:
     """health.measure: each device's round trips, from what the made-up device answers."""
     time.sleep(DELAYS["ping"])
     for d in devices:

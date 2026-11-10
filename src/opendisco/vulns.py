@@ -42,6 +42,7 @@ NVD_API = "https://services.nvd.nist.gov/rest/json/cves/2.0"
 NVD_QUERIES = ("virtualMatchString=cpe:2.3:o:ui:*", "virtualMatchString=cpe:2.3:a:ui:*",
                "virtualMatchString=cpe:2.3:o:ubnt:*")
 NVD_LIMIT = (5, 30.0)
+CVE_ID = re.compile(r"CVE-\d{4}-\d{4,}")  # what a CVE's id looks like
 SOURCES = ["NVD (https://nvd.nist.gov)", "Ubiquiti Security Advisory Bulletins (https://community.ui.com/releases)"]
 
 
@@ -889,8 +890,7 @@ def parse_bulletin(text: str, url: str = "", published: str = "") -> tuple:
     blocks.append(block)
     entries, skipped = [], []
     for block in blocks:
-        ids = sorted(set(re.findall(r"CVE-\d{4}-\d{4,}", " ".join(line for line in block
-                                                                 if re.match(r"CVE\s*:", line)))))
+        ids = sorted(set(CVE_ID.findall(" ".join(line for line in block if re.match(r"CVE\s*:", line)))))
         if not ids:
             continue
         affects, why = _advisory_rules(block)
@@ -912,7 +912,7 @@ def build_rules(nvd_cves, advisories=(), generated=None, carried=()) -> dict:
     """The list from NVD CVE records (the "cve" objects of the API's answers), entries
     parse_bulletin() made from Ubiquiti's bulletins, and CURATED, which wins over both. carried:
     entries from bulletins kept from an earlier list (when the bulletins can't be read now)."""
-    by_id = {c["id"]: c for c in nvd_cves if c.get("id")}
+    by_id = {c["id"]: c for c in nvd_cves if isinstance(c.get("id"), str) and CVE_ID.fullmatch(c["id"])}
     from_advisories = {}
     for entry in list(advisories) + list(carried):  # the newest bulletin first
         from_advisories.setdefault(entry["id"], entry)
@@ -1101,7 +1101,11 @@ def refresh(cache_dir, log=None, timeout: float = 60.0) -> bool:
         carried = [c for c in before["cves"] if c.get("source") == "advisory"]
         say(f"Couldn't read Ubiquiti's security advisories ({e}); keeping the {len(carried)} CVE(s) read from "
             "them before.")
-    data = build_rules(nvd, advisories, carried=carried)
+    try:
+        data = build_rules(nvd, advisories, carried=carried)
+    except Exception as e:  # (records of a shape the build doesn't know: the list in use stays)
+        say(f"Couldn't update the CVE list from the NVD: {e}")
+        return False
     path = Path(cache_dir) / CACHE_NAME
     try:
         path.parent.mkdir(parents=True, exist_ok=True)

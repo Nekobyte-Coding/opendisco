@@ -1309,7 +1309,9 @@ class BackupsWindow:
         backup = self._current()
         if backup is None:
             return
-        name = f"{(self.d.name or self.d.mac or 'device').replace(' ', '_')}_{backup.path.name}"
+        # The device names itself: only what every file system takes ("/" or ":" in it would break the name)
+        who = re.sub(r"[^\w.-]+", "_", self.d.name or self.d.mac or "device").strip("._") or "device"
+        name = f"{who}_{backup.path.name}"
         path = await self.window.dialog(toga.SaveFileDialog(_("Save a copy of the config"), suggested_filename=name))
         if path:
             try:

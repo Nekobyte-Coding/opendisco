@@ -360,17 +360,16 @@ def _page(title: str, body: str) -> str:
             "</body></html>\n")
 
 
-def _linked(msg: str, links: dict) -> str:
+def _linked(msg: str) -> str:
     """The message, escaped, with each CVE id linked to its NVD page."""
-    return re.sub(r"\bCVE-\d{4}-\d{4,}\b", lambda m: f'<a href="{links.get(m.group(0), vulns.nvd_url(m.group(0)))}">'
-                                                    f"{m.group(0)}</a>", escape(msg))
+    return re.sub(r"\bCVE-\d{4}-\d{4,}\b", lambda m: f'<a href="{escape(vulns.nvd_url(m.group(0)))}">{m.group(0)}</a>',
+                  escape(msg))
 
 
 def _issue_list(d, issues=None) -> str:
     """d's findings (or these of them) as list items, each CVE linked to its NVD page."""
-    links = dict(core.issue_links(d))
     return "".join(f'<li><b class="{_LEVEL_CLASS.get(level, "warn")}">{escape(core.status_label(tag))}</b> '
-                   f"{_linked(msg, links)}</li>" for level, tag, msg in (d.issues if issues is None else issues))
+                   f"{_linked(msg)}</li>" for level, tag, msg in (d.issues if issues is None else issues))
 
 
 def _table(head, rows) -> str:
@@ -386,7 +385,7 @@ def _cve_rows(d) -> list:
         severity = m.cve.get("severity") or "unrated"
         score = m.cve.get("score")
         level = _LEVEL_CLASS[vulns.LEVELS.get(severity, "warn")]
-        rows.append([f'<a href="{vulns.nvd_url(m.cve["id"])}">{escape(m.cve["id"])}</a>',
+        rows.append([f'<a href="{escape(vulns.nvd_url(m.cve["id"]))}">{escape(m.cve["id"])}</a>',
                      f'<span class="{level}">{escape(_(severity))}{f" {score:g}" if score is not None else ""}</span>',
                      escape(f"{vulns.FAMILY_SOFTWARE.get(m.family, _('Firmware'))} {m.version}"),
                      escape(m.fixed or _("none named")), escape(m.cve.get("summary") or "")])
@@ -816,7 +815,7 @@ def scanned_networks(res) -> list:
     out = [tr("{network} on {interface}", network=i.network, interface=i.name) + (f" ({i.label})" if i.label else "")
            for i in res.ifaces if i.prefix < 32 and not i.ip.startswith("169.254.")]
     out += list(res.opts.targets or ())
-    out += [tr("{network} (temporary address)", network=t.network) for t in res.base_targets]
+    out += [tr("{network} (temporary address)", network=net) for net in res.probed]
     vlans = set(getattr(res.opts, "vlan_ids", None) or ())
     if not res.opts.direct:
         vlans |= {v for trunk in res.trunks for v in trunk.tagged_ids()}
@@ -985,7 +984,7 @@ def _cve_section(devices, ids: dict) -> str:
     for cve_id, (m, hit) in sorted(found.items(), key=lambda f: (-(f[1][0].cve.get("score") or 0), f[0])):
         severity = m.cve.get("severity") or "unrated"
         score = m.cve.get("score")
-        rows.append([f'<a href="{vulns.nvd_url(cve_id)}">{escape(cve_id)}</a>',
+        rows.append([f'<a href="{escape(vulns.nvd_url(cve_id))}">{escape(cve_id)}</a>',
                      f'<span class="{_LEVEL_CLASS[vulns.LEVELS.get(severity, "warn")]}">{escape(_(severity))}'
                      f'{f" {score:g}" if score is not None else ""}</span>',
                      escape(", ".join(sorted(fixes.get(cve_id, ()), key=vulns.version_key)) or _("none named")),
