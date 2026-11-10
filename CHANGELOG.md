@@ -25,6 +25,21 @@ and known issues.
   The new Release workflow adds `update-key`, `SHA256SUMS` and `SHA256SUMS.sig` to a draft release.
   Pull requests run checks and the new tests (`tests/`).
 
+- Temporary addresses stay while OpenDisco is open, so right-click › Open Web UI reaches gear
+  on another subnet without setting an address on the network adapter by hand. After a scan
+  that reached gear through one, the app keeps an address in each of those subnets (Settings:
+  "Keep temporary addresses while OpenDisco is open", on by default); the next scan, and the
+  demo network, leave them in place (1.7.2 removed them). Open Web UI, SSH and Ping put the
+  address back first when it isn't there.
+- The kept addresses are checked every minute: one that went (sleep, a cable unplugged, DHCP
+  renewing) is put back, one a device turns out to use moves to a free address, and one whose
+  subnet another adapter has an address in now is removed. Release addresses and quitting
+  remove them; a scan no longer takes the app's own kept addresses for a crashed run's
+  leftovers.
+- Phones: Open Web UI on gear outside the phone's subnet says which manual address to give the
+  phone (with no router) to reach it, and where iOS and Android set it. A computer that
+  couldn't add the address says the same for its network adapter.
+
 Fixes from a review of 1.7.2's Direct to a device.
 
 - Stop (or Ctrl+C) while listening keeps the device: one OpenDisco doesn't recognise, on a
