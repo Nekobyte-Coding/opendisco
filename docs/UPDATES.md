@@ -142,7 +142,8 @@ previous one.
 ## Existing installs (1.7.2 and earlier)
 
 Up to 1.7.2, OpenDisco checked GitHub, which is gone. Those copies can't update themselves any more.
-**Install the first release that carries the key once by hand**, the same way as a fresh install.
+**Install 1.8.0, the first release that carries the key, once by hand**, the same way as a fresh
+install.
 From then on, it updates itself.
 
 ## What the Git Box needs
