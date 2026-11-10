@@ -6,6 +6,12 @@ when it came out. The Linux packages of 1.1.0 to 1.3.1 were added then too; thos
 never released for Linux. README.md's "Versions and platforms" lists each version's platforms
 and known issues.
 
+## Unreleased
+
+- The Release workflow downloads a draft's files with a new repository secret,
+  `OPENDISCO_RELEASE_READ_TOKEN` (docs/UPDATES.md): Forgejo serves a draft's files only to an
+  account that can write releases, so the job's own token got 404 and signing stopped.
+
 ## 1.8.0 (2026-11-09)
 
 - **Updates come from OpenDisco's own update server** (`https://git.nekohosting.moe/updates/opendisco`)

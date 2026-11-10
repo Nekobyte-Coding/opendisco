@@ -1,7 +1,7 @@
 name: Release
 
 # Signs a DRAFT release (docs/UPDATES.md): run it by hand once the installers are on the draft.
-#   1. download the draft's files
+#   1. download the draft's files (secrets.OPENDISCO_RELEASE_READ_TOKEN)
 #   2. add update-key (secrets.OPENDISCO_UPDATE_KEY)
 #   3. write SHA256SUMS over every file, sign it into SHA256SUMS.sig (secrets.OPENDISCO_RELEASE_SIGNING_KEY)
 #      (a PKCS#8 PEM Ed25519 private key)
@@ -42,6 +42,9 @@ jobs:
           python-version: "3.13"
       - run: pip install cryptography
       - name: download the draft
+        env:
+          # Forgejo serves a draft's files only to an account that can write releases; the job's token can't.
+          OPENDISCO_RELEASE_READ_TOKEN: ${{ secrets.OPENDISCO_RELEASE_READ_TOKEN }}
         run: python packaging/forgejo_release.py download "$TAG" release
       - name: update-key
         env:
