@@ -11,6 +11,8 @@ and known issues.
 - The Release workflow downloads a draft's files with a new repository secret,
   `OPENDISCO_RELEASE_READ_TOKEN` (docs/UPDATES.md): Forgejo serves a draft's files only to an
   account that can write releases, so the job's own token got 404 and signing stopped.
+- The Release workflow's update-key check imports `opendisco` from `src/` (`python -P`): it ran
+  from the repository root, where `opendisco.py` hid the package, so it failed on every run.
 
 ## 1.8.0 (2026-11-09)
 
