@@ -25,6 +25,20 @@ and known issues.
   The new Release workflow adds `update-key`, `SHA256SUMS` and `SHA256SUMS.sig` to a draft release.
   Pull requests run checks and the new tests (`tests/`).
 
+Fixes from a review of 1.7.2's Direct to a device.
+
+- Stop (or Ctrl+C) while listening keeps the device: one OpenDisco doesn't recognise, on a
+  port with an address of its own, was printed as found and then missing from the results. A
+  shared network is still told apart from the device's wire when listening is stopped.
+- Listening ends a few seconds after the device uses an address again when another wired port
+  has link but nothing on it does (a quiet dock or switch): 1.7.2 listened the full 45 seconds.
+- A switch between the computer and the device no longer makes its port a shared network: MACs
+  that only send STP, LLDP or CDP aren't counted as devices, and one recognised device's MACs
+  count once.
+- Gear OpenDisco recognises is still logged as it's heard on a port judged a shared network.
+- `--direct -i` takes an interface's address too (such as `-i 192.168.1.100`), as `-i` does
+  without `--direct`: 1.7.2 said no wired interface matched.
+
 ## 1.7.2 (2026-11-04)
 
 - Direct to a device scans a wired port that has an address of its own: one set by hand (such
