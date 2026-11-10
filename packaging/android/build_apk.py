@@ -131,4 +131,6 @@ def main() -> int:
 
 
 if __name__ == "__main__":
-    sys.exit(main())
+    sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+    import update_key  # the update key goes in for the build only (docs/UPDATES.md)
+    sys.exit(update_key.run(main, also=[MIRROR]))

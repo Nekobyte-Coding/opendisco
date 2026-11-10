@@ -24,7 +24,7 @@ from toga.style import Pack
 from toga.style.pack import COLUMN, ROW
 from travertino.size import at_least
 
-from opendisco import FULL_NAME, __version__, core, health, i18n, phone, records, terms, vulns
+from opendisco import FULL_NAME, __version__, core, health, i18n, phone, records, terms, updatekey, vulns
 from opendisco.i18n import _, N_, tr
 
 if core.platform_name() != "ios":  # left out of the iOS app (packaging/ios/build_ios.py)
@@ -81,10 +81,11 @@ SETTINGS = {"check_app_updates": N_("Check for OpenDisco updates when opening"),
             "check_cve_updates": N_("Check for new CVEs when opening"),
             "check_firmware": N_("Check firmware versions during scans")}
 # What settings.json keeps; "update" remembers an update while the app restarts into it,
+# "update_source" and "update_prereleases" (set by hand) change where and what updates come from,
 # "deep_checks" is iOS's Deep checks switch (in Settings there), "sweep_subnets" Settings' list
 # of subnets every scan also sweeps (records.SWEEP_KEY) and "site_name" the last Site Report's site.
 SAVED_SETTINGS = ("hidden", "ssh_user", "skip_port_warning", "device_logins", "factory_logins", *SETTINGS, "update",
-                  "deep_checks", records.SWEEP_KEY, records.SITE_KEY, i18n.SETTING)
+                  "update_source", "update_prereleases", "deep_checks", records.SWEEP_KEY, records.SITE_KEY, i18n.SETTING)
 # Toga's own menu items, menus and dialog buttons, English in Toga, translated in place (_translate_toga);
 # {app} is the app's name, as in About OpenDisco.
 TOGA_TEXTS = (N_("About {app}"), N_("Quit {app}"), N_("Hide {app}"), N_("Hide Others"), N_("Show All"),
@@ -2581,6 +2582,8 @@ class OpenDiscoApp(toga.App):
                       toga.Box(style=Pack(direction=ROW, align_items="center", gap=8), children=[
                           networks_said, toga.Button(_("Restore defaults"), on_press=self.on_reset_networks),
                           toga.Button(_("Save"), on_press=save_networks)])]
+        if self.caps["updates"]:
+            switches.append(toga.Label(self._update_summary(), style=Pack(font_size=10)))
         options = [*languages, *switches, toga.Label(i18n.fill(_(vulns.NVD_NOTICE), 60), style=Pack(font_size=10)),
                    *lists]
         finish = toga.Box(style=Pack(direction=ROW), children=[toga.Box(style=Pack(flex=1)),
@@ -2645,8 +2648,25 @@ class OpenDiscoApp(toga.App):
         if d is not None:
             self.details.value = core.render_details(d)
 
+    def _update_key(self):
+        """This install's update key (updatekey.py): never logged or shown beyond its hint."""
+        return updatekey.load(self.paths.data)
+
+    def _update_summary(self) -> str:
+        """Settings' line on updates: the key's last 4 characters at most, and the source."""
+        try:
+            key = self._update_key()
+        except OSError:
+            key = None
+        try:
+            where = update.source(self.settings.get("update_source") or "")
+        except update.UpdateError as e:
+            where = str(e)
+        said = tr("Updates: built-in key ({hint})", hint=key.hint()) if key else _("Updates: no key")
+        return self._wrap(f"{said}\n{where}")
+
     def _check_for_update(self, quiet: bool):
-        """Ask GitHub for the latest release, in the background. quiet (the launch check): only a
+        """Ask the update server for the latest release, in the background. quiet (the launch check): only a
         Log line unless there's a newer version; asked from the menu, say what was found."""
         if self.updating:
             if not quiet:
@@ -2659,7 +2679,9 @@ class OpenDiscoApp(toga.App):
         def work():
             release, error = None, None
             try:
-                release = update.latest(timeout=5 if quiet else 15)
+                release = update.latest(self._update_key(), self.settings.get("update_source") or "",
+                                        timeout=5 if quiet else 15,
+                                        prereleases=bool(self.settings.get("update_prereleases")))
             except update.UpdateError as e:
                 error = str(e)
             except Exception as e:
@@ -2781,8 +2803,14 @@ class OpenDiscoApp(toga.App):
         def work():
             path, error = None, None
             try:
-                path = update.download(asset, folder, lambda done, total: self._from_worker(shown, done, total), cancel)
-                log(f"Downloaded {asset.name}: its SHA-256 matches the one GitHub lists.")
+                key = self._update_key()
+                new_key = update.prepare(release, asset, key)
+                log(f"OpenDisco {release.version}'s SHA256SUMS is signed with OpenDisco's release key.")
+                path = update.download(asset, folder, key, lambda done, total: self._from_worker(shown, done, total),
+                                       cancel)
+                log(f"Downloaded {asset.name}: its SHA-256 matches the signed SHA256SUMS.")
+                if new_key:  # the copy's key once the new version opens (_after_update)
+                    updatekey.stage(self.paths.data, new_key, release.version)
                 if kind in ("macos", "deb", "rpm", "tarball", "appimage"):
                     self._from_worker(installing, tr("Installing OpenDisco {version}…", version=release.version))
                 if kind == "macos":
@@ -2868,8 +2896,15 @@ class OpenDiscoApp(toga.App):
             shutil.rmtree(folder, ignore_errors=True)
         wanted = str(done.get("version") or "")
         if update.version_key(__version__) >= update.version_key(wanted):
+            try:
+                if updatekey.promote(self.paths.data):
+                    self._append_log("The update key that came with this version replaces the earlier one.",
+                                     status=False)
+            except (OSError, ValueError) as e:
+                self._append_log(f"The new update key couldn't be kept ({type(e).__name__}).", status=False)
             self._append_log(tr("Updated to OpenDisco {version}.", version=__version__))
             return False
+        updatekey.discard(self.paths.data)
         lines = [line.split("  ", 1)[-1] for line in report.strip().splitlines()]  # without the times
         detail = lines[-1] if lines else ""
         self._append_log(f"The update to OpenDisco {wanted} didn't install: this is still {__version__}."

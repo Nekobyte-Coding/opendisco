@@ -9,3 +9,4 @@ __pycache__/
 networks.txt
 !src/opendisco/resources/networks.txt
 notes/
+src/opendisco/resources/update-key

@@ -1,10 +1,16 @@
-"""Keeping OpenDisco up to date from its GitHub releases: ask GitHub for the latest release,
-download this platform's installer, check it against the SHA-256 GitHub lists for it, and
-install it the way this copy was installed. app.py asks the questions and shows the progress;
-everything here runs in a worker thread and uses the standard library only.
+"""Keeping OpenDisco up to date from its own update server: read the release list, check the
+release's signed SHA256SUMS against OpenDisco's release key (signing.py), download this
+platform's installer and check it against that list, and install it the way this copy was
+installed. app.py asks the questions and shows the progress; everything here runs in a worker
+thread and uses the standard library only. docs/UPDATES.md has the server's side.
 
-OPENDISCO_UPDATE_URL replaces the GitHub API address, so tests can serve a release of their own.
+Every request carries the install's update key (updatekey.py) in X-Update-Key; the server
+answers 404 to a request without the right one. A redirect is followed only on the same host.
+
+The update source is https://git.nekohosting.moe/updates/opendisco, or OPENDISCO_UPDATE_URL, or
+the update_source setting: https only, with no user name, password, query or fragment.
 """
+import base64
 import hashlib
 import json
 import os
@@ -17,18 +23,23 @@ import tarfile
 import tempfile
 import time
 import urllib.error
+import urllib.parse
 import urllib.request
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 
-from opendisco import __version__, core, tls
+from opendisco import __version__, core, signing, tls, updatekey
 from opendisco.i18n import _, tr
 
-REPO = "Nekobyte-Coding/opendisco"
-API_URL = os.environ.get("OPENDISCO_UPDATE_URL") or f"https://api.github.com/repos/{REPO}/releases/latest"
-RELEASES_PAGE = f"https://github.com/{REPO}/releases"
+DEFAULT_SOURCE = "https://git.nekohosting.moe/updates/opendisco"
+RELEASES_PAGE = "https://git.nekohosting.moe/nekobyte-coding/opendisco/releases"
+SUMS, SIGNATURE = "SHA256SUMS", "SHA256SUMS.sig"
+MAX_LIST = 1 << 20  # releases.json
+MAX_SMALL = 64 << 10  # SHA256SUMS, its signature, update-key
+MAX_REDIRECTS = 3
+ALLOW_HTTP = False  # the tests' local server only; never set by the app
 APP_ID = "com.michaelfroehlke.opendisco"
-USER_AGENT = f"OpenDisco/{__version__}"  # GitHub's API refuses requests without one
+USER_AGENT = f"OpenDisco/{__version__}"
 HERE = Path(__file__).resolve().parent  # this copy's opendisco package
 CREATE_NO_WINDOW = getattr(subprocess, "CREATE_NO_WINDOW", 0x08000000)
 CREATE_NEW_PROCESS_GROUP = getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0x00000200)
@@ -39,12 +50,24 @@ class UpdateError(Exception):
     "cancelled", a stopped download, stays as it is: app.py looks for it)."""
 
 
+class KeyRefused(UpdateError):
+    """The server wouldn't answer this install's key, or there's no key to send."""
+
+
+def key_refused() -> str:
+    return _("this install's update key isn't accepted. Install the latest release once by hand")
+
+
+def no_key() -> str:
+    return _("this install has no update key. Install the latest release once by hand")
+
+
 @dataclass
 class Asset:
     name: str
     url: str
     size: int
-    sha256: str  # "" when GitHub lists no digest for it
+    sha256: str = ""  # from the release's signed SHA256SUMS (prepare())
 
 
 @dataclass
@@ -54,6 +77,10 @@ class Release:
     notes: str  # Markdown
     page: str
     assets: dict  # file name -> Asset
+    tag: str = ""
+    base: str = ""  # <source>/<tag>, where its files are
+    prerelease: bool = False
+    sums: dict = field(default_factory=dict)  # file name -> SHA-256, once checked (prepare())
 
     @property
     def newer(self) -> bool:
@@ -61,18 +88,69 @@ class Release:
 
 
 def version_key(text: str) -> tuple:
-    """(1, 5, 0) for "1.5.0" or "v1.5.0"; () for anything else, which is never newer."""
-    m = re.fullmatch(r"v?(\d+)\.(\d+)\.(\d+)", str(text).strip())
-    return tuple(int(n) for n in m.groups()) if m else ()
+    """A sortable key for "1.5.0", "v1.5.0" or a pre-release such as "1.6.0-rc.1" (before 1.6.0);
+    () for anything else, which is never newer."""
+    m = re.fullmatch(r"v?(\d+)\.(\d+)\.(\d+)(?:-([0-9A-Za-z]+(?:\.[0-9A-Za-z]+)*))?", str(text).strip())
+    if not m:
+        return ()
+    numbers = tuple(int(n) for n in m.groups()[:3])
+    if m[4] is None:
+        return numbers + ((1,),)
+    return numbers + ((0, *((0, int(p), "") if p.isdigit() else (1, 0, p) for p in m[4].split("."))),)
 
 
-# -- talking to GitHub ---------------------------------------------------------------
-def _get(url: str, timeout: float, accept: str = ""):
+def source(url: str = "") -> str:
+    """The update source to use, checked: https, a host, and no user name, password, query or
+    fragment; without a trailing slash."""
+    text = str(url or os.environ.get("OPENDISCO_UPDATE_URL") or DEFAULT_SOURCE).strip()
+    bad = UpdateError(_("the update source isn't a usable https:// address"))
+    if any(c.isspace() or ord(c) < 32 for c in text) or "\\" in text:
+        raise bad
+    parts = urllib.parse.urlsplit(text)
+    if parts.scheme != "https" and not (ALLOW_HTTP and parts.scheme == "http"):
+        raise bad
+    if "@" in parts.netloc:
+        raise UpdateError(_("the update source can't hold a user name or password"))
+    try:
+        port = parts.port
+    except ValueError:
+        raise bad from None
+    if not parts.hostname or parts.query or parts.fragment or "?" in text or "#" in text:
+        raise bad
+    netloc = parts.hostname.lower() + (f":{port}" if port else "")
+    return urllib.parse.urlunsplit((parts.scheme, netloc, parts.path.rstrip("/"), "", ""))
+
+
+def _plain(name: str) -> bool:
+    """A file or tag name that stays in its folder."""
+    return (isinstance(name, str) and bool(name) and name not in (".", "..") and len(name) <= 255
+            and not any(c in name for c in "/\\") and all(c.isprintable() for c in name))
+
+
+# -- talking to the update server --------------------------------------------------------
+def _origin(url: str) -> tuple:
+    parts = urllib.parse.urlsplit(url)
+    return parts.scheme, (parts.hostname or "").lower(), parts.port or {"https": 443, "http": 80}.get(parts.scheme)
+
+
+class _SameHost(urllib.request.HTTPRedirectHandler):
+    """Follows a redirect only to the same scheme, host and port, at most MAX_REDIRECTS times."""
+    max_redirections = MAX_REDIRECTS
+
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        newurl = urllib.parse.urljoin(req.full_url, newurl)
+        if _origin(newurl) != _origin(req.full_url):
+            raise UpdateError(tr("the update server sent the request on to another address ({host}), so it was "
+                                 "refused", host=_origin(newurl)[1] or "?"))
+        return super().redirect_request(req, fp, code, msg, headers, newurl)
+
+
+def _get(url: str, key, timeout: float):
     headers = {"User-Agent": USER_AGENT}
-    if accept:
-        headers["Accept"] = accept
+    if key is not None:
+        headers["X-Update-Key"] = key.value
     request = urllib.request.Request(url, headers=headers)
-    opener = urllib.request.build_opener(urllib.request.HTTPSHandler(context=tls.context()))
+    opener = urllib.request.build_opener(urllib.request.HTTPSHandler(context=tls.context()), _SameHost())
     return opener.open(request, timeout=timeout)
 
 
@@ -81,26 +159,119 @@ def _reason(e: Exception) -> str:
     return str(getattr(reason, "strerror", None) or reason)
 
 
-def latest(timeout: float = 10) -> Release:
-    """The latest release (GitHub leaves out drafts and pre-releases)."""
+def _open(url: str, key, timeout: float, what: str = ""):
+    """Open url with the key. what names the file for a 404 once the release list was read;
+    without it (the list itself), a 404 means the key wasn't taken: the server answers so."""
+    if key is None:
+        raise KeyRefused(no_key())
     try:
-        with _get(API_URL, timeout, "application/vnd.github+json") as r:
-            data = json.loads(r.read(4 << 20))
+        return _get(url, key, timeout)
     except urllib.error.HTTPError as e:
-        # 403: rate limit; 404: no release
-        raise UpdateError(tr("GitHub answered {code} {reason}", code=e.code, reason=e.reason)) from e
+        e.close()
+        if e.code in (401, 403) or (e.code == 404 and not what):
+            raise KeyRefused(key_refused()) from None
+        if e.code == 404:
+            raise UpdateError(tr("the update server has no {file}", file=what)) from None
+        raise UpdateError(tr("the OpenDisco update server answered {code} {reason}", code=e.code,
+                             reason=e.reason)) from None
+    except UpdateError:
+        raise
     except (urllib.error.URLError, OSError, ValueError) as e:
-        raise UpdateError(tr("couldn't reach GitHub ({reason})", reason=_reason(e))) from e
-    tag = str(data.get("tag_name") or "")
-    if not version_key(tag):
-        raise UpdateError(tr("the latest release's tag, {tag}, isn't a version number", tag=repr(tag)))
+        raise UpdateError(tr("couldn't reach the OpenDisco update server ({reason})", reason=_reason(e))) from None
+
+
+def _small(url: str, key, timeout: float, what: str, limit: int = MAX_SMALL) -> bytes:
+    with _open(url, key, timeout, what) as r:
+        data = r.read(limit + 1)
+    if len(data) > limit:
+        raise UpdateError(tr("{file} on the update server is too large", file=what))
+    return data
+
+
+def latest(key, url: str = "", timeout: float = 10, prereleases: bool = False) -> Release:
+    """The newest release on the update server (pre-releases only when asked for)."""
+    base = source(url)
+    try:
+        data = json.loads(_small(f"{base}/releases.json", key, timeout, "", MAX_LIST))
+    except (ValueError, UnicodeDecodeError):
+        data = None
+    if not isinstance(data, list):
+        raise UpdateError(_("the update server's release list can't be read"))
+    best = None
+    for item in data:
+        if not isinstance(item, dict) or (item.get("prerelease") and not prereleases):
+            continue
+        tag = str(item.get("tag") or "")
+        version = str(item.get("version") or tag).lstrip("v")
+        if not _plain(tag) or not version_key(version):
+            continue
+        if best is None or version_key(version) > version_key(best[1]):
+            best = item, version, tag
+    if best is None:
+        raise UpdateError(_("the update server lists no release"))
+    item, version, tag = best
+    folder = f"{base}/{urllib.parse.quote(tag)}"
     assets = {}
-    for a in data.get("assets") or []:
-        digest = str(a.get("digest") or "")
-        sha256 = digest[7:].lower() if digest.lower().startswith("sha256:") else ""
-        assets[a.get("name")] = Asset(a.get("name"), a.get("browser_download_url"), int(a.get("size") or 0), sha256)
-    return Release(tag.lstrip("v"), str(data.get("name") or tag), str(data.get("body") or ""),
-                   str(data.get("html_url") or RELEASES_PAGE), assets)
+    for a in item.get("assets") or []:
+        name = a.get("name") if isinstance(a, dict) else None
+        if _plain(name):
+            try:
+                size = max(0, int(a.get("size") or 0))
+            except (TypeError, ValueError):
+                size = 0
+            assets[name] = Asset(name, f"{folder}/{urllib.parse.quote(name)}", size)
+    page = str(item.get("html_url") or "")
+    return Release(version, str(item.get("name") or tag), str(item.get("notes") or ""),
+                   page if page.startswith("https://") else RELEASES_PAGE, assets, tag, folder,
+                   bool(item.get("prerelease")))
+
+
+def parse_sums(text: bytes) -> dict:
+    """SHA256SUMS (sha256sum's format: "<hex>  <name>") as {name: hex}."""
+    sums = {}
+    try:
+        lines = text.decode("utf-8").splitlines()
+    except UnicodeDecodeError:
+        raise UpdateError(_("the release's SHA256SUMS can't be read")) from None
+    for line in lines:
+        if not line.strip():
+            continue
+        m = re.fullmatch(r"([0-9a-fA-F]{64}) [ *](.+)", line)
+        if not m or not _plain(m[2]) or m[2] in sums:
+            raise UpdateError(_("the release's SHA256SUMS can't be read"))
+        sums[m[2]] = m[1].lower()
+    return sums
+
+
+def prepare(release: Release, asset: Asset, key, timeout: float = 30):
+    """Check the release's SHA256SUMS against its signature and OpenDisco's release key, and
+    take the asset's SHA-256 from it. Returns the release's update key (checked against the
+    list too), or None when it has none."""
+    sums = _small(f"{release.base}/{SUMS}", key, timeout, SUMS)
+    raw = _small(f"{release.base}/{SIGNATURE}", key, timeout, SIGNATURE, 1024)
+    try:
+        signature = base64.b64decode(raw.strip(), validate=True)
+        public = signing.public_key()
+    except (ValueError, OSError):
+        signature, public = b"", b""
+    if not public or not signing.verify(public, sums, signature):
+        raise UpdateError(_("the release's SHA256SUMS isn't signed with OpenDisco's release key, so nothing "
+                            "was installed"))
+    release.sums = parse_sums(sums)
+    if asset.name not in release.sums:
+        raise UpdateError(tr("{file} isn't in the release's signed SHA256SUMS, so it can't be checked",
+                             file=asset.name))
+    asset.sha256 = release.sums[asset.name]
+    if updatekey.NAME not in release.sums:
+        return None
+    data = _small(f"{release.base}/{updatekey.NAME}", key, timeout, updatekey.NAME, 1024)
+    if hashlib.sha256(data).hexdigest() != release.sums[updatekey.NAME]:
+        raise UpdateError(tr("{file} doesn't match the release's signed SHA256SUMS, so nothing was installed",
+                             file=updatekey.NAME))
+    text = data.decode("ascii", "replace").strip()
+    if not updatekey.valid(text):
+        raise UpdateError(tr("the release's {file} isn't an update key", file=updatekey.NAME))
+    return text
 
 
 def excerpt(markdown: str, limit: int = 700) -> str:
@@ -213,12 +384,13 @@ def _read_only(path: Path) -> bool:
 
 
 # -- downloading -------------------------------------------------------------------
-def download(asset: Asset, folder: Path, progress=None, cancel=None, timeout: float = 30) -> Path:
-    """Download an asset into folder and check its SHA-256 against the one GitHub lists; only a
-    file that matches is kept, under its own name. progress(done, total) is called as it
-    goes; setting cancel (a threading.Event) stops it."""
-    if not re.fullmatch(r"[0-9a-f]{64}", asset.sha256):
-        raise UpdateError(tr("GitHub lists no SHA-256 checksum for {file}, so it can't be checked", file=asset.name))
+def download(asset: Asset, folder: Path, key, progress=None, cancel=None, timeout: float = 30) -> Path:
+    """Download an asset into folder and check its SHA-256 against the release's signed
+    SHA256SUMS (prepare() first); only a file that matches is kept, under its own name.
+    progress(done, total) is called as it goes; setting cancel (a threading.Event) stops it."""
+    if not re.fullmatch(r"[0-9a-f]{64}", asset.sha256) or not _plain(asset.name):
+        raise UpdateError(tr("{file} isn't in the release's signed SHA256SUMS, so it can't be checked",
+                             file=asset.name))
     dest = Path(folder) / asset.name
     if dest.is_file() and _sha256(dest) == asset.sha256:  # downloaded and checked already
         if progress:
@@ -227,17 +399,21 @@ def download(asset: Asset, folder: Path, progress=None, cancel=None, timeout: fl
     part = dest.with_name(dest.name + ".part")
     digest, done, shown = hashlib.sha256(), 0, 0.0
     try:
-        with _get(asset.url, timeout) as r, open(part, "wb") as f:
-            total = int(r.headers.get("Content-Length") or asset.size or 0)
+        with _open(asset.url, key, timeout, asset.name) as r, open(part, "wb") as f:
+            total = asset.size or int(r.headers.get("Content-Length") or 0)
+            limit = asset.size or (4 << 30)
             while True:
                 if cancel is not None and cancel.is_set():
                     raise UpdateError("cancelled")
                 chunk = r.read(1 << 16)
                 if not chunk:
                     break
+                done += len(chunk)
+                if done > limit:
+                    raise UpdateError(tr("{file} is larger than the release lists, so it wasn't used",
+                                         file=asset.name))
                 f.write(chunk)
                 digest.update(chunk)
-                done += len(chunk)
                 if progress and time.monotonic() - shown > 0.1:
                     shown = time.monotonic()
                     progress(done, total)
@@ -251,7 +427,7 @@ def download(asset: Asset, folder: Path, progress=None, cancel=None, timeout: fl
         raise UpdateError(tr("downloading {file} failed ({reason})", file=asset.name, reason=_reason(e))) from e
     if digest.hexdigest() != asset.sha256:
         part.unlink(missing_ok=True)
-        raise UpdateError(tr("{file} doesn't match the SHA-256 checksum GitHub lists for it (it's {found}…, not "
+        raise UpdateError(tr("{file} doesn't match the release's signed SHA256SUMS (it's {found}…, not "
                              "{listed}…), so it wasn't used", file=asset.name, found=digest.hexdigest()[:16],
                              listed=asset.sha256[:16]))
     part.replace(dest)

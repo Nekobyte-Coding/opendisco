@@ -1,0 +1,43 @@
+name: Checks
+
+# Pull requests only (a branch push doesn't run it twice), and only when the code, the packaging,
+# the tests or this file change. A newer push to the same PR cancels the run it makes stale.
+on:
+  pull_request:
+    paths: ["src/**", "packaging/**", "tests/**", "keys/**", "opendisco.py", "pyproject.toml", ".forgejo/**"]
+
+concurrency:
+  group: checks-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  checks:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: https://github.com/actions/checkout@v7
+      - uses: https://github.com/actions/setup-python@v7
+        with:
+          python-version: "3.13"
+      - run: pip install pyflakes cryptography
+      - name: compileall
+        run: python -m compileall -q src packaging tests opendisco.py
+      - name: pyflakes (the updater, signing and release files)
+        run: >-
+          python -m pyflakes src/opendisco/update.py src/opendisco/updatekey.py src/opendisco/signing.py
+          packaging/update_key.py packaging/sign_release.py packaging/forgejo_release.py tests
+      # The rest of the code has older warnings (a translation function shadowed by a loop
+      # variable, and so on): reported, not failing, until they're cleaned up.
+      - name: pyflakes (everything, report only)
+        continue-on-error: true
+        run: python -m pyflakes src packaging tests opendisco.py
+      - name: translations
+        run: python packaging/i18n_check.py
+      - name: command line
+        run: PYTHONPATH=src python -m opendisco --help > /dev/null
+      - name: tests
+        run: python -m unittest discover -s tests -v
+      - name: tests without cryptography (the standard-library Ed25519 check)
+        run: |
+          python -m venv /tmp/plain
+          /tmp/plain/bin/python -m unittest discover -s tests

@@ -1,0 +1,69 @@
+name: Release
+
+# Signs a DRAFT release (docs/UPDATES.md): run it by hand once the installers are on the draft.
+#   1. download the draft's files
+#   2. add update-key (secrets.OPENDISCO_UPDATE_KEY)
+#   3. write SHA256SUMS over every file, sign it into SHA256SUMS.sig (secrets.OPENDISCO_RELEASE_SIGNING_KEY)
+#      (a PKCS#8 PEM Ed25519 private key)
+#   4. check the signature with the committed public key (OpenDisco's own check and openssl)
+#   5. upload update-key, SHA256SUMS and SHA256SUMS.sig to the draft
+# It refuses a release that's published already. Publishing stays a step done by hand, after it.
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "The draft release's tag, such as v1.8.0"
+        required: true
+        type: string
+
+concurrency:
+  group: release-${{ inputs.tag }}
+  cancel-in-progress: true
+
+jobs:
+  sign:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      FORGEJO_SERVER: ${{ github.server_url }}
+      FORGEJO_REPO: ${{ github.repository }}
+      FORGEJO_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      TAG: ${{ inputs.tag }}
+    steps:
+      - name: the tag is a version
+        run: |
+          case "$TAG" in
+            v[0-9]*.[0-9]*.[0-9]*) ;;
+            *) echo "error: $TAG isn't a version tag such as v1.8.0" >&2; exit 1 ;;
+          esac
+      - uses: https://github.com/actions/checkout@v7
+      - uses: https://github.com/actions/setup-python@v7
+        with:
+          python-version: "3.13"
+      - run: pip install cryptography
+      - name: download the draft
+        run: python packaging/forgejo_release.py download "$TAG" release
+      - name: update-key
+        env:
+          OPENDISCO_UPDATE_KEY: ${{ secrets.OPENDISCO_UPDATE_KEY }}
+        run: |
+          if [ -z "$OPENDISCO_UPDATE_KEY" ]; then
+            echo "error: the repository secret OPENDISCO_UPDATE_KEY isn't set" >&2; exit 1
+          fi
+          echo "::add-mask::$OPENDISCO_UPDATE_KEY"
+          (umask 022; printf '%s\n' "$OPENDISCO_UPDATE_KEY" > release/update-key)
+          PYTHONPATH=src python -c 'import sys; from opendisco import updatekey; sys.exit(0 if updatekey.valid(open("release/update-key").read().strip()) else "error: OPENDISCO_UPDATE_KEY is not base64url for 32 bytes or more")'
+      - name: sign
+        env:
+          OPENDISCO_RELEASE_SIGNING_KEY: ${{ secrets.OPENDISCO_RELEASE_SIGNING_KEY }}
+        run: python packaging/sign_release.py release
+      - name: check with openssl, as the Git Box does
+        run: |
+          base64 -d release/SHA256SUMS.sig > /tmp/SHA256SUMS.sig.raw
+          openssl pkeyutl -verify -pubin -inkey keys/opendisco-release-signing.pub.pem -rawin -in release/SHA256SUMS -sigfile /tmp/SHA256SUMS.sig.raw
+          (cd release && sha256sum -c --strict SHA256SUMS)
+      - name: upload to the draft
+        run: python packaging/forgejo_release.py upload "$TAG" release
+      - name: clean up
+        if: always()
+        run: rm -rf release /tmp/SHA256SUMS.sig.raw

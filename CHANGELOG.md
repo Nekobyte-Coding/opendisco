@@ -6,6 +6,25 @@ when it came out. The Linux packages of 1.1.0 to 1.3.1 were added then too; thos
 never released for Linux. README.md's "Versions and platforms" lists each version's platforms
 and known issues.
 
+## Unreleased
+
+- **Updates come from OpenDisco's own update server** (`https://git.nekohosting.moe/updates/opendisco`)
+  instead of GitHub, from any network. Each request carries the update key built into the app
+  (`X-Update-Key`), and each release is signed: the app checks the release's `SHA256SUMS`
+  against `SHA256SUMS.sig` and OpenDisco's release public key, then the installer against
+  `SHA256SUMS`, and refuses the update on any mismatch. Redirects to another host are refused.
+  Settings shows `Updates: built-in key (…ABCD)`, with only the key's last 4 characters. A refused
+  key says so ("This install's update key isn't accepted. Install the latest release once by hand.").
+  Each update brings the release's key with it, so a new key reaches every install. See
+  docs/UPDATES.md.
+- **One step by hand for existing installs:** 1.7.2 and earlier checked GitHub, which is gone, so
+  they can't update themselves any more. Install the first release that carries the key once by
+  hand; it updates itself after that.
+- Releases: the build scripts put the update key in the build from `OPENDISCO_UPDATE_KEY` or the
+  login keychain ("OpenDisco Update Key"), and stop without one (`--no-update-key` for a test build).
+  The new Release workflow adds `update-key`, `SHA256SUMS` and `SHA256SUMS.sig` to a draft release.
+  Pull requests run checks and the new tests (`tests/`).
+
 ## 1.7.2 (2026-11-04)
 
 - Direct to a device scans a wired port that has an address of its own: one set by hand (such

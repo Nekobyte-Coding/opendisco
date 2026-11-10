@@ -452,16 +452,19 @@ editor still open over the window.
 the title bar) has the language, three switches, all on until turned off, and two lists:
 - **Language:** System (the default), English, Español, Português (Brasil) or 日本語 (see
   [Languages](#languages)). A change takes effect the next time OpenDisco opens.
-- **Check for OpenDisco updates when opening:** asks GitHub for the latest release. When
-  there's a newer one, the app says what's in it and offers to update: it downloads the file
-  for this platform, checks it against the SHA-256 GitHub lists, installs it the way this copy
+- **Check for OpenDisco updates when opening:** asks OpenDisco's update server for the latest
+  release, with the update key built into the app. When there's a newer one, the app says what's
+  in it and offers to update: it checks the release's signed SHA256SUMS against OpenDisco's
+  release key, downloads the file for this platform and checks it against that list, installs it the way this copy
   was installed (the .app on a Mac, the setup.exe on Windows, the .deb, .rpm or portable
   folder on Linux, the APK on Android, which asks once to allow installs from OpenDisco) and
   reopens. **Check for OpenDisco updates…** (the app menu on a Mac, the Help menu on Windows
   and Linux, the ⋮ menu on Android) checks straight away. A copy run from source doesn't
   update itself: it links the release page instead. The iPhone/iPad app has no self-update
   (Apple allows installs only through its own channels), so its Settings leave this switch
-  out.
+  out. Settings shows `Updates: built-in key (…ABCD)`, with only the key's last 4 characters. See
+  [docs/UPDATES.md](docs/UPDATES.md); copies of 1.7.2 and earlier need the first release that
+  carries the key installed once by hand.
 - **Check for new CVEs when opening:** about once a day, downloads current data from the NVD
   and Ubiquiti's security advisories, so newly published CVEs are flagged without a new
   release (see [Known vulnerabilities](#known-vulnerabilities-cves)).
