@@ -53,6 +53,10 @@ Fixes from a review of 1.7.2's Direct to a device.
 - Gear OpenDisco recognises is still logged as it's heard on a port judged a shared network.
 - `--direct -i` takes an interface's address too (such as `-i 192.168.1.100`), as `-i` does
   without `--direct`: 1.7.2 said no wired interface matched.
+- A port with an address of its own that couldn't be listened to (tcpdump or Npcap failed on
+  it) gets no temporary addresses unless it's named with `-i`, since nothing shows the device
+  is on it, and the log says listening failed there. 1.7.2 probed it as if the device were
+  plugged in, even on an office network.
 
 Fixes from a second review of all the code.
 

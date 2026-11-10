@@ -5858,7 +5858,7 @@ def run_scan(opts, log, progress=None, on_inventory=None):
     watched = sorted({l.name for l in links} | {l.name for l in ports} | {i.name for i in ifaces})
     counters_before = interface_counters(watched)
     t0 = time.monotonic()
-    alias_result, trunks, interrupted, judged = None, [], False, set()
+    alias_result, trunks, interrupted, judged, deaf = None, [], False, set(), set()
 
     def crowded(tr):  # --direct: more than two hosts on a port nobody named is a network, not a wire
         return tr.link.name not in wire and host_count(tr) > 2
@@ -5948,6 +5948,10 @@ def run_scan(opts, log, progress=None, on_inventory=None):
                     found = ", ".join(f"{n} {v}" for v, n in gear.most_common()) or "no known gear"
                     found += "; " + (", ".join(f"VLAN {v}" for v in tr.tagged_ids()) or "no tagged VLANs")
                     log(f"  {tr.link.name}: {'capture failed: ' + tr.error if tr.error else found}")
+                elif tr.error and not frames and tr.link.name not in wire:  # nothing shows the device is here
+                    deaf.add(tr.link.name)
+                    log(f"  {tr.link.name}: couldn't listen ({tr.error}), so it gets no temporary addresses: "
+                        "nothing shows the device is plugged in there. Name it with -i to probe it anyway.")
                 elif not talkers(tr):
                     log(f"  {tr.link.name}: nothing heard" + (f" ({tr.error})" if tr.error else ""))
             if stopped:
@@ -5966,8 +5970,9 @@ def run_scan(opts, log, progress=None, on_inventory=None):
                 heard = trunk.heard(vid, vendors_only)
                 return heard, {pair for pair in trunk.pairs.get(vid, ()) if pair[0] in heard}, wants
 
-            # --direct: a shared network isn't the device's wire, so no temporary addresses go on it
-            probed = [l for l in ports if not (by_link.get(l.name) and by_link[l.name].shared)]
+            # --direct: a shared network isn't the device's wire, so no temporary addresses go on it; nor
+            # do they on a port that couldn't be listened to, unless it was named
+            probed = [l for l in ports if l.name not in deaf and not (by_link.get(l.name) and by_link[l.name].shared)]
             plans = []
             for link in (probed if opts.direct else links):  # untagged, plus subnets heard untagged
                 heard, pairs, wants = heard_on(by_link.get(link.name), 0)
@@ -5992,6 +5997,9 @@ def run_scan(opts, log, progress=None, on_inventory=None):
                     + (f", and tagged VLAN {', '.join(map(str, vlans))}" if vlans else ""))
                 alias_result = {}  # (kept when Stop ends the rounds early)
                 run_alias_rounds(sc, inv, mgr, plans, opts, log, alias_result)
+            elif deaf:
+                log("No temporary addresses: nothing showed the device is plugged into a wired interface (listening "
+                    f"failed on {', '.join(sorted(deaf))}). Name its interface with -i to probe it anyway.")
             else:
                 log("No temporary addresses: every wired interface with link is a shared network, not a direct "
                     "wire to the device. Plug the device in, then scan again.")

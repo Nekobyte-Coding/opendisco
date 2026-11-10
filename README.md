@@ -1030,9 +1030,12 @@ as 192.168.1.100 for a radio on its factory 192.168.1.20, or one from the device
 server). An interface where more than two devices talk, such as an office LAN on a dock, is
 taken as a shared network: only gear the tool recognises is listed from it, and no temporary
 addresses go on it. A switch in between doesn't count as a device (its ports only send STP,
-LLDP or CDP). Listening ends a few seconds after the device uses an address, without waiting
-on an interface where nothing has. An interface named with `-i` is listened to even with no link yet: plug
-in, or re-seat the cable, once it's running. Devices talk the most right after link comes up.
+LLDP or CDP). Nor do temporary addresses go on an interface with an address of its own that
+couldn't be listened to, since nothing then shows the device is on it: the log says listening
+failed there, and naming it with `-i` probes it anyway. Listening ends a few seconds after the
+device uses an address, without waiting on an interface where nothing has. An interface named
+with `-i` is listened to even with no link yet: plug in, or re-seat the cable, once it's
+running. Devices talk the most right after link comes up.
 
 On a direct wire, whatever is talking is the radio, so the tool listens to it the way it
 listens on a trunk (up to 45 seconds) and prints what it learns as it happens:
