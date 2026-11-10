@@ -6,7 +6,7 @@ when it came out. The Linux packages of 1.1.0 to 1.3.1 were added then too; thos
 never released for Linux. README.md's "Versions and platforms" lists each version's platforms
 and known issues.
 
-## Unreleased
+## 1.8.0 (2026-11-09)
 
 - **Updates come from OpenDisco's own update server** (`https://git.nekohosting.moe/updates/opendisco`)
   instead of GitHub, from any network. Each request carries the update key built into the app

@@ -112,6 +112,7 @@ Installers are on the [Releases](https://github.com/Nekobyte-Coding/opendisco/re
 
 | Version | What's new | Released for | Known issues (fixed in) |
 |---|---|---|---|
+| 1.8.0 | Updates come from OpenDisco's own update server with a built-in update key, and every release is signed (the app checks SHA256SUMS.sig before installing). Temporary addresses stay while the app is open, so Open Web UI, SSH and Ping reach gear on other subnets. Fixes to Direct to a device, and from a second review of all the code (CHANGELOG.md) | macOS, Windows, Linux, Android; iOS (beta, no public download yet) |  |
 | 1.7.2 | Direct to a device scans a wired port that has its own address (set by hand, or from the device's own DHCP server), and tells a busy shared network on another port apart from the device's wire | macOS, Windows, Linux, Android; iOS (beta, no public download yet) |  |
 | 1.7.1 | Fixes: Android's Settings opens again; a hop's password goes only to that hop; firmware updates through other devices and reboots are checked properly; the command line runs on Python 3.8 and 3.9 again; a malformed reply no longer ends a scan; the selection stays with its device on macOS; and more (CHANGELOG.md) | macOS, Windows, Linux, Android; iOS (beta, no public download yet) | Direct to a device refuses a wired port that has its own address unless it's chosen under Interface (1.7.2) |
 | 1.7.0 | Spanish, Brazilian Portuguese and Japanese, terms of use included. A demo network of made-up gear whose device tools work. The Site Report. Back up all configs, and Compare backups. airMAX link health. EdgeRouters: firmware updates and Change login. Devices that take their factory login are flagged. Linux: the app's own SSH client where `ssh` is missing, and the AppImage updates itself | macOS, Windows, Linux, Android; iOS (beta, no public download yet) | Android: Settings doesn't open, nor the terms in Spanish, Portuguese or Japanese; through other devices, a device further along can be typed a hop's password; Windows: the command line on Python 3.8 or 3.9 (all 1.7.1) |
@@ -151,9 +152,9 @@ Installers are on the [Releases](https://github.com/Nekobyte-Coding/opendisco/re
 
 ## The app
 
-- **Mac:** open `OpenDisco-1.7.2-macos-universal.dmg` (Apple silicon and Intel Macs) and drag
+- **Mac:** open `OpenDisco-1.8.0-macos-universal.dmg` (Apple silicon and Intel Macs) and drag
   the app to Applications.
-- **Windows:** run `OpenDisco-1.7.2-windows-x64-setup.exe` (64-bit; Windows on ARM runs it
+- **Windows:** run `OpenDisco-1.8.0-windows-x64-setup.exe` (64-bit; Windows on ARM runs it
   too). It installs for the current user without administrator rights, with Start menu and
   desktop shortcuts and an uninstaller in Apps.
   - **SmartScreen:** the installer isn't code-signed, so the first time Windows shows
@@ -165,16 +166,16 @@ Installers are on the [Releases](https://github.com/Nekobyte-Coding/opendisco/re
     (`%LOCALAPPDATA%\Programs\OpenDisco`), for example `opendisco.cmd --quick`.
 - **Linux:**
   - **Ubuntu 24.04 LTS, Linux Mint 22, Pop!_OS 24.04:**
-    `sudo apt install ./OpenDisco-1.7.2-ubuntu-24.04-amd64.deb`
-  - **Fedora 44:** `sudo dnf install ./OpenDisco-1.7.2-fedora-44-x86_64.rpm`
+    `sudo apt install ./OpenDisco-1.8.0-ubuntu-24.04-amd64.deb`
+  - **Fedora 44:** `sudo dnf install ./OpenDisco-1.8.0-fedora-44-x86_64.rpm`
   - **Any other distribution** (Debian 13, Arch, newer Ubuntu or Fedora...):
-    - **The AppImage** (x86-64, from 1.6.2): `OpenDisco-1.7.2-linux-x86_64.AppImage`. Make it
+    - **The AppImage** (x86-64, from 1.6.2): `OpenDisco-1.8.0-linux-x86_64.AppImage`. Make it
       executable (`chmod +x`) and run it. It brings its own Python and Toga and uses the
       system's GTK 3 and WebKitGTK 4.1, which most desktops have; if they're missing, it says
       what to install. Given options, it's the command-line tool. It runs on Ubuntu 24.04,
       Debian 13, Fedora 40, Linux Mint 22 and later. Where the system has no `ssh` and `scp`,
       Open SSH… and the device tools use the app's own SSH client (asyncssh, which it brings).
-    - **The portable** `OpenDisco-1.7.2-linux.tar.gz`: extract it and run `./opendisco`; its
+    - **The portable** `OpenDisco-1.8.0-linux.tar.gz`: extract it and run `./opendisco`; its
       `README-LINUX.md` lists the packages to install first. The environment it sets up has the
       app's own SSH client too, for a system without `ssh` and `scp`.
 
@@ -182,7 +183,7 @@ Installers are on the [Releases](https://github.com/Nekobyte-Coding/opendisco/re
   release, and pull in GTK, WebKitGTK, tcpdump, ip, iw and the ssh client. The app is in the
   desktop's app menu, and `opendisco` in a terminal runs it (with options, it's the
   command-line tool).
-- **Android:** `OpenDisco-1.7.2-android.apk`: sideload it with "Install unknown apps"
+- **Android:** `OpenDisco-1.8.0-android.apk`: sideload it with "Install unknown apps"
   allowed, on a phone or a tablet. It installs over 1.4.1 and later, keeping its data. See
   [On phones and tablets](#on-phones-and-tablets). From 1.4.1 the app is signed with
   OpenDisco's own release key, so later versions install over it. 1.4.0 was
@@ -474,8 +475,8 @@ the title bar) has the language, three switches, all on until turned off, and tw
   update itself: it links the release page instead. The iPhone/iPad app has no self-update
   (Apple allows installs only through its own channels), so its Settings leave this switch
   out. Settings shows `Updates: built-in key (…ABCD)`, with only the key's last 4 characters. See
-  [docs/UPDATES.md](docs/UPDATES.md); copies of 1.7.2 and earlier need the first release that
-  carries the key installed once by hand.
+  [docs/UPDATES.md](docs/UPDATES.md); copies of 1.7.2 and earlier need 1.8.0, the first release that
+  carries the key, installed once by hand.
 - **Check for new CVEs when opening:** about once a day, downloads current data from the NVD
   and Ubiquiti's security advisories, so newly published CVEs are flagged without a new
   release (see [Known vulnerabilities](#known-vulnerabilities-cves)).
