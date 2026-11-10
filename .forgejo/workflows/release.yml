@@ -55,7 +55,7 @@ jobs:
           fi
           echo "::add-mask::$OPENDISCO_UPDATE_KEY"
           (umask 022; printf '%s\n' "$OPENDISCO_UPDATE_KEY" > release/update-key)
-          PYTHONPATH=src python -c 'import sys; from opendisco import updatekey; sys.exit(0 if updatekey.valid(open("release/update-key").read().strip()) else "error: OPENDISCO_UPDATE_KEY is not base64url for 32 bytes or more")'
+          PYTHONPATH=src python -P -c 'import sys; from opendisco import updatekey; sys.exit(0 if updatekey.valid(open("release/update-key").read().strip()) else "error: OPENDISCO_UPDATE_KEY is not base64url for 32 bytes or more")'
       - name: sign
         env:
           OPENDISCO_RELEASE_SIGNING_KEY: ${{ secrets.OPENDISCO_RELEASE_SIGNING_KEY }}
