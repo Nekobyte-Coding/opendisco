@@ -6,7 +6,7 @@ when it came out. The Linux packages of 1.1.0 to 1.3.1 were added then too; thos
 never released for Linux. README.md's "Versions and platforms" lists each version's platforms
 and known issues.
 
-## Unreleased
+## 1.8.1 (2026-11-18)
 
 - **Updates check both the Git Box and GitHub, and install the newest verified release:** the app
   asks OpenDisco's update server on the Git Box (with the update key) and the public GitHub
