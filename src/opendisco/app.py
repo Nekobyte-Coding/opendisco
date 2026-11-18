@@ -2781,7 +2781,7 @@ class OpenDiscoApp(toga.App):
         return self._wrap(f"{said}\n{where}")
 
     def _check_for_update(self, quiet: bool):
-        """Ask the update server for the latest release, in the background. quiet (the launch check): only a
+        """Ask the update server and GitHub for the latest release, in the background. quiet (the launch check): only a
         Log line unless there's a newer version; asked from the menu, say what was found."""
         if self.updating:
             if not quiet:
@@ -2794,9 +2794,10 @@ class OpenDiscoApp(toga.App):
         def work():
             release, error = None, None
             try:
-                release = update.latest(self._update_key(), self.settings.get("update_source") or "",
-                                        timeout=5 if quiet else 15,
-                                        prereleases=bool(self.settings.get("update_prereleases")))
+                release = update.find(self._update_key(), self.settings.get("update_source") or "",
+                                      timeout=5 if quiet else 15,
+                                      prereleases=bool(self.settings.get("update_prereleases")),
+                                      log=lambda text: self._from_worker(self._append_log, text, False))
             except update.UpdateError as e:
                 error = str(e)
             except Exception as e:
@@ -2920,7 +2921,8 @@ class OpenDiscoApp(toga.App):
             try:
                 key = self._update_key()
                 new_key = update.prepare(release, asset, key)
-                log(f"OpenDisco {release.version}'s SHA256SUMS is signed with OpenDisco's release key.")
+                log(f"OpenDisco {release.version}'s SHA256SUMS{' (from GitHub)' if release.origin == 'github' else ''} "
+                    "is signed with OpenDisco's release key.")
                 path = update.download(asset, folder, key, lambda done, total: self._from_worker(shown, done, total),
                                        cancel)
                 log(f"Downloaded {asset.name}: its SHA-256 matches the signed SHA256SUMS.")

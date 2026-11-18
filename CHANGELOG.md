@@ -8,6 +8,17 @@ and known issues.
 
 ## Unreleased
 
+- **Updates check both the Git Box and GitHub, and install the newest verified release:** the app
+  asks OpenDisco's update server on the Git Box (with the update key) and the public GitHub
+  releases (`Nekobyte-Coding/opendisco`) every time, and offers the higher version; on a tie, the
+  Git Box's. A source that fails (no key built in, a refused key, no answer, an unreadable list,
+  or a newer release whose signature doesn't check out) is left out; when both fail, the Git
+  Box's error is shown. GitHub is never sent the key. A release from either
+  source is checked the same way: `SHA256SUMS` against `SHA256SUMS.sig` and the release public
+  key, then the installer against `SHA256SUMS`. GitHub downloads may be redirected to
+  `objects.githubusercontent.com` and `release-assets.githubusercontent.com` only (https); any
+  other cross-host redirect is still refused. The Log says what each source had. A custom update
+  source (`update_source`, `OPENDISCO_UPDATE_URL`) is still asked alone. See docs/UPDATES.md.
 - The Release workflow downloads a draft's files with a new repository secret,
   `OPENDISCO_RELEASE_READ_TOKEN` (docs/UPDATES.md): Forgejo serves a draft's files only to an
   account that can write releases, so the job's own token got 404 and signing stopped.
