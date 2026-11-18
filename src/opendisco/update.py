@@ -1,14 +1,14 @@
-"""Keeping OpenDisco up to date from its own update server, with GitHub's releases as the
-fallback: read the release list, check the release's signed SHA256SUMS against OpenDisco's
-release key (signing.py), download this platform's installer and check it against that list,
-and install it the way this copy was installed. app.py asks the questions and shows the
+"""Keeping OpenDisco up to date from its own update server and GitHub's releases: read the
+release lists, check the release's signed SHA256SUMS against OpenDisco's release key
+(signing.py), download this platform's installer and check it against that list, and install
+it the way this copy was installed. app.py asks the questions and shows the
 progress; everything here runs in a worker thread and uses the standard library only.
 docs/UPDATES.md has the server's side.
 
-find() asks the update server first. Only when that fails (no key, a refused key, no answer, an
-unreadable list, a newer release whose SHA256SUMS isn't signed with the release key) does it ask
-GitHub (GITHUB_REPO's releases). Both sources are checked the same way: nothing is installed
-without a good signature.
+find() asks both the update server and GitHub (GITHUB_REPO's releases) and takes the newer
+release (the update server's on a tie). A source that fails (no key, a refused key, no answer, an
+unreadable list, a newer release whose SHA256SUMS isn't signed with the release key) is left
+out. Both sources are checked the same way: nothing is installed without a good signature.
 
 Every request to the update server carries the install's update key (updatekey.py) in
 X-Update-Key; the server answers 404 to a request without the right one. GitHub is never sent
@@ -17,7 +17,7 @@ the key. A redirect is followed only on the same host, and for GitHub also to it
 
 The update source is https://git.nekohosting.moe/updates/opendisco, or OPENDISCO_UPDATE_URL, or
 the update_source setting: https only, with no user name, password, query or fragment. Another
-source set that way is asked alone, without the GitHub fallback.
+source set that way is asked alone, without GitHub.
 """
 import base64
 import hashlib
@@ -43,7 +43,7 @@ from opendisco.i18n import _, tr
 DEFAULT_SOURCE = "https://git.nekohosting.moe/updates/opendisco"
 RELEASES_PAGE = "https://git.nekohosting.moe/nekobyte-coding/opendisco/releases"
 SUMS, SIGNATURE = "SHA256SUMS", "SHA256SUMS.sig"
-GITHUB_REPO = "Nekobyte-Coding/opendisco"  # the public repository: the fallback
+GITHUB_REPO = "Nekobyte-Coding/opendisco"  # the public repository, asked beside the update server
 GITHUB_API = f"https://api.github.com/repos/{GITHUB_REPO}/releases"
 GITHUB_PAGE = f"https://github.com/{GITHUB_REPO}/releases"
 GITHUB_REDIRECTS = ("objects.githubusercontent.com", "release-assets.githubusercontent.com")
@@ -294,33 +294,32 @@ def latest_github(timeout: float = 10, prereleases: bool = False) -> Release:
 
 
 def find(key, url: str = "", timeout: float = 10, prereleases: bool = False, log=None) -> Release:
-    """The newest release: from the update server first, and from GitHub only when that fails.
-    A newer release's signature is checked here already (verify_sums()), so a source whose
-    SHA256SUMS isn't signed with the release key counts as failed. When both fail, the update
+    """The newest release of two sources: the update server (with the key) and GitHub (without
+    it), both asked every time. A newer release's signature is checked here already
+    (verify_sums()), so a source whose SHA256SUMS isn't signed with the release key counts as
+    failed. The higher version wins; on a tie, the update server's. When both fail, the update
     server's error is raised. Another update source (url, OPENDISCO_UPDATE_URL) is asked alone.
-    log(text) gets which source answered and why GitHub was asked (never the key)."""
+    log(text) gets what each source said (never the key)."""
     log = log or (lambda text: None)
     base = source(url)
     if base != DEFAULT_SOURCE:
         return latest(key, base, timeout, prereleases)
-    try:
-        release = latest(key, base, timeout, prereleases)
-        if release.newer:
-            verify_sums(release, key, timeout)
-        log(f"Update check: asked {base}.")
-        return release
-    except UpdateError as e:
-        first = e
-    log(f"Update check: {base} failed ({first}); asking GitHub ({GITHUB_REPO}).")
-    try:
-        release = latest_github(timeout, prereleases)
-        if release.newer:
-            verify_sums(release, None, timeout)
-    except UpdateError as e:
-        log(f"Update check: GitHub failed too ({e}).")
-        raise first from None
-    log(f"Update check: asked GitHub ({GITHUB_REPO}).")
-    return release
+    found, errors = [], []
+    for name, ask, sent in ((base, lambda: latest(key, base, timeout, prereleases), key),
+                            (f"GitHub ({GITHUB_REPO})", lambda: latest_github(timeout, prereleases), None)):
+        try:
+            release = ask()
+            if release.newer:
+                verify_sums(release, sent, timeout)
+        except UpdateError as e:
+            log(f"Update check: {name} failed ({e}).")
+            errors.append(e)
+            continue
+        log(f"Update check: {name} has OpenDisco {release.version}.")
+        found.append(release)
+    if not found:
+        raise errors[0]
+    return max(found, key=lambda r: version_key(r.version))  # max() keeps the first on a tie
 
 
 def parse_sums(text: bytes) -> dict:

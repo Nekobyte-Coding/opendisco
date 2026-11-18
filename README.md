@@ -465,8 +465,8 @@ the title bar) has the language, three switches, all on until turned off, and tw
 - **Language:** System (the default), English, Español, Português (Brasil) or 日本語 (see
   [Languages](#languages)). A change takes effect the next time OpenDisco opens.
 - **Check for OpenDisco updates when opening:** asks OpenDisco's update server on the Git Box for
-  the latest release, with the update key built into the app, and only when that fails, the GitHub
-  releases (from 1.8.1). Both are signature-checked the same way. When there's a newer one, the app says what's
+  the latest release, with the update key built into the app, and the GitHub releases too (from
+  1.8.1); it takes the newest release whose signature checks out. When there's a newer one, the app says what's
   in it and offers to update: it checks the release's signed SHA256SUMS against OpenDisco's
   release key, downloads the file for this platform and checks it against that list, installs it the way this copy
   was installed (the .app on a Mac, the setup.exe on Windows, the .deb, .rpm or portable

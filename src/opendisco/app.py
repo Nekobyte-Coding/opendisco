@@ -2781,7 +2781,7 @@ class OpenDiscoApp(toga.App):
         return self._wrap(f"{said}\n{where}")
 
     def _check_for_update(self, quiet: bool):
-        """Ask the update server (then GitHub, if it fails) for the latest release, in the background. quiet (the launch check): only a
+        """Ask the update server and GitHub for the latest release, in the background. quiet (the launch check): only a
         Log line unless there's a newer version; asked from the menu, say what was found."""
         if self.updating:
             if not quiet:
