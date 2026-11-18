@@ -362,7 +362,7 @@ class Feed(unittest.TestCase):
         release = self.find(self.serve(release_files(self.signer)), self.key, self.github("99.1.0"), current=NEXT)
         self.assertEqual((release.version, release.origin), ("99.1.0", "github"))
         release = self.find(self.serve(release_files(self.signer)), self.key, self.github(NEXT), current=NEXT)
-        self.assertFalse(release.newer)  # neither has anything newer: no update
+        self.assertEqual((release.version, release.origin), (NEXT, ""))  # nothing newer than NEXT: no update
 
     def test_server_fails_github_used(self):
         down = self.serve({})
