@@ -71,8 +71,60 @@ VIAddVersionKey "LegalCopyright" "Copyright 2026 ${PUBLISHER}. Apache License 2.
   ${EndIf}
 !macroend
 
+; A running OpenDisco (pythonw.exe from the Start menu, python.exe from opendisco.cmd, under
+; $INSTDIR) holds its files open, so copying over or removing them fails ("Error opening file for
+; writing"). This closes it first: it asks (a silent install, how the app updates itself, says OK),
+; then stops every process run from $INSTDIR except this installer itself (an uninstaller run with
+; _?= runs from there). update-windows.ps1 runs setup.exe from %TEMP% after the app has quit, so the
+; update is never in the way. If PowerShell can't check, it carries on as before.
+!define FIND_RUNNING "$$d = $$env:OPENDISCO_DIR.TrimEnd('\') + '\'; \
+  $$me = (Get-CimInstance Win32_Process -Filter ('ProcessId=' + $$PID)).ParentProcessId; \
+  $$p = @(Get-Process | Where-Object { $$_.Path -and $$_.Id -ne $$me -and \
+  $$_.Path.StartsWith($$d, [StringComparison]::OrdinalIgnoreCase) });"
+!define POWERSHELL "powershell -NoProfile -NonInteractive -ExecutionPolicy Bypass -Command"
+!macro CloseRunningApp UN
+Function ${UN}CloseRunningApp
+  ; The folder goes to PowerShell in an environment variable: no quoting to get wrong.
+  System::Call 'kernel32::SetEnvironmentVariable(t "OPENDISCO_DIR", t "$INSTDIR")'
+  nsExec::ExecToStack `${POWERSHELL} "${FIND_RUNNING} $$p.Count"`
+  Pop $0  ; exit code, or "error"
+  Pop $1  ; how many are running
+  ${If} $0 != 0
+    Return
+  ${EndIf}
+  IntOp $1 $1 + 0
+  ${If} $1 == 0
+    Return
+  ${EndIf}
+  MessageBox MB_OKCANCEL|MB_ICONEXCLAMATION "${APPNAME} is running. Click OK to close it and continue, \
+    or Cancel to stop." /SD IDOK IDOK close
+  SetErrorLevel 2
+  Abort
+  close:
+    DetailPrint "Closing ${APPNAME}..."
+    nsExec::ExecToStack `${POWERSHELL} "${FIND_RUNNING} $$p | Stop-Process -Force -ErrorAction SilentlyContinue; \
+      $$p | Wait-Process -Timeout 5 -ErrorAction SilentlyContinue; ${FIND_RUNNING} $$p.Count"`
+    Pop $0
+    Pop $1
+    ${If} $0 != 0
+      Return
+    ${EndIf}
+    IntOp $1 $1 + 0
+    ${If} $1 == 0
+      Return
+    ${EndIf}
+    MessageBox MB_RETRYCANCEL|MB_ICONEXCLAMATION "Couldn't close ${APPNAME}. Close it yourself (check Task \
+      Manager), then click Retry." /SD IDCANCEL IDRETRY close
+    SetErrorLevel 2
+    Abort
+FunctionEnd
+!macroend
+!insertmacro CloseRunningApp ""
+!insertmacro CloseRunningApp "un."
+
 Section "${APPNAME}" SecApp
   SectionIn RO
+  Call CloseRunningApp
   !insertmacro RemoveEarlierInstall "UBNT Discovery Reloaded"
   !insertmacro RemoveEarlierInstall "UBNT Discover"
   ; An upgrade replaces the bundled Python and app, so no stale files are left behind: only in a
@@ -82,7 +134,7 @@ Section "${APPNAME}" SecApp
     RMDir /r "$INSTDIR\app"
   ${EndIf}
   SetOutPath "$INSTDIR"
-  File /r "${STAGE}/*"
+  File /r "${STAGE}\*"
   WriteUninstaller "$INSTDIR\Uninstall.exe"
 
   ; Shortcuts start in the install folder.
@@ -145,6 +197,7 @@ Function .onVerifyInstDir
 FunctionEnd
 
 Section "Uninstall"
+  Call un.CloseRunningApp
   Delete "$SMPROGRAMS\${APPNAME}.lnk"
   Delete "$DESKTOP\${APPNAME}.lnk"
   ${If} ${FileExists} "$INSTDIR\opendisco.cmd"  ; (an OpenDisco folder: its own python and app go)

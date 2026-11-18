@@ -13,6 +13,12 @@ and known issues.
   account that can write releases, so the job's own token got 404 and signing stopped.
 - The Release workflow's update-key check imports `opendisco` from `src/` (`python -P`): it ran
   from the repository root, where `opendisco.py` hid the package, so it failed on every run.
+- Windows: the installer builds on Windows again. `installer.nsi` named the staged files as
+  `${STAGE}/*`, which Windows' makensis can't find ("no files found"); it's now `${STAGE}\*`, which
+  makensis on macOS and Linux also accepts. 1.8.0's setup.exe was built on a Mac for this reason.
+- Windows: the installer and uninstaller close a running OpenDisco first (they ask; a silent
+  install, as the app's updater runs it, closes it without asking), instead of failing with
+  "Error opening file for writing" on a file under `python\` the running app had open.
 
 ## 1.8.0 (2026-11-09)
 
