@@ -11,6 +11,9 @@ and known issues.
 - Windows: the installer builds on Windows again. `installer.nsi` named the staged files as
   `${STAGE}/*`, which Windows' makensis can't find ("no files found"); it's now `${STAGE}\*`, which
   makensis on macOS and Linux also accepts. 1.8.0's setup.exe was built on a Mac for this reason.
+- Windows: the installer and uninstaller close a running OpenDisco first (they ask; a silent
+  install, as the app's updater runs it, closes it without asking), instead of failing with
+  "Error opening file for writing" on a file under `python\` the running app had open.
 
 ## 1.8.0 (2026-11-09)
 
