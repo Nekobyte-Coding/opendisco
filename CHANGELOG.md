@@ -8,6 +8,11 @@ and known issues.
 
 ## Unreleased
 
+- The Release workflow downloads a draft's files with a new repository secret,
+  `OPENDISCO_RELEASE_READ_TOKEN` (docs/UPDATES.md): Forgejo serves a draft's files only to an
+  account that can write releases, so the job's own token got 404 and signing stopped.
+- The Release workflow's update-key check imports `opendisco` from `src/` (`python -P`): it ran
+  from the repository root, where `opendisco.py` hid the package, so it failed on every run.
 - Windows: the installer builds on Windows again. `installer.nsi` named the staged files as
   `${STAGE}/*`, which Windows' makensis can't find ("no files found"); it's now `${STAGE}\*`, which
   makensis on macOS and Linux also accepts. 1.8.0's setup.exe was built on a Mac for this reason.
