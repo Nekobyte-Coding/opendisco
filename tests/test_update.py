@@ -313,6 +313,86 @@ class Feed(unittest.TestCase):
                                                                                   self.tmp / "none"):
             self.assertEqual(updatekey.load(data).value, NEW_KEY)
 
+    def find(self, server, key, github):
+        """update.find() with server as the default source and github standing in for GitHub."""
+        with mock.patch.object(update, "DEFAULT_SOURCE", server.url), \
+                mock.patch.dict(os.environ, {"OPENDISCO_UPDATE_URL": ""}), \
+                mock.patch.object(update, "latest_github", github):
+            return update.find(key)
+
+    def test_github_not_asked_when_the_server_answers(self):
+        github = mock.Mock(side_effect=AssertionError("GitHub asked"))
+        release = self.find(self.serve(release_files(self.signer)), self.key, github)
+        self.assertEqual((release.version, release.origin), (NEXT, ""))
+        self.assertIn(INSTALLER, release.sums)  # a newer release's signature is checked already
+        github.assert_not_called()
+
+    def test_github_asked_when_the_server_fails(self):
+        theirs = update.Release("1.0.0", "1.0.0", "", "", {}, "v1.0.0", origin="github")
+        for files, key in ((release_files(self.signer), updatekey.UpdateKey(OLD_KEY, "built-in")),  # refused
+                           (release_files(self.signer), None),  # no key built in
+                           (release_files(self.signer, sign_with=Ed25519PrivateKey.generate()), self.key)):
+            with self.subTest(key=key):
+                github = mock.Mock(return_value=theirs)
+                self.assertIs(self.find(self.serve(files), key, github), theirs)
+                github.assert_called_once()
+
+    def test_both_fail_gives_the_servers_error(self):
+        github = mock.Mock(side_effect=update.UpdateError("GitHub's error"))
+        with self.assertRaises(update.KeyRefused):
+            self.find(self.serve(release_files(self.signer)), updatekey.UpdateKey(OLD_KEY, "built-in"), github)
+
+    def test_another_source_alone(self):
+        server = self.serve(release_files(self.signer))
+        with mock.patch.object(update, "latest_github", mock.Mock(side_effect=AssertionError("GitHub asked"))), \
+                self.assertRaises(update.KeyRefused):
+            update.find(updatekey.UpdateKey(OLD_KEY, "built-in"), server.url)
+
+
+class GitHub(unittest.TestCase):
+    def test_release_list_without_key(self):
+        listing = {"tag_name": TAG, "name": f"OpenDisco {NEXT}", "body": "notes", "draft": False,
+                   "prerelease": False, "html_url": f"https://github.com/{update.GITHUB_REPO}/releases/tag/{TAG}",
+                   "assets": [{"name": INSTALLER, "size": 11000}, {"name": "../evil", "size": 1}]}
+        calls = []
+
+        def small(url, key, timeout, what, limit=update.MAX_SMALL, github=False):
+            calls.append((url, key, github))
+            return json.dumps(listing).encode()
+
+        with mock.patch.object(update, "_small", small):
+            release = update.latest_github()
+        self.assertEqual(calls, [(f"{update.GITHUB_API}/latest", None, True)])
+        self.assertEqual((release.version, release.origin), (NEXT, "github"))
+        self.assertEqual(set(release.assets), {INSTALLER})
+        asset = release.assets[INSTALLER]
+        self.assertEqual(asset.url, f"https://github.com/{update.GITHUB_REPO}/releases/download/{TAG}/{INSTALLER}")
+        self.assertEqual(asset.origin, "github")
+
+    def test_no_key_header(self):
+        seen = []
+
+        class Opener:
+            def open(self, request, timeout):
+                seen.append(dict(request.header_items()))
+
+        with mock.patch.object(update.urllib.request, "build_opener", lambda *handlers: Opener()):
+            update._get(f"{update.GITHUB_API}/latest", updatekey.UpdateKey(KEY, "built-in"), 5, github=True)
+        self.assertNotIn("X-update-key", seen[0])
+        self.assertNotIn(KEY, json.dumps(seen[0]))
+
+    def test_redirect_hosts(self):
+        request = update.urllib.request.Request(f"https://github.com/{update.GITHUB_REPO}/releases/download/x/y")
+        github, plain = update._SameHost(update.GITHUB_REDIRECTS), update._SameHost()
+        for host in update.GITHUB_REDIRECTS:
+            self.assertIsNotNone(github.redirect_request(request, None, 302, "Found", {}, f"https://{host}/a"))
+            with self.assertRaises(update.UpdateError):
+                plain.redirect_request(request, None, 302, "Found", {}, f"https://{host}/a")
+            with self.assertRaises(update.UpdateError):
+                github.redirect_request(request, None, 302, "Found", {}, f"http://{host}/a")
+        with self.assertRaises(update.UpdateError):
+            github.redirect_request(request, None, 302, "Found", {}, "https://evil.example/a")
+
 
 class Keys(unittest.TestCase):
     def setUp(self):

@@ -1,14 +1,23 @@
-"""Keeping OpenDisco up to date from its own update server: read the release list, check the
-release's signed SHA256SUMS against OpenDisco's release key (signing.py), download this
-platform's installer and check it against that list, and install it the way this copy was
-installed. app.py asks the questions and shows the progress; everything here runs in a worker
-thread and uses the standard library only. docs/UPDATES.md has the server's side.
+"""Keeping OpenDisco up to date from its own update server, with GitHub's releases as the
+fallback: read the release list, check the release's signed SHA256SUMS against OpenDisco's
+release key (signing.py), download this platform's installer and check it against that list,
+and install it the way this copy was installed. app.py asks the questions and shows the
+progress; everything here runs in a worker thread and uses the standard library only.
+docs/UPDATES.md has the server's side.
 
-Every request carries the install's update key (updatekey.py) in X-Update-Key; the server
-answers 404 to a request without the right one. A redirect is followed only on the same host.
+find() asks the update server first. Only when that fails (no key, a refused key, no answer, an
+unreadable list, a newer release whose SHA256SUMS isn't signed with the release key) does it ask
+GitHub (GITHUB_REPO's releases). Both sources are checked the same way: nothing is installed
+without a good signature.
+
+Every request to the update server carries the install's update key (updatekey.py) in
+X-Update-Key; the server answers 404 to a request without the right one. GitHub is never sent
+the key. A redirect is followed only on the same host, and for GitHub also to its download hosts
+(GITHUB_REDIRECTS), https only.
 
 The update source is https://git.nekohosting.moe/updates/opendisco, or OPENDISCO_UPDATE_URL, or
-the update_source setting: https only, with no user name, password, query or fragment.
+the update_source setting: https only, with no user name, password, query or fragment. Another
+source set that way is asked alone, without the GitHub fallback.
 """
 import base64
 import hashlib
@@ -34,6 +43,10 @@ from opendisco.i18n import _, tr
 DEFAULT_SOURCE = "https://git.nekohosting.moe/updates/opendisco"
 RELEASES_PAGE = "https://git.nekohosting.moe/nekobyte-coding/opendisco/releases"
 SUMS, SIGNATURE = "SHA256SUMS", "SHA256SUMS.sig"
+GITHUB_REPO = "Nekobyte-Coding/opendisco"  # the public repository: the fallback
+GITHUB_API = f"https://api.github.com/repos/{GITHUB_REPO}/releases"
+GITHUB_PAGE = f"https://github.com/{GITHUB_REPO}/releases"
+GITHUB_REDIRECTS = ("objects.githubusercontent.com", "release-assets.githubusercontent.com")
 MAX_LIST = 1 << 20  # releases.json
 MAX_SMALL = 64 << 10  # SHA256SUMS, its signature, update-key
 MAX_REDIRECTS = 3
@@ -68,6 +81,7 @@ class Asset:
     url: str
     size: int
     sha256: str = ""  # from the release's signed SHA256SUMS (prepare())
+    origin: str = ""  # "github" for a GitHub release's file (no key sent), "" for the update server's
 
 
 @dataclass
@@ -81,6 +95,7 @@ class Release:
     base: str = ""  # <source>/<tag>, where its files are
     prerelease: bool = False
     sums: dict = field(default_factory=dict)  # file name -> SHA-256, once checked (prepare())
+    origin: str = ""  # "github" for GitHub's releases, "" for the update server
 
     @property
     def newer(self) -> bool:
@@ -134,23 +149,32 @@ def _origin(url: str) -> tuple:
 
 
 class _SameHost(urllib.request.HTTPRedirectHandler):
-    """Follows a redirect only to the same scheme, host and port, at most MAX_REDIRECTS times."""
+    """Follows a redirect only to the same scheme, host and port, or to one of hosts over https,
+    at most MAX_REDIRECTS times."""
     max_redirections = MAX_REDIRECTS
+
+    def __init__(self, hosts=()):
+        super().__init__()
+        self.allowed = {("https", host, 443) for host in hosts}
 
     def redirect_request(self, req, fp, code, msg, headers, newurl):
         newurl = urllib.parse.urljoin(req.full_url, newurl)
-        if _origin(newurl) != _origin(req.full_url):
+        if _origin(newurl) != _origin(req.full_url) and _origin(newurl) not in self.allowed:
             raise UpdateError(tr("the update server sent the request on to another address ({host}), so it was "
                                  "refused", host=_origin(newurl)[1] or "?"))
         return super().redirect_request(req, fp, code, msg, headers, newurl)
 
 
-def _get(url: str, key, timeout: float):
+def _get(url: str, key, timeout: float, github: bool = False):
     headers = {"User-Agent": USER_AGENT}
-    if key is not None:
+    if github:  # never the key
+        if url.startswith(GITHUB_API):
+            headers["Accept"] = "application/vnd.github+json"
+    elif key is not None:
         headers["X-Update-Key"] = key.value
     request = urllib.request.Request(url, headers=headers)
-    opener = urllib.request.build_opener(urllib.request.HTTPSHandler(context=tls.context()), _SameHost())
+    opener = urllib.request.build_opener(urllib.request.HTTPSHandler(context=tls.context()),
+                                         _SameHost(GITHUB_REDIRECTS if github else ()))
     return opener.open(request, timeout=timeout)
 
 
@@ -159,16 +183,19 @@ def _reason(e: Exception) -> str:
     return str(getattr(reason, "strerror", None) or reason)
 
 
-def _open(url: str, key, timeout: float, what: str = ""):
-    """Open url with the key. what names the file for a 404 once the release list was read;
-    without it (the list itself), a 404 means the key wasn't taken: the server answers so."""
-    if key is None:
+def _open(url: str, key, timeout: float, what: str = "", github: bool = False):
+    """Open url with the key (GitHub: without it). what names the file for a 404 once the release
+    list was read; without it (the list itself), a 404 means the key wasn't taken: the server
+    answers so (GitHub: that there's no release)."""
+    if not github and key is None:
         raise KeyRefused(no_key())
     try:
-        return _get(url, key, timeout)
+        return _get(url, key, timeout, github)
     except urllib.error.HTTPError as e:
         e.close()
-        if e.code in (401, 403) or (e.code == 404 and not what):
+        if github and e.code == 404 and not what:
+            raise UpdateError(_("the update server lists no release")) from None
+        if not github and (e.code in (401, 403) or (e.code == 404 and not what)):
             raise KeyRefused(key_refused()) from None
         if e.code == 404:
             raise UpdateError(tr("the update server has no {file}", file=what)) from None
@@ -180,8 +207,8 @@ def _open(url: str, key, timeout: float, what: str = ""):
         raise UpdateError(tr("couldn't reach the OpenDisco update server ({reason})", reason=_reason(e))) from None
 
 
-def _small(url: str, key, timeout: float, what: str, limit: int = MAX_SMALL) -> bytes:
-    with _open(url, key, timeout, what) as r:
+def _small(url: str, key, timeout: float, what: str, limit: int = MAX_SMALL, github: bool = False) -> bytes:
+    with _open(url, key, timeout, what, github) as r:
         data = r.read(limit + 1)
     if len(data) > limit:
         raise UpdateError(tr("{file} on the update server is too large", file=what))
@@ -226,6 +253,76 @@ def latest(key, url: str = "", timeout: float = 10, prereleases: bool = False) -
                    bool(item.get("prerelease")))
 
 
+def latest_github(timeout: float = 10, prereleases: bool = False) -> Release:
+    """The newest release on GITHUB_REPO's releases page (pre-releases only when asked for); its
+    files are downloaded from github.com/<repo>/releases/download/<tag>/, never with the key."""
+    url = f"{GITHUB_API}?per_page=30" if prereleases else f"{GITHUB_API}/latest"
+    try:
+        data = json.loads(_small(url, None, timeout, "", MAX_LIST, github=True))
+    except (ValueError, UnicodeDecodeError):
+        data = None
+    items = data if isinstance(data, list) else [data] if isinstance(data, dict) else None
+    if items is None:
+        raise UpdateError(_("the update server's release list can't be read"))
+    best = None
+    for item in items:
+        if not isinstance(item, dict) or item.get("draft") or (item.get("prerelease") and not prereleases):
+            continue
+        tag = str(item.get("tag_name") or "")
+        version = tag.lstrip("v")
+        if not _plain(tag) or not version_key(version):
+            continue
+        if best is None or version_key(version) > version_key(best[1]):
+            best = item, version, tag
+    if best is None:
+        raise UpdateError(_("the update server lists no release"))
+    item, version, tag = best
+    folder = f"https://github.com/{GITHUB_REPO}/releases/download/{urllib.parse.quote(tag)}"
+    assets = {}
+    for a in item.get("assets") or []:
+        name = a.get("name") if isinstance(a, dict) else None
+        if _plain(name):
+            try:
+                size = max(0, int(a.get("size") or 0))
+            except (TypeError, ValueError):
+                size = 0
+            assets[name] = Asset(name, f"{folder}/{urllib.parse.quote(name)}", size, origin="github")
+    page = str(item.get("html_url") or "")
+    return Release(version, str(item.get("name") or tag), str(item.get("body") or ""),
+                   page if page.startswith("https://github.com/") else GITHUB_PAGE, assets, tag, folder,
+                   bool(item.get("prerelease")), origin="github")
+
+
+def find(key, url: str = "", timeout: float = 10, prereleases: bool = False, log=None) -> Release:
+    """The newest release: from the update server first, and from GitHub only when that fails.
+    A newer release's signature is checked here already (verify_sums()), so a source whose
+    SHA256SUMS isn't signed with the release key counts as failed. When both fail, the update
+    server's error is raised. Another update source (url, OPENDISCO_UPDATE_URL) is asked alone.
+    log(text) gets which source answered and why GitHub was asked (never the key)."""
+    log = log or (lambda text: None)
+    base = source(url)
+    if base != DEFAULT_SOURCE:
+        return latest(key, base, timeout, prereleases)
+    try:
+        release = latest(key, base, timeout, prereleases)
+        if release.newer:
+            verify_sums(release, key, timeout)
+        log(f"Update check: asked {base}.")
+        return release
+    except UpdateError as e:
+        first = e
+    log(f"Update check: {base} failed ({first}); asking GitHub ({GITHUB_REPO}).")
+    try:
+        release = latest_github(timeout, prereleases)
+        if release.newer:
+            verify_sums(release, None, timeout)
+    except UpdateError as e:
+        log(f"Update check: GitHub failed too ({e}).")
+        raise first from None
+    log(f"Update check: asked GitHub ({GITHUB_REPO}).")
+    return release
+
+
 def parse_sums(text: bytes) -> dict:
     """SHA256SUMS (sha256sum's format: "<hex>  <name>") as {name: hex}."""
     sums = {}
@@ -243,12 +340,12 @@ def parse_sums(text: bytes) -> dict:
     return sums
 
 
-def prepare(release: Release, asset: Asset, key, timeout: float = 30):
-    """Check the release's SHA256SUMS against its signature and OpenDisco's release key, and
-    take the asset's SHA-256 from it. Returns the release's update key (checked against the
-    list too), or None when it has none."""
-    sums = _small(f"{release.base}/{SUMS}", key, timeout, SUMS)
-    raw = _small(f"{release.base}/{SIGNATURE}", key, timeout, SIGNATURE, 1024)
+def verify_sums(release: Release, key, timeout: float = 30) -> dict:
+    """Download the release's SHA256SUMS and SHA256SUMS.sig (from wherever it came from), check
+    the signature against OpenDisco's release key, and keep the list in release.sums."""
+    github = release.origin == "github"
+    sums = _small(f"{release.base}/{SUMS}", key, timeout, SUMS, github=github)
+    raw = _small(f"{release.base}/{SIGNATURE}", key, timeout, SIGNATURE, 1024, github=github)
     try:
         signature = base64.b64decode(raw.strip(), validate=True)
         public = signing.public_key()
@@ -258,13 +355,22 @@ def prepare(release: Release, asset: Asset, key, timeout: float = 30):
         raise UpdateError(_("the release's SHA256SUMS isn't signed with OpenDisco's release key, so nothing "
                             "was installed"))
     release.sums = parse_sums(sums)
+    return release.sums
+
+
+def prepare(release: Release, asset: Asset, key, timeout: float = 30):
+    """Check the release's SHA256SUMS against its signature and OpenDisco's release key, and
+    take the asset's SHA-256 from it. Returns the release's update key (checked against the
+    list too), or None when it has none. A GitHub release need not carry its update-key file."""
+    github = release.origin == "github"
+    verify_sums(release, key, timeout)
     if asset.name not in release.sums:
         raise UpdateError(tr("{file} isn't in the release's signed SHA256SUMS, so it can't be checked",
                              file=asset.name))
     asset.sha256 = release.sums[asset.name]
-    if updatekey.NAME not in release.sums:
+    if updatekey.NAME not in release.sums or (github and updatekey.NAME not in release.assets):
         return None
-    data = _small(f"{release.base}/{updatekey.NAME}", key, timeout, updatekey.NAME, 1024)
+    data = _small(f"{release.base}/{updatekey.NAME}", key, timeout, updatekey.NAME, 1024, github=github)
     if hashlib.sha256(data).hexdigest() != release.sums[updatekey.NAME]:
         raise UpdateError(tr("{file} doesn't match the release's signed SHA256SUMS, so nothing was installed",
                              file=updatekey.NAME))
@@ -399,7 +505,7 @@ def download(asset: Asset, folder: Path, key, progress=None, cancel=None, timeou
     part = dest.with_name(dest.name + ".part")
     digest, done, shown = hashlib.sha256(), 0, 0.0
     try:
-        with _open(asset.url, key, timeout, asset.name) as r, open(part, "wb") as f:
+        with _open(asset.url, key, timeout, asset.name, asset.origin == "github") as r, open(part, "wb") as f:
             total = asset.size or int(r.headers.get("Content-Length") or 0)
             limit = asset.size or (4 << 30)
             while True:

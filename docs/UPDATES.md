@@ -1,10 +1,14 @@
 # How OpenDisco updates itself
 
 OpenDisco checks for new versions and installs them from its own update server on the Git Box,
-`https://git.nekohosting.moe/updates/opendisco`. This is a private download point, not GitHub and
-not Forgejo's releases page, which sits behind a login. It works from any network. The server only
+`https://git.nekohosting.moe/updates/opendisco`, first. This is a private download point, not
+Forgejo's releases page, which sits behind a login. It works from any network. The server only
 answers requests that carry OpenDisco's update key, and every release is signed with OpenDisco's
 release key, which the app checks before it installs anything.
+
+From 1.8.1, when the Git Box fails, the app falls back to the public GitHub releases of
+`Nekobyte-Coding/opendisco` (see [The GitHub fallback](#the-github-fallback)). Both sources are
+signature-checked the same way.
 
 ## What the app does
 
@@ -30,6 +34,30 @@ The app follows a redirect only when it stays on the same scheme, host and port 
 and never follows one to another host. The release list is limited to 1 MB, and `SHA256SUMS` and
 the other small files to 64 KB.
 
+### The GitHub fallback
+
+The app asks GitHub (`https://api.github.com/repos/Nekobyte-Coding/opendisco/releases/latest`, or
+the release list when pre-releases are on) only when the Git Box fails: no key built in (a dev or
+test build), a refused key, no answer or a timeout, any other error status, an unreadable release
+list, or a newer release whose `SHA256SUMS` isn't signed with the release key (the check already
+looks at the signature when a release is newer). When the Git Box answers that there's nothing
+newer, GitHub isn't asked. When both fail, the Git Box's error is shown; the Log has both, and it
+also says which source answered.
+
+- GitHub is **never sent the update key**: only `User-Agent` (and `Accept` on the API).
+- A GitHub release is checked exactly like a Git Box one: `SHA256SUMS` and `SHA256SUMS.sig` are
+  downloaded from the release's files, the signature is checked against the bundled release key,
+  and the installer against `SHA256SUMS`. Nothing unverified is installed.
+- Downloads come from `https://github.com/Nekobyte-Coding/opendisco/releases/download/<tag>/<file>`.
+  Redirects are followed to `objects.githubusercontent.com` and
+  `release-assets.githubusercontent.com` only, over https; any other host is refused, as before.
+- With a custom update source (`update_source`, `OPENDISCO_UPDATE_URL`), only that source is asked.
+
+**Each GitHub release must have `SHA256SUMS` and `SHA256SUMS.sig` attached**, the same files the
+Release workflow made for the Forgejo release, next to the same installers. Don't attach
+`update-key` to the public release: the app does without it there (the install keeps its key, and
+picks up a new one the next time it updates from the Git Box).
+
 ### What you see
 
 - **Settings** shows `Updates: built-in key (…ABCD)` (at most the key's last 4 characters) or
@@ -39,6 +67,8 @@ the other small files to 64 KB.
 - **No key at all** (a copy built without one): *This install has no update key. Install the latest
   release once by hand.* Nothing is sent to the server in that case.
 - **No network:** *Couldn't reach the OpenDisco update server (…).*
+- These messages appear only when GitHub fails too; when the GitHub fallback works, the update is
+  offered as usual and the Log notes that the Git Box failed and GitHub answered.
 
 The key never goes into the Log, settings.json, an export, an error message or any screen, apart
 from its last 4 characters in Settings. `UpdateKey`'s `str()` and `repr()` show only those 4.
@@ -86,6 +116,9 @@ leaks, rotation cuts it off.
    `SHA256SUMS.sig` to the draft. It refuses a release that is already published.
 4. **Publish the release.** Within 5 minutes, the Git Box's sync checks the signature and puts the
    release on the update server.
+5. **GitHub (the fallback):** publish the same tag on `Nekobyte-Coding/opendisco` with the same
+   installers plus `SHA256SUMS` and `SHA256SUMS.sig` from the signed Forgejo release (not
+   `update-key`). Without both files, installs that fall back to GitHub refuse the release.
 
 A signed release holds the installers, plus:
 
@@ -145,10 +178,10 @@ previous one.
 
 ## Existing installs (1.7.2 and earlier)
 
-Up to 1.7.2, OpenDisco checked GitHub, which is gone. Those copies can't update themselves any more.
-**Install 1.8.0, the first release that carries the key, once by hand**, the same way as a fresh
-install.
-From then on, it updates itself.
+Up to 1.7.2, OpenDisco checked GitHub only, without the key or a signature check, and couldn't
+update while the GitHub account was suspended. **Install 1.8.0 or later once by hand**, the same
+way as a fresh install, to move a copy onto signed updates. From then on, it updates itself (from
+1.8.1, with GitHub as the fallback).
 
 ## What the Git Box needs
 
@@ -169,4 +202,6 @@ From then on, it updates itself.
 - key rotation after an update
 - URL checks
 - redirects on the same host (followed) and to another host (refused)
+- the GitHub fallback: asked only when the Git Box fails (refused or missing key, bad signature),
+  never sent the key, its release list, and its redirect hosts
 - the RFC 8032 test vectors, and agreement with `cryptography`
