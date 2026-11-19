@@ -58,7 +58,9 @@ jobs:
           PYTHONPATH=src python -P -c 'import sys; from opendisco import updatekey; sys.exit(0 if updatekey.valid(open("release/update-key").read().strip()) else "error: OPENDISCO_UPDATE_KEY is not base64url for 32 bytes or more")'
       - name: sign
         env:
-          OPENDISCO_RELEASE_SIGNING_KEY: ${{ secrets.OPENDISCO_RELEASE_SIGNING_KEY }}
+          # The repository secret was saved as OPENDISCO_RELEASE_KEY; either name works. A wrong key fails
+          # the openssl check below against the committed public key, so nothing is signed with it.
+          OPENDISCO_RELEASE_SIGNING_KEY: ${{ secrets.OPENDISCO_RELEASE_SIGNING_KEY || secrets.OPENDISCO_RELEASE_KEY }}
         run: python packaging/sign_release.py release
       - name: check with openssl, as the Git Box does
         run: |
