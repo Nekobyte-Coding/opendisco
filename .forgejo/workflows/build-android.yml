@@ -60,6 +60,13 @@ jobs:
       - uses: https://github.com/actions/setup-python@v7
         with:
           python-version: "3.13"
+      - name: build tools from this workflow's commit
+        # The app's source is the tag's; packaging/ (the build and release scripts) is this
+        # workflow's own, so a fix to them works on a tag made before it.
+        run: |
+          git fetch -q --depth=1 origin "$GITHUB_SHA"
+          git checkout "$GITHUB_SHA" -- packaging
+          echo "Source: $TAG. packaging/: ${GITHUB_SHA:0:12} ($GITHUB_REF_NAME)"
       - name: the release is a draft
         run: python packaging/forgejo_release.py check "$TAG"
       - name: the tag's version
