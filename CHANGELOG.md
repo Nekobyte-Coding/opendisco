@@ -8,16 +8,8 @@ and known issues.
 
 ## 1.8.3 (2026-11-18)
 
-The app is the same as 1.8.2; this release is the first built with the new release process.
-
-- The Linux packages and the Android app are built in CI, into the draft release: Actions →
-  **Build Linux** (the amd64 .deb, .rpm, AppImage and portable .tar.gz, plus arm64 .deb and .rpm
-  where the CI host can run arm64 containers) and **Build Android** (the .apk, which must carry the
-  release certificate). Each checks the tag, that its release is still a draft and the source's
-  version, and replaces same-named files on the draft. The Mac builds the macOS app, the Windows
-  installer and iOS. See docs/UPDATES.md "Releasing a version".
-- The Release workflow lists the installers the draft still lacks before it signs, and also takes
-  the signing key under the name `OPENDISCO_RELEASE_KEY`, saying which secret it used.
+The app is the same as 1.8.2. This release only changes how OpenDisco's installers are built and
+checked before they're released; nothing changes in how you install or use it.
 
 ## 1.8.2 (2026-11-18)
 
@@ -34,47 +26,29 @@ The app is the same as 1.8.2; this release is the first built with the new relea
 
 ## 1.8.1 (2026-11-18)
 
-- **Updates check both the Git Box and GitHub, and install the newest verified release:** the app
-  asks OpenDisco's update server on the Git Box (with the update key) and the public GitHub
-  releases (`Nekobyte-Coding/opendisco`) every time, and offers the higher version; on a tie, the
-  Git Box's. A source that fails (no key built in, a refused key, no answer, an unreadable list,
-  or a newer release whose signature doesn't check out) is left out; when both fail, the Git
-  Box's error is shown. GitHub is never sent the key. A release from either
-  source is checked the same way: `SHA256SUMS` against `SHA256SUMS.sig` and the release public
-  key, then the installer against `SHA256SUMS`. GitHub downloads may be redirected to
-  `objects.githubusercontent.com` and `release-assets.githubusercontent.com` only (https); any
-  other cross-host redirect is still refused. The Log says what each source had. A custom update
-  source (`update_source`, `OPENDISCO_UPDATE_URL`) is still asked alone. See docs/UPDATES.md.
-- The Release workflow downloads a draft's files with a new repository secret,
-  `OPENDISCO_RELEASE_READ_TOKEN` (docs/UPDATES.md): Forgejo serves a draft's files only to an
-  account that can write releases, so the job's own token got 404 and signing stopped.
-- The Release workflow's update-key check imports `opendisco` from `src/` (`python -P`): it ran
-  from the repository root, where `opendisco.py` hid the package, so it failed on every run.
-- Windows: the installer builds on Windows again. `installer.nsi` named the staged files as
-  `${STAGE}/*`, which Windows' makensis can't find ("no files found"); it's now `${STAGE}\*`, which
-  makensis on macOS and Linux also accepts. 1.8.0's setup.exe was built on a Mac for this reason.
+- **Updates check both OpenDisco's update server and GitHub, and install the newest verified
+  release:** the app asks both every time and offers the higher version; on a tie, the update
+  server's. A source that doesn't answer, or whose newer release doesn't pass the app's checks, is
+  left out; when both fail, the update server's error is shown. A release from either source is
+  checked the same way before it's installed. Downloads from GitHub may be redirected only to
+  GitHub's own download servers (https); any other redirect to another server is still refused.
+  The Log says what each source had. A custom update source (`update_source`,
+  `OPENDISCO_UPDATE_URL`) is still asked alone.
+- Fixed an issue with release signing, so the app auto updates properly.
+- Windows: the installer can be built on Windows again.
 - Windows: the installer and uninstaller close a running OpenDisco first (they ask; a silent
   install, as the app's updater runs it, closes it without asking), instead of failing with
   "Error opening file for writing" on a file under `python\` the running app had open.
 
 ## 1.8.0 (2026-11-09)
 
-- **Updates come from OpenDisco's own update server** (`https://git.nekohosting.moe/updates/opendisco`)
-  instead of GitHub, from any network. Each request carries the update key built into the app
-  (`X-Update-Key`), and each release is signed: the app checks the release's `SHA256SUMS`
-  against `SHA256SUMS.sig` and OpenDisco's release public key, then the installer against
-  `SHA256SUMS`, and refuses the update on any mismatch. Redirects to another host are refused.
-  Settings shows `Updates: built-in key (…ABCD)`, with only the key's last 4 characters. A refused
-  key says so ("This install's update key isn't accepted. Install the latest release once by hand.").
-  Each update brings the release's key with it, so a new key reaches every install. See
-  docs/UPDATES.md.
+- **Updates come from OpenDisco's own update server** instead of GitHub, from any network, and
+  every release is signed: the app checks a release before installing it and refuses the update
+  if anything doesn't match. Redirects to another server are refused. If the update server turns
+  an install away, the app says so and asks you to install the latest release once by hand.
 - **One step by hand for existing installs:** 1.7.2 and earlier checked GitHub, which is gone, so
-  they can't update themselves any more. Install the first release that carries the key once by
-  hand; it updates itself after that.
-- Releases: the build scripts put the update key in the build from `OPENDISCO_UPDATE_KEY` or the
-  login keychain ("OpenDisco Update Key"), and stop without one (`--no-update-key` for a test build).
-  The new Release workflow adds `update-key`, `SHA256SUMS` and `SHA256SUMS.sig` to a draft release.
-  Pull requests run checks and the new tests (`tests/`).
+  they can't update themselves any more. Install 1.8.0 or later once by hand; it updates itself
+  after that.
 
 - Temporary addresses stay while OpenDisco is open, so right-click › Open Web UI reaches gear
   on another subnet without setting an address on the network adapter by hand. After a scan
