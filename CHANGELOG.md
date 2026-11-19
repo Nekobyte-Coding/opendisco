@@ -13,7 +13,8 @@ and known issues.
   app, and it read PowerShell's one-digit answer as a UTF-16 character, so it always got 0. The
   install then stopped at "Error opening file for writing" (a silent install skipped the files in
   use). They now use the native PowerShell and take its answer from the exit code, and if the check
-  can't run they ask you to close OpenDisco instead of carrying on.
+  can't run they ask you to close OpenDisco instead of carrying on. Uninstalling right after closing
+  the app no longer leaves a DLL or two behind.
 
 ## 1.8.1 (2026-11-18)
 

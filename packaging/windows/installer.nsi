@@ -216,8 +216,18 @@ Section "Uninstall"
   Delete "$SMPROGRAMS\${APPNAME}.lnk"
   Delete "$DESKTOP\${APPNAME}.lnk"
   ${If} ${FileExists} "$INSTDIR\opendisco.cmd"  ; (an OpenDisco folder: its own python and app go)
-    RMDir /r "$INSTDIR\python"
-    RMDir /r "$INSTDIR\app"
+    ; The app just closed can hold a DLL or two (ClrLoader.dll, PIL's) for a moment: retry for 5s.
+    StrCpy $2 0
+    ${Do}
+      RMDir /r "$INSTDIR\python"
+      RMDir /r "$INSTDIR\app"
+      ${IfNot} ${FileExists} "$INSTDIR\python\*.*"
+      ${AndIfNot} ${FileExists} "$INSTDIR\app\*.*"
+        ${Break}
+      ${EndIf}
+      Sleep 250
+      IntOp $2 $2 + 1
+    ${LoopUntil} $2 >= 20
   ${EndIf}
   Delete "$INSTDIR\opendisco.cmd"
   Delete "$INSTDIR\LICENSE.txt"
