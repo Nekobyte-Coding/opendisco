@@ -3,7 +3,8 @@ name: Release
 # Signs a DRAFT release (docs/UPDATES.md): run it by hand once the installers are on the draft.
 #   1. download the draft's files (secrets.OPENDISCO_RELEASE_READ_TOKEN)
 #   2. add update-key (secrets.OPENDISCO_UPDATE_KEY)
-#   3. write SHA256SUMS over every file, sign it into SHA256SUMS.sig (secrets.OPENDISCO_RELEASE_SIGNING_KEY)
+#   3. write SHA256SUMS over every file, sign it into SHA256SUMS.sig (secrets.OPENDISCO_RELEASE_SIGNING_KEY,
+#      or secrets.OPENDISCO_RELEASE_KEY)
 #      (a PKCS#8 PEM Ed25519 private key)
 #   4. check the signature with the committed public key (OpenDisco's own check and openssl)
 #   5. upload update-key, SHA256SUMS and SHA256SUMS.sig to the draft
@@ -58,8 +59,23 @@ jobs:
           PYTHONPATH=src python -P -c 'import sys; from opendisco import updatekey; sys.exit(0 if updatekey.valid(open("release/update-key").read().strip()) else "error: OPENDISCO_UPDATE_KEY is not base64url for 32 bytes or more")'
       - name: sign
         env:
-          OPENDISCO_RELEASE_SIGNING_KEY: ${{ secrets.OPENDISCO_RELEASE_SIGNING_KEY }}
-        run: python packaging/sign_release.py release
+          # The key is the secret OPENDISCO_RELEASE_SIGNING_KEY, or OPENDISCO_RELEASE_KEY (the name it was first
+          # saved under). The log names the secret it took, so a wrong key points at the secret to replace;
+          # sign_release.py refuses a key that isn't the committed release-signing.pub's, so nothing is signed with it.
+          KEY_SIGNING: ${{ secrets.OPENDISCO_RELEASE_SIGNING_KEY }}
+          KEY_SHORT: ${{ secrets.OPENDISCO_RELEASE_KEY }}
+        run: |
+          if [ -n "$KEY_SIGNING" ]; then
+            echo "Signing with the secret OPENDISCO_RELEASE_SIGNING_KEY"
+            export OPENDISCO_RELEASE_SIGNING_KEY="$KEY_SIGNING"
+          elif [ -n "$KEY_SHORT" ]; then
+            echo "Signing with the secret OPENDISCO_RELEASE_KEY"
+            export OPENDISCO_RELEASE_SIGNING_KEY="$KEY_SHORT"
+          else
+            echo "error: neither OPENDISCO_RELEASE_SIGNING_KEY nor OPENDISCO_RELEASE_KEY is set" >&2; exit 1
+          fi
+          unset KEY_SIGNING KEY_SHORT
+          python packaging/sign_release.py release
       - name: check with openssl, as the Git Box does
         run: |
           base64 -d release/SHA256SUMS.sig > /tmp/SHA256SUMS.sig.raw

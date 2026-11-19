@@ -142,7 +142,10 @@ You add these secrets yourself, at nekobyte-coding/opendisco → Settings → Ac
 - `OPENDISCO_RELEASE_SIGNING_KEY`: the Ed25519 private key as a PKCS#8 PEM, the whole
   `-----BEGIN PRIVATE KEY-----` ... `-----END PRIVATE KEY-----` block, as `openssl genpkey -algorithm
   ed25519` writes it. Only the release workflow uses it. Michael keeps the
-  private key and its backup; it is never in the repository.
+  private key and its backup; it is never in the repository. The workflow also takes it under the
+  name `OPENDISCO_RELEASE_KEY`, and its log says which of the two it used. It must be the private
+  half of the committed `release-signing.pub` (fingerprint `9fa4b9b71ed68330`): `sign_release.py`
+  stops with "the signing key belongs to …" for any other key.
 - `OPENDISCO_RELEASE_READ_TOKEN`: an access token with the `read:repository` scope, from an account
   that can write this repository's releases. Forgejo serves a draft release's files only to such an
   account, and the job's own token isn't one on those download links (the API, where it is, lists a
