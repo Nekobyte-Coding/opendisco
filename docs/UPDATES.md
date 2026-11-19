@@ -120,7 +120,8 @@ Release workflow signs the whole set at the end.
    - Build Linux, job `amd64`: `OpenDisco-X.Y.Z-ubuntu-24.04-amd64.deb`,
      `OpenDisco-X.Y.Z-fedora-44-x86_64.rpm`, `OpenDisco-X.Y.Z-linux.tar.gz`,
      `OpenDisco-X.Y.Z-linux-x86_64.AppImage`, and the source of the GLib library the AppImage carries
-     (`glib2.0_*.dsc`, `.debian.tar.xz`, `.orig*.tar.xz`). It uses the runner's Docker.
+     (`glib2.0_*.dsc`, `.debian.tar.xz`, `.orig*.tar.xz`). It runs on the CI host itself
+     (`self-hosted`), with the host's Docker and python3 (3.11 or later, with python3-venv).
    - Build Linux, job `arm64`: `OpenDisco-X.Y.Z-ubuntu-24.04-arm64.deb` and
      `OpenDisco-X.Y.Z-fedora-44-aarch64.rpm`. It runs only when the CI host's Docker can run
      arm64 containers (qemu-user-static installed there); otherwise the run says so and skips it,

@@ -3,7 +3,7 @@ name: Build Linux
 # Builds a tagged version's Linux packages on the CI runners and adds them to its DRAFT release
 # (docs/UPDATES.md, "Releasing a version"). Run it by hand once the tag and the draft exist:
 #   amd64: the Ubuntu 24.04 .deb, the Fedora 44 .rpm, the portable .tar.gz and the x86-64 AppImage
-#          (with the source of the GLib library it carries), through the runner's Docker
+#          (with the source of the GLib library it carries), through the CI host's Docker (self-hosted)
 #   arm64: the arm64 .deb and aarch64 .rpm, only when the CI host's Docker can run arm64 containers
 #          (qemu-user-static / binfmt); otherwise the job is skipped and the run says why
 # Each package carries the update key (secrets.OPENDISCO_UPDATE_KEY). Files already on the draft
@@ -35,7 +35,7 @@ env:
 
 jobs:
   amd64:
-    runs-on: ubuntu-latest
+    runs-on: self-hosted
     timeout-minutes: 120
     steps:
       - name: the tag is a version
@@ -52,9 +52,19 @@ jobs:
       - uses: https://github.com/actions/checkout@v7
         with:
           ref: refs/tags/${{ inputs.tag }}
-      - uses: https://github.com/actions/setup-python@v7
-        with:
-          python-version: "3.13"
+      # On the CI host itself (runs-on: self-hosted), whose Docker the build drives: the container
+      # jobs (ubuntu-latest) have no Docker socket. Python is the host's (3.11 or later: tomllib).
+      - name: Python and Briefcase
+        run: |
+          python3 -c 'import sys; assert sys.version_info >= (3, 11), sys.version' \
+            || { echo "error: the CI host's python3 is older than 3.11" >&2; exit 1; }
+          rm -rf "$RUNNER_TEMP/opendisco-venv"
+          python3 -m venv "$RUNNER_TEMP/opendisco-venv" \
+            || { echo "error: python3 -m venv failed: the CI host needs the python3-venv package" >&2; exit 1; }
+          echo "$RUNNER_TEMP/opendisco-venv/bin" >> "$GITHUB_PATH"
+          "$RUNNER_TEMP/opendisco-venv/bin/pip" install -q "briefcase${BRIEFCASE:+==$BRIEFCASE}"
+          "$RUNNER_TEMP/opendisco-venv/bin/pip" show briefcase | sed -n 's/^Version: /Briefcase /p'
+          docker version --format 'Docker {{.Server.Version}} ({{.Server.Arch}})'
       - name: build tools from this workflow's commit
         # The app's source is the tag's; packaging/ (the build and release scripts) is this
         # workflow's own, so a fix to them works on a tag made before it.
@@ -68,11 +78,6 @@ jobs:
         run: |
           version=$(sed -n 's/^__version__ = "\(.*\)"/\1/p' src/opendisco/__init__.py)
           [ "v$version" = "$TAG" ] || { echo "error: $TAG's source says version $version" >&2; exit 1; }
-      - name: Briefcase and Docker
-        run: |
-          pip install "briefcase${BRIEFCASE:+==$BRIEFCASE}"
-          pip show briefcase | sed -n 's/^Version: /Briefcase /p'
-          docker version --format 'Docker {{.Server.Version}} ({{.Server.Arch}})'
       - name: build
         env:
           OPENDISCO_UPDATE_KEY: ${{ secrets.OPENDISCO_UPDATE_KEY }}
@@ -93,7 +98,7 @@ jobs:
         run: rm -rf dist build.log src/opendisco/resources/update-key
 
   arm64-check:
-    runs-on: ubuntu-latest
+    runs-on: self-hosted
     timeout-minutes: 10
     outputs:
       ok: ${{ steps.probe.outputs.ok }}
@@ -101,18 +106,21 @@ jobs:
       - id: probe
         name: can this host run arm64 containers?
         run: |
-          if [ "$(docker run --rm --platform linux/arm64 busybox:1.37 uname -m 2>/dev/null)" = aarch64 ]; then
+          if ! docker version > /dev/null 2>&1; then
+            echo "ok=false" >> "$GITHUB_OUTPUT"
+            echo "::warning::No arm64 build: this runner can't reach Docker at all"
+          elif [ "$(docker run --rm --platform linux/arm64 busybox:1.37 uname -m 2>/dev/null)" = aarch64 ]; then
             echo "ok=true" >> "$GITHUB_OUTPUT"
             echo "arm64 containers run here: building the arm64 .deb and .rpm"
           else
             echo "ok=false" >> "$GITHUB_OUTPUT"
-            echo "::notice::No arm64 build: this runner's Docker can't run arm64 containers. On the CI host, install qemu-user-static (binfmt) and the arm64 job runs next time; until then build the arm64 .deb and .rpm on the Mac."
+            echo "::notice::No arm64 build: the CI host's Docker can't run arm64 containers. Install qemu-user-static (binfmt) on the CI host and the arm64 job runs next time; until then build the arm64 .deb and .rpm on the Mac."
           fi
 
   arm64:
     needs: arm64-check
     if: needs.arm64-check.outputs.ok == 'true'
-    runs-on: ubuntu-latest
+    runs-on: self-hosted
     timeout-minutes: 240
     steps:
       - name: the tag is a version
@@ -124,9 +132,19 @@ jobs:
       - uses: https://github.com/actions/checkout@v7
         with:
           ref: refs/tags/${{ inputs.tag }}
-      - uses: https://github.com/actions/setup-python@v7
-        with:
-          python-version: "3.13"
+      # On the CI host itself (runs-on: self-hosted), whose Docker the build drives: the container
+      # jobs (ubuntu-latest) have no Docker socket. Python is the host's (3.11 or later: tomllib).
+      - name: Python and Briefcase
+        run: |
+          python3 -c 'import sys; assert sys.version_info >= (3, 11), sys.version' \
+            || { echo "error: the CI host's python3 is older than 3.11" >&2; exit 1; }
+          rm -rf "$RUNNER_TEMP/opendisco-venv"
+          python3 -m venv "$RUNNER_TEMP/opendisco-venv" \
+            || { echo "error: python3 -m venv failed: the CI host needs the python3-venv package" >&2; exit 1; }
+          echo "$RUNNER_TEMP/opendisco-venv/bin" >> "$GITHUB_PATH"
+          "$RUNNER_TEMP/opendisco-venv/bin/pip" install -q "briefcase${BRIEFCASE:+==$BRIEFCASE}"
+          "$RUNNER_TEMP/opendisco-venv/bin/pip" show briefcase | sed -n 's/^Version: /Briefcase /p'
+          docker version --format 'Docker {{.Server.Version}} ({{.Server.Arch}})'
       - name: build tools from this workflow's commit
         # The app's source is the tag's; packaging/ (the build and release scripts) is this
         # workflow's own, so a fix to them works on a tag made before it.
@@ -140,7 +158,6 @@ jobs:
         run: |
           version=$(sed -n 's/^__version__ = "\(.*\)"/\1/p' src/opendisco/__init__.py)
           [ "v$version" = "$TAG" ] || { echo "error: $TAG's source says version $version" >&2; exit 1; }
-      - run: pip install "briefcase${BRIEFCASE:+==$BRIEFCASE}"
       - name: build (emulated arm64)
         env:
           OPENDISCO_UPDATE_KEY: ${{ secrets.OPENDISCO_UPDATE_KEY }}
