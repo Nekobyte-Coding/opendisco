@@ -6,6 +6,19 @@ when it came out. The Linux packages of 1.1.0 to 1.3.1 were added then too; thos
 never released for Linux. README.md's "Versions and platforms" lists each version's platforms
 and known issues.
 
+## 1.8.3 (2026-11-18)
+
+The app is the same as 1.8.2; this release is the first built with the new release process.
+
+- The Linux packages and the Android app are built in CI, into the draft release: Actions →
+  **Build Linux** (the amd64 .deb, .rpm, AppImage and portable .tar.gz, plus arm64 .deb and .rpm
+  where the CI host can run arm64 containers) and **Build Android** (the .apk, which must carry the
+  release certificate). Each checks the tag, that its release is still a draft and the source's
+  version, and replaces same-named files on the draft. The Mac builds the macOS app, the Windows
+  installer and iOS. See docs/UPDATES.md "Releasing a version".
+- The Release workflow lists the installers the draft still lacks before it signs, and also takes
+  the signing key under the name `OPENDISCO_RELEASE_KEY`, saying which secret it used.
+
 ## 1.8.2 (2026-11-18)
 
 1.8.1 was tagged but never released: its Windows installer couldn't close a running OpenDisco.
