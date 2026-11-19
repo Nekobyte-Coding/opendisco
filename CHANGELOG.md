@@ -8,10 +8,12 @@ and known issues.
 
 ## Unreleased
 
-- **Windows: the installer and uninstaller now really close a running OpenDisco.** 1.8.1's check ran
-  the 32-bit PowerShell, which couldn't see the 64-bit app, so it found nothing and the install
-  stopped at "Error opening file for writing". They now use the native PowerShell, and if the
-  check can't run they ask you to close OpenDisco instead of carrying on.
+- **Windows: the installer and uninstaller now really close a running OpenDisco.** 1.8.1's check
+  never saw it: setup.exe is 32-bit, so it ran the 32-bit PowerShell, which can't see the 64-bit
+  app, and it read PowerShell's one-digit answer as a UTF-16 character, so it always got 0. The
+  install then stopped at "Error opening file for writing" (a silent install skipped the files in
+  use). They now use the native PowerShell and take its answer from the exit code, and if the check
+  can't run they ask you to close OpenDisco instead of carrying on.
 
 ## 1.8.1 (2026-11-18)
 
