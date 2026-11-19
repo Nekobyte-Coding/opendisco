@@ -1,0 +1,146 @@
+name: Build Linux
+
+# Builds a tagged version's Linux packages on the CI runners and adds them to its DRAFT release
+# (docs/UPDATES.md, "Releasing a version"). Run it by hand once the tag and the draft exist:
+#   amd64: the Ubuntu 24.04 .deb, the Fedora 44 .rpm, the portable .tar.gz and the x86-64 AppImage
+#          (with the source of the GLib library it carries), through the runner's Docker
+#   arm64: the arm64 .deb and aarch64 .rpm, only when the CI host's Docker can run arm64 containers
+#          (qemu-user-static / binfmt); otherwise the job is skipped and the run says why
+# Each package carries the update key (secrets.OPENDISCO_UPDATE_KEY). Files already on the draft
+# with the same names are replaced. It refuses a release that's published already. Signing stays
+# the Release workflow's job, after every installer is on the draft.
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "The draft release's tag, such as v1.8.3"
+        required: true
+        type: string
+      briefcase:
+        description: "Briefcase version for the .deb and .rpm (empty: the newest)"
+        required: false
+        type: string
+        default: ""
+
+concurrency:
+  group: build-linux-${{ inputs.tag }}
+  cancel-in-progress: true
+
+env:
+  FORGEJO_SERVER: ${{ github.server_url }}
+  FORGEJO_REPO: ${{ github.repository }}
+  FORGEJO_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+  TAG: ${{ inputs.tag }}
+  BRIEFCASE: ${{ inputs.briefcase }}
+
+jobs:
+  amd64:
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    steps:
+      - name: the tag is a version
+        run: |
+          case "$TAG" in
+            v[0-9]*.[0-9]*.[0-9]*) ;;
+            *) echo "error: $TAG isn't a version tag such as v1.8.3" >&2; exit 1 ;;
+          esac
+      - name: the tag exists
+        run: |
+          curl -fsS -o /dev/null -H "Authorization: token $FORGEJO_TOKEN" \
+            "$FORGEJO_SERVER/api/v1/repos/$FORGEJO_REPO/tags/$TAG" \
+            || { echo "error: there's no tag $TAG" >&2; exit 1; }
+      - uses: https://github.com/actions/checkout@v7
+        with:
+          ref: refs/tags/${{ inputs.tag }}
+      - uses: https://github.com/actions/setup-python@v7
+        with:
+          python-version: "3.13"
+      - name: the release is a draft
+        run: python packaging/forgejo_release.py check "$TAG"
+      - name: the tag's version
+        run: |
+          version=$(sed -n 's/^__version__ = "\(.*\)"/\1/p' src/opendisco/__init__.py)
+          [ "v$version" = "$TAG" ] || { echo "error: $TAG's source says version $version" >&2; exit 1; }
+      - name: Briefcase and Docker
+        run: |
+          pip install "briefcase${BRIEFCASE:+==$BRIEFCASE}"
+          pip show briefcase | sed -n 's/^Version: /Briefcase /p'
+          docker version --format 'Docker {{.Server.Version}} ({{.Server.Arch}})'
+      - name: build
+        env:
+          OPENDISCO_UPDATE_KEY: ${{ secrets.OPENDISCO_UPDATE_KEY }}
+        run: |
+          if [ -z "$OPENDISCO_UPDATE_KEY" ]; then
+            echo "error: the repository secret OPENDISCO_UPDATE_KEY isn't set" >&2; exit 1
+          fi
+          echo "::add-mask::$OPENDISCO_UPDATE_KEY"
+          python packaging/linux/build_packages.py --out dist 2>&1 | tee build.log
+          # update_key.py prints the key's last 4 characters; without that line the packages have no key
+          grep -q '^Building with the update key …' build.log \
+            || { echo "error: the build didn't say it used the update key" >&2; exit 1; }
+          ls -l dist
+      - name: upload to the draft
+        run: python packaging/forgejo_release.py upload-files "$TAG" dist
+      - name: clean up
+        if: always()
+        run: rm -rf dist build.log src/opendisco/resources/update-key
+
+  arm64-check:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    outputs:
+      ok: ${{ steps.probe.outputs.ok }}
+    steps:
+      - id: probe
+        name: can this host run arm64 containers?
+        run: |
+          if [ "$(docker run --rm --platform linux/arm64 busybox:1.37 uname -m 2>/dev/null)" = aarch64 ]; then
+            echo "ok=true" >> "$GITHUB_OUTPUT"
+            echo "arm64 containers run here: building the arm64 .deb and .rpm"
+          else
+            echo "ok=false" >> "$GITHUB_OUTPUT"
+            echo "::notice::No arm64 build: this runner's Docker can't run arm64 containers. On the CI host, install qemu-user-static (binfmt) and the arm64 job runs next time; until then build the arm64 .deb and .rpm on the Mac."
+          fi
+
+  arm64:
+    needs: arm64-check
+    if: needs.arm64-check.outputs.ok == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 240
+    steps:
+      - name: the tag is a version
+        run: |
+          case "$TAG" in
+            v[0-9]*.[0-9]*.[0-9]*) ;;
+            *) echo "error: $TAG isn't a version tag such as v1.8.3" >&2; exit 1 ;;
+          esac
+      - uses: https://github.com/actions/checkout@v7
+        with:
+          ref: refs/tags/${{ inputs.tag }}
+      - uses: https://github.com/actions/setup-python@v7
+        with:
+          python-version: "3.13"
+      - name: the release is a draft
+        run: python packaging/forgejo_release.py check "$TAG"
+      - name: the tag's version
+        run: |
+          version=$(sed -n 's/^__version__ = "\(.*\)"/\1/p' src/opendisco/__init__.py)
+          [ "v$version" = "$TAG" ] || { echo "error: $TAG's source says version $version" >&2; exit 1; }
+      - run: pip install "briefcase${BRIEFCASE:+==$BRIEFCASE}"
+      - name: build (emulated arm64)
+        env:
+          OPENDISCO_UPDATE_KEY: ${{ secrets.OPENDISCO_UPDATE_KEY }}
+        run: |
+          if [ -z "$OPENDISCO_UPDATE_KEY" ]; then
+            echo "error: the repository secret OPENDISCO_UPDATE_KEY isn't set" >&2; exit 1
+          fi
+          echo "::add-mask::$OPENDISCO_UPDATE_KEY"
+          python packaging/linux/build_packages.py --arch arm64 --only deb --only rpm --out dist 2>&1 | tee build.log
+          grep -q '^Building with the update key …' build.log \
+            || { echo "error: the build didn't say it used the update key" >&2; exit 1; }
+          ls -l dist
+      - name: upload to the draft
+        run: python packaging/forgejo_release.py upload-files "$TAG" dist
+      - name: clean up
+        if: always()
+        run: rm -rf dist build.log src/opendisco/resources/update-key

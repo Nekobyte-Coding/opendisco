@@ -1,0 +1,107 @@
+name: Build Android
+
+# Builds a tagged version's release-signed Android .apk on the CI runners and adds it to its DRAFT
+# release as OpenDisco-<version>-android.apk (docs/UPDATES.md, "Releasing a version"). Run it by
+# hand once the tag and the draft exist. packaging/android/build_apk.py does the work:
+#   - Briefcase downloads its JDK 17 and Google's Android SDK into BRIEFCASE_HOME; running this
+#     workflow accepts Google's Android SDK license (OPENDISCO_ACCEPT_ANDROID_LICENSES=1)
+#   - the update key from secrets.OPENDISCO_UPDATE_KEY
+#   - the release keystore from secrets.OPENDISCO_KEYSTORE (the .jks file, base64), written to an
+#     owner-only temporary file for the signing and deleted after it, with
+#     secrets.OPENDISCO_KEYSTORE_PASSWORD (the store's and the key's password, alias "opendisco")
+#   - the build stops if the .apk isn't signed with the release certificate (8d8d6193…8842),
+#     because installed copies would refuse it as an update
+# It refuses a release that's published already. Signing SHA256SUMS stays the Release workflow's
+# job, after every installer is on the draft.
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "The draft release's tag, such as v1.8.3"
+        required: true
+        type: string
+      briefcase:
+        description: "Briefcase version (empty: the newest)"
+        required: false
+        type: string
+        default: ""
+
+concurrency:
+  group: build-android-${{ inputs.tag }}
+  cancel-in-progress: true
+
+jobs:
+  apk:
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    env:
+      FORGEJO_SERVER: ${{ github.server_url }}
+      FORGEJO_REPO: ${{ github.repository }}
+      FORGEJO_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      TAG: ${{ inputs.tag }}
+      BRIEFCASE: ${{ inputs.briefcase }}
+      BRIEFCASE_HOME: ${{ github.workspace }}/../briefcase-home
+    steps:
+      - name: the tag is a version
+        run: |
+          case "$TAG" in
+            v[0-9]*.[0-9]*.[0-9]*) ;;
+            *) echo "error: $TAG isn't a version tag such as v1.8.3" >&2; exit 1 ;;
+          esac
+      - name: the tag exists
+        run: |
+          curl -fsS -o /dev/null -H "Authorization: token $FORGEJO_TOKEN" \
+            "$FORGEJO_SERVER/api/v1/repos/$FORGEJO_REPO/tags/$TAG" \
+            || { echo "error: there's no tag $TAG" >&2; exit 1; }
+      - uses: https://github.com/actions/checkout@v7
+        with:
+          ref: refs/tags/${{ inputs.tag }}
+      # Chaquopy's pip needs the same Python as the app's (pyproject.toml: chaquopy version 3.13)
+      - uses: https://github.com/actions/setup-python@v7
+        with:
+          python-version: "3.13"
+      - name: the release is a draft
+        run: python packaging/forgejo_release.py check "$TAG"
+      - name: the tag's version
+        run: |
+          version=$(sed -n 's/^__version__ = "\(.*\)"/\1/p' src/opendisco/__init__.py)
+          [ "v$version" = "$TAG" ] || { echo "error: $TAG's source says version $version" >&2; exit 1; }
+      - name: Briefcase
+        run: |
+          pip install "briefcase${BRIEFCASE:+==$BRIEFCASE}"
+          pip show briefcase | sed -n 's/^Version: /Briefcase /p'
+          python3.13 --version
+          mkdir -p "$BRIEFCASE_HOME"
+      - name: the secrets are set
+        env:
+          OPENDISCO_UPDATE_KEY: ${{ secrets.OPENDISCO_UPDATE_KEY }}
+          OPENDISCO_KEYSTORE_BASE64: ${{ secrets.OPENDISCO_KEYSTORE }}
+          OPENDISCO_KEYSTORE_PASSWORD: ${{ secrets.OPENDISCO_KEYSTORE_PASSWORD }}
+        run: |
+          missing=""
+          [ -n "$OPENDISCO_UPDATE_KEY" ] || missing="$missing OPENDISCO_UPDATE_KEY"
+          [ -n "$OPENDISCO_KEYSTORE_BASE64" ] || missing="$missing OPENDISCO_KEYSTORE"
+          [ -n "$OPENDISCO_KEYSTORE_PASSWORD" ] || missing="$missing OPENDISCO_KEYSTORE_PASSWORD"
+          if [ -n "$missing" ]; then
+            echo "error: these repository secrets aren't set:$missing (docs/UPDATES.md)" >&2; exit 1
+          fi
+      - name: build and sign
+        env:
+          OPENDISCO_UPDATE_KEY: ${{ secrets.OPENDISCO_UPDATE_KEY }}
+          OPENDISCO_KEYSTORE_BASE64: ${{ secrets.OPENDISCO_KEYSTORE }}
+          OPENDISCO_KEYSTORE_PASSWORD: ${{ secrets.OPENDISCO_KEYSTORE_PASSWORD }}
+          OPENDISCO_ACCEPT_ANDROID_LICENSES: "1"
+        run: |
+          echo "::add-mask::$OPENDISCO_UPDATE_KEY"
+          echo "::add-mask::$OPENDISCO_KEYSTORE_PASSWORD"
+          python packaging/android/build_apk.py --out dist 2>&1 | tee build.log
+          grep -q '^Building with the update key …' build.log \
+            || { echo "error: the build didn't say it used the update key" >&2; exit 1; }
+          ls -l dist
+          [ -f "dist/OpenDisco-${TAG#v}-android.apk" ] \
+            || { echo "error: no dist/OpenDisco-${TAG#v}-android.apk" >&2; exit 1; }
+      - name: upload to the draft
+        run: python packaging/forgejo_release.py upload-files "$TAG" dist
+      - name: clean up
+        if: always()
+        run: rm -rf dist build.log src/opendisco/resources/update-key

@@ -104,25 +104,56 @@ leaks, rotation cuts it off.
 
 ## Releasing a version (Michael)
 
-1. **Build by hand**, with the update key available to the build scripts. On a Mac, keep it in the
-   login keychain once:
+The Linux packages and the Android app are built on the CI runners. The Mac builds the macOS app,
+the Windows installer (in Parallels) and iOS. Every build goes onto one draft release, and the
+Release workflow signs the whole set at the end.
+
+1. **Merge the "Release X.Y.Z" pull request and tag it** (an annotated tag `vX.Y.Z`, "OpenDisco
+   X.Y.Z", on its merge commit). Tagging needs Michael's OK.
+2. **Create a draft release** on Forgejo (nekobyte-coding/opendisco → Releases → New release, and
+   tick "draft") with the tag and the notes. It can start without any files.
+3. **Build Linux and Android in CI.** Actions → **Build Linux** → Run workflow, tag `vX.Y.Z`, and
+   Actions → **Build Android**, same tag. They can run at the same time. Each checks that the
+   tag exists, that its release is still a draft and that the source's version is the tag's,
+   builds with the update key from `OPENDISCO_UPDATE_KEY`, and adds its files to the draft
+   (replacing files of the same name from an earlier run):
+   - Build Linux, job `amd64`: `OpenDisco-X.Y.Z-ubuntu-24.04-amd64.deb`,
+     `OpenDisco-X.Y.Z-fedora-44-x86_64.rpm`, `OpenDisco-X.Y.Z-linux.tar.gz`,
+     `OpenDisco-X.Y.Z-linux-x86_64.AppImage`, and the source of the GLib library the AppImage carries
+     (`glib2.0_*.dsc`, `.debian.tar.xz`, `.orig*.tar.xz`). It uses the runner's Docker.
+   - Build Linux, job `arm64`: `OpenDisco-X.Y.Z-ubuntu-24.04-arm64.deb` and
+     `OpenDisco-X.Y.Z-fedora-44-aarch64.rpm`. It runs only when the CI host's Docker can run
+     arm64 containers (qemu-user-static installed there); otherwise the run says so and skips it,
+     and these two come from the Mac (`build_packages.py --arch arm64`).
+   - Build Android: `OpenDisco-X.Y.Z-android.apk`, signed with the release keystore. The build
+     stops if the .apk's certificate isn't the release one (SHA-256 `8d8d6193…8842`, the one every
+     release so far carries), since installed copies would refuse it as an update. Running it
+     accepts Google's Android SDK license for the runner.
+   The Briefcase version is the newest unless the run's `briefcase` input names one.
+4. **Build on the Mac and upload to the same draft**: `OpenDisco-X.Y.Z-macos-universal.dmg`
+   (`build_dmg.py`), `OpenDisco-X.Y.Z-windows-x64-setup.exe` (`build_installer.py`, in Parallels),
+   and iOS through Xcode (not a release file). The scripts take the update key from the login
+   keychain:
    `security add-generic-password -a opendisco -s "OpenDisco Update Key" -w`
-   (it asks for the value, so the key never appears on a command line). Anywhere else, set
+   (it asks for the value, so the key never appears on a command line), or from
    `OPENDISCO_UPDATE_KEY` in that shell. `build_dmg.py`, `build_installer.py`, `build_packages.py`
    and `build_apk.py` stop if they can't find a key, unless you pass `--no-update-key` for a test
    build, which can't update itself. The iOS build carries no key, because iOS has no self-update.
-2. **Create a draft release** on Forgejo (nekobyte-coding/opendisco → Releases → New release, and
-   tick "draft") with the tag, the notes and every installer from `dist/`.
-3. **Run the Release workflow** (Actions → Release → Run workflow, tag `vX.Y.Z`). It downloads the
+   Any of the CI builds can be made here too, the same way, if CI can't.
+5. **Run the Release workflow** (Actions → Release → Run workflow, tag `vX.Y.Z`). It first lists
+   the installers the draft still lacks, and who builds each (a warning, not a stop). It then downloads the
    draft's files (with the `OPENDISCO_RELEASE_READ_TOKEN` secret), adds `update-key` from the
    `OPENDISCO_UPDATE_KEY` secret, writes and signs `SHA256SUMS` with the `OPENDISCO_RELEASE_SIGNING_KEY` secret, checks the signature with the
    committed public key (and with openssl), and uploads `update-key`, `SHA256SUMS` and
-   `SHA256SUMS.sig` to the draft. It refuses a release that is already published.
-4. **Publish the release.** Within 5 minutes, the Git Box's sync checks the signature and puts the
+   `SHA256SUMS.sig` to the draft. It refuses a release that is already published. If a file is
+   replaced after signing, run it again.
+6. **Publish the release.** Within 5 minutes, the Git Box's sync checks the signature and puts the
    release on the update server.
-5. **GitHub:** publish the same tag on `Nekobyte-Coding/opendisco` with the same
-   installers plus `SHA256SUMS` and `SHA256SUMS.sig` from the signed Forgejo release (not
-   `update-key`). Without both files, the app passes over the GitHub release.
+7. **GitHub:** push main and the tag to `Nekobyte-Coding/opendisco` (public), and publish the same
+   tag there with the same installers plus `SHA256SUMS` and `SHA256SUMS.sig` from the signed
+   Forgejo release (not `update-key`, and no secret). Without both files, the app passes over the
+   GitHub release. The Forgejo repository stays private. Signing keys are kept as Forgejo
+   secrets only, never on GitHub.
 
 A signed release holds the installers, plus:
 
@@ -147,6 +178,18 @@ You add these secrets yourself, at nekobyte-coding/opendisco → Settings → Ac
   that can write this repository's releases. Forgejo serves a draft release's files only to such an
   account, and the job's own token isn't one on those download links (the API, where it is, lists a
   release's files but can't send them). The workflow uses it only to download the draft's files.
+- `OPENDISCO_KEYSTORE`: the Android release keystore, `opendisco-release.jks`, as base64 on one
+  line (`base64 -i opendisco-release.jks | pbcopy` on the Mac). Build Android only. The job writes
+  it to an owner-only temporary file for the signing and deletes it afterwards.
+- `OPENDISCO_KEYSTORE_PASSWORD`: that keystore's password, the "OpenDisco Android signing" item in
+  the login keychain. It's both the store's and the key's (alias `opendisco`), so no other
+  secret is needed.
+
+Build Linux needs only `OPENDISCO_UPDATE_KEY`. Build Android needs `OPENDISCO_UPDATE_KEY`,
+`OPENDISCO_KEYSTORE` and `OPENDISCO_KEYSTORE_PASSWORD`, and it says which of them are missing.
+The Release workflow needs `OPENDISCO_UPDATE_KEY`, `OPENDISCO_RELEASE_SIGNING_KEY` and
+`OPENDISCO_RELEASE_READ_TOKEN`. The build workflows find the draft and upload to it with the job's
+own token.
 
 ## The release key
 
