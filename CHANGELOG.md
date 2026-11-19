@@ -6,6 +6,13 @@ when it came out. The Linux packages of 1.1.0 to 1.3.1 were added then too; thos
 never released for Linux. README.md's "Versions and platforms" lists each version's platforms
 and known issues.
 
+## Unreleased
+
+- **Windows: the installer and uninstaller now really close a running OpenDisco.** 1.8.1's check ran
+  the 32-bit PowerShell, which couldn't see the 64-bit app, so it found nothing and the install
+  stopped at "Error opening file for writing". They now use the native PowerShell, and if the
+  check can't run they ask you to close OpenDisco instead of carrying on.
+
 ## 1.8.1 (2026-11-18)
 
 - **Updates check both the Git Box and GitHub, and install the newest verified release:** the app

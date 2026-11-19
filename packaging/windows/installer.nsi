@@ -76,21 +76,30 @@ VIAddVersionKey "LegalCopyright" "Copyright 2026 ${PUBLISHER}. Apache License 2.
 ; writing"). This closes it first: it asks (a silent install, how the app updates itself, says OK),
 ; then stops every process run from $INSTDIR except this installer itself (an uninstaller run with
 ; _?= runs from there). update-windows.ps1 runs setup.exe from %TEMP% after the app has quit, so the
-; update is never in the way. If PowerShell can't check, it carries on as before.
+; update is never in the way. If PowerShell can't check, it asks the user to close OpenDisco.
 !define FIND_RUNNING "$$d = $$env:OPENDISCO_DIR.TrimEnd('\') + '\'; \
   $$me = (Get-CimInstance Win32_Process -Filter ('ProcessId=' + $$PID)).ParentProcessId; \
   $$p = @(Get-Process | Where-Object { $$_.Path -and $$_.Id -ne $$me -and \
   $$_.Path.StartsWith($$d, [StringComparison]::OrdinalIgnoreCase) });"
-!define POWERSHELL "powershell -NoProfile -NonInteractive -ExecutionPolicy Bypass -Command"
+; setup.exe is 32-bit, so a plain "powershell" is the 32-bit one (SysWOW64), and there Get-Process
+; can't read the Path of the app's 64-bit pythonw.exe: 1.8.1's check found nothing and the copy
+; failed. Sysnative is the native System32 as a 32-bit process sees it (absent on 32-bit Windows).
+Var PowerShell
+!define POWERSHELL "$PowerShell -NoProfile -NonInteractive -ExecutionPolicy Bypass -Command"
 !macro CloseRunningApp UN
 Function ${UN}CloseRunningApp
   ; The folder goes to PowerShell in an environment variable: no quoting to get wrong.
   System::Call 'kernel32::SetEnvironmentVariable(t "OPENDISCO_DIR", t "$INSTDIR")'
+  StrCpy $PowerShell "$SYSDIR\WindowsPowerShell\v1.0\powershell.exe"
+  ${If} ${FileExists} "$WINDIR\Sysnative\WindowsPowerShell\v1.0\powershell.exe"
+    StrCpy $PowerShell "$WINDIR\Sysnative\WindowsPowerShell\v1.0\powershell.exe"
+  ${EndIf}
+  StrCpy $PowerShell `"$PowerShell"`
   nsExec::ExecToStack `${POWERSHELL} "${FIND_RUNNING} $$p.Count"`
   Pop $0  ; exit code, or "error"
   Pop $1  ; how many are running
   ${If} $0 != 0
-    Return
+    Goto unchecked
   ${EndIf}
   IntOp $1 $1 + 0
   ${If} $1 == 0
@@ -107,7 +116,7 @@ Function ${UN}CloseRunningApp
     Pop $0
     Pop $1
     ${If} $0 != 0
-      Return
+      Goto unchecked
     ${EndIf}
     IntOp $1 $1 + 0
     ${If} $1 == 0
@@ -117,6 +126,13 @@ Function ${UN}CloseRunningApp
       Manager), then click Retry." /SD IDCANCEL IDRETRY close
     SetErrorLevel 2
     Abort
+  unchecked:
+    ; PowerShell couldn't check (or close): never carry on silently. A silent install can't ask.
+    MessageBox MB_OKCANCEL|MB_ICONEXCLAMATION "Setup couldn't check whether ${APPNAME} is running. Close \
+      ${APPNAME} if it's open, then click OK." /SD IDOK IDOK done
+    SetErrorLevel 2
+    Abort
+  done:
 FunctionEnd
 !macroend
 !insertmacro CloseRunningApp ""
