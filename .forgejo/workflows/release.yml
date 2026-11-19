@@ -42,6 +42,9 @@ jobs:
         with:
           python-version: "3.13"
       - run: pip install cryptography
+      - name: which installers are missing (a report; it doesn't stop the signing)
+        continue-on-error: true
+        run: python packaging/forgejo_release.py missing "$TAG"
       - name: download the draft
         env:
           # Forgejo serves a draft's files only to an account that can write releases; the job's token can't.
