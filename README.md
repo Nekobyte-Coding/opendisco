@@ -113,6 +113,7 @@ Installers are on the [Releases](https://github.com/Nekobyte-Coding/opendisco/re
 | Version | What's new | Released for | Known issues (fixed in) |
 |---|---|---|---|
 | 1.8.1 | Updates check both the Git Box and GitHub and install the newest signed release (GitHub never gets the update key). The Windows installer and uninstaller close a running OpenDisco first instead of failing with "Error opening file for writing", and the installer builds on Windows again. Release workflow fixes (CHANGELOG.md) | macOS, Windows, Linux, Android |  |
+| 1.8.2 | The Windows installer and uninstaller really close a running OpenDisco (1.8.1's check never found it), and uninstalling no longer leaves files behind. Includes everything in 1.8.1, which was tagged but never released | macOS, Windows, Linux, Android |  |
 | 1.8.0 | Updates come from OpenDisco's own update server with a built-in update key, and every release is signed (the app checks SHA256SUMS.sig before installing). Temporary addresses stay while the app is open, so Open Web UI, SSH and Ping reach gear on other subnets. Fixes to Direct to a device, and from a second review of all the code (CHANGELOG.md) | macOS, Windows, Linux, Android; iOS (beta, no public download yet) |  |
 | 1.7.2 | Direct to a device scans a wired port that has its own address (set by hand, or from the device's own DHCP server), and tells a busy shared network on another port apart from the device's wire | macOS, Windows, Linux, Android; iOS (beta, no public download yet) |  |
 | 1.7.1 | Fixes: Android's Settings opens again; a hop's password goes only to that hop; firmware updates through other devices and reboots are checked properly; the command line runs on Python 3.8 and 3.9 again; a malformed reply no longer ends a scan; the selection stays with its device on macOS; and more (CHANGELOG.md) | macOS, Windows, Linux, Android; iOS (beta, no public download yet) | Direct to a device refuses a wired port that has its own address unless it's chosen under Interface (1.7.2) |
@@ -153,9 +154,9 @@ Installers are on the [Releases](https://github.com/Nekobyte-Coding/opendisco/re
 
 ## The app
 
-- **Mac:** open `OpenDisco-1.8.1-macos-universal.dmg` (Apple silicon and Intel Macs) and drag
+- **Mac:** open `OpenDisco-1.8.2-macos-universal.dmg` (Apple silicon and Intel Macs) and drag
   the app to Applications.
-- **Windows:** run `OpenDisco-1.8.1-windows-x64-setup.exe` (64-bit; Windows on ARM runs it
+- **Windows:** run `OpenDisco-1.8.2-windows-x64-setup.exe` (64-bit; Windows on ARM runs it
   too). It installs for the current user without administrator rights, with Start menu and
   desktop shortcuts and an uninstaller in Apps.
   - **SmartScreen:** the installer isn't code-signed, so the first time Windows shows
@@ -167,16 +168,16 @@ Installers are on the [Releases](https://github.com/Nekobyte-Coding/opendisco/re
     (`%LOCALAPPDATA%\Programs\OpenDisco`), for example `opendisco.cmd --quick`.
 - **Linux:**
   - **Ubuntu 24.04 LTS, Linux Mint 22, Pop!_OS 24.04:**
-    `sudo apt install ./OpenDisco-1.8.1-ubuntu-24.04-amd64.deb`
-  - **Fedora 44:** `sudo dnf install ./OpenDisco-1.8.1-fedora-44-x86_64.rpm`
+    `sudo apt install ./OpenDisco-1.8.2-ubuntu-24.04-amd64.deb`
+  - **Fedora 44:** `sudo dnf install ./OpenDisco-1.8.2-fedora-44-x86_64.rpm`
   - **Any other distribution** (Debian 13, Arch, newer Ubuntu or Fedora...):
-    - **The AppImage** (x86-64, from 1.6.2): `OpenDisco-1.8.1-linux-x86_64.AppImage`. Make it
+    - **The AppImage** (x86-64, from 1.6.2): `OpenDisco-1.8.2-linux-x86_64.AppImage`. Make it
       executable (`chmod +x`) and run it. It brings its own Python and Toga and uses the
       system's GTK 3 and WebKitGTK 4.1, which most desktops have; if they're missing, it says
       what to install. Given options, it's the command-line tool. It runs on Ubuntu 24.04,
       Debian 13, Fedora 40, Linux Mint 22 and later. Where the system has no `ssh` and `scp`,
       Open SSH… and the device tools use the app's own SSH client (asyncssh, which it brings).
-    - **The portable** `OpenDisco-1.8.1-linux.tar.gz`: extract it and run `./opendisco`; its
+    - **The portable** `OpenDisco-1.8.2-linux.tar.gz`: extract it and run `./opendisco`; its
       `README-LINUX.md` lists the packages to install first. The environment it sets up has the
       app's own SSH client too, for a system without `ssh` and `scp`.
 
@@ -184,7 +185,7 @@ Installers are on the [Releases](https://github.com/Nekobyte-Coding/opendisco/re
   release, and pull in GTK, WebKitGTK, tcpdump, ip, iw and the ssh client. The app is in the
   desktop's app menu, and `opendisco` in a terminal runs it (with options, it's the
   command-line tool).
-- **Android:** `OpenDisco-1.8.1-android.apk`: sideload it with "Install unknown apps"
+- **Android:** `OpenDisco-1.8.2-android.apk`: sideload it with "Install unknown apps"
   allowed, on a phone or a tablet. It installs over 1.4.1 and later, keeping its data. See
   [On phones and tablets](#on-phones-and-tablets). From 1.4.1 the app is signed with
   OpenDisco's own release key, so later versions install over it. 1.4.0 was

@@ -6,7 +6,10 @@ when it came out. The Linux packages of 1.1.0 to 1.3.1 were added then too; thos
 never released for Linux. README.md's "Versions and platforms" lists each version's platforms
 and known issues.
 
-## Unreleased
+## 1.8.2 (2026-11-18)
+
+1.8.1 was tagged but never released: its Windows installer couldn't close a running OpenDisco.
+1.8.2 includes everything in 1.8.1 below.
 
 - **Windows: the installer and uninstaller now really close a running OpenDisco.** 1.8.1's check
   never saw it: setup.exe is 32-bit, so it ran the 32-bit PowerShell, which can't see the 64-bit
